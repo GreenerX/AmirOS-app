@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">AmirOS app icon</title>
+  <desc id="desc">The white AmirOS Quiet Monogram on an emerald rounded square.</desc>
+  <rect width="128" height="128" rx="29" fill="#078A56"/>
+  <g transform="translate(16 16)">
+    <g fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13 78 42 18l29 60" stroke-width="14"/>
+      <path d="m60 18 29 60" stroke-width="14"/>
+    </g>
+    <path d="m32.5 70 9.5-20 10 20h-5.2c-2.6 0-4.2 1.5-4.8 4.4-.7-2.9-2.3-4.4-4.9-4.4Z" fill="#FFFFFF"/>
+  </g>
+</svg>
