@@ -11,6 +11,12 @@ The Settings screen also controls self-chat replies, outgoing triggers, group
 commands, web search, command names, and the monthly budget target. These choices
 and model presets persist across restarts.
 
+## Testing AmirOS
+
+For the current macOS early-access setup—including downloading the private
+repository, installing dependencies, linking WhatsApp, updating safely, and
+protecting local data—follow [the tester setup guide](INSTALL.md).
+
 If the WhatsApp linked device is removed or expires, open **Settings → WhatsApp
 linked device → Re-link WhatsApp**. AmirOS safely signs out the old local session
 and displays a new QR code in the app. This does not delete contact preferences,
