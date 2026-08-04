@@ -42,8 +42,24 @@ You only do this once per Mac.
 3. A Terminal window opens and installs AmirOS automatically. Keep it open.
 4. After a few minutes, AmirOS opens in your browser.
 
-If macOS says it cannot open the file, Control-click **Install AmirOS.command**,
-choose **Open**, then choose **Open** again.
+### If macOS says “Install AmirOS.command Not Opened”
+
+This is a one-time macOS security check for a download that has not yet been
+signed and notarized by Apple. Only continue if you received the AmirOS ZIP
+directly from your trusted tester coordinator.
+
+1. In that message, click **Done** — do **not** choose Move to Trash.
+2. Open **Apple menu → System Settings → Privacy & Security**.
+3. Scroll down to **Security** and click **Open Anyway** next to the AmirOS
+   message.
+4. Click **Open** in the confirmation message. Your Mac password or Touch ID
+   may be requested.
+5. Return to the AmirOS folder and double-click **Install AmirOS.command**
+   again.
+
+macOS remembers this approval for that launcher, so it should not ask again.
+If you do not see **Open Anyway**, try Control-clicking **Install
+AmirOS.command** in Finder, choose **Open**, then choose **Open** again.
 
 You do not need to type or copy any commands for the normal setup.
 
@@ -65,8 +81,8 @@ Approve macOS's prompt if it appears. AmirOS opens its local dashboard at:
 http://127.0.0.1:3789
 ```
 
-If macOS blocks the launcher, Control-click the file, choose **Open**, then
-choose **Open** again.
+If macOS blocks the launcher, follow the same **Privacy & Security → Open
+Anyway** steps above. You only need to approve each launcher once.
 
 ## 5. Complete first-run setup
 
