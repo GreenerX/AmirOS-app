@@ -13,6 +13,18 @@ export type ReplyMode = "off" | "suggest" | "auto";
 export type OwnerTriggerAccess = "knowledge" | "calendar";
 export type KnowledgeTrackingStatus = "pending" | "enabled" | "disabled";
 export type ModelPreset = "economy" | "balanced" | "quality";
+
+export type ReleaseNote = {
+  title: string;
+  detail: string;
+};
+
+export type AmirOSRelease = {
+  version: string;
+  releasedAt: string;
+  headline: string;
+  notes: ReleaseNote[];
+};
 export type ThemeName =
   | "forest"
   | "ocean"
@@ -53,6 +65,7 @@ export type Activity = {
 };
 
 export type DashboardData = {
+  release: AmirOSRelease;
   connection: {
     status: "starting" | "qr" | "authenticated" | "ready" | "disconnected";
     detail: string;

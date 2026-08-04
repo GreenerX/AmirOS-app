@@ -1,0 +1,16 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { AMIROS_VERSION, CURRENT_RELEASE } from "../src/release.js";
+
+describe("AmirOS releases", () => {
+  it("uses package.json as the release version source", () => {
+    const packageVersion = (JSON.parse(readFileSync("package.json", "utf8")) as { version: string }).version;
+    expect(AMIROS_VERSION).toBe(packageVersion);
+    expect(CURRENT_RELEASE.version).toBe(packageVersion);
+  });
+
+  it("includes customer-facing notes for the current release", () => {
+    expect(CURRENT_RELEASE.notes.length).toBeGreaterThan(0);
+    expect(CURRENT_RELEASE.releasedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});

@@ -37,9 +37,11 @@ type SidebarProps = {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   profile: { displayName: string; avatarUrl: string };
+  version: string;
+  onOpenReleaseNotes: () => void;
 };
 
-export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleCollapsed, profile }: SidebarProps) {
+export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleCollapsed, profile, version, onOpenReleaseNotes }: SidebarProps) {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
 
@@ -112,6 +114,7 @@ export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleC
           <ChevronDown className={profileMenuOpen ? "profile-button-chevron open" : "profile-button-chevron"} size={18} aria-hidden="true" />
         </button>
       </div>
+      <button className="sidebar-version" type="button" onClick={onOpenReleaseNotes} title="View release notes">v{version}<span>What’s new</span></button>
       <small className="sidebar-rights">© 2026 Amir Friedman.<br />All rights reserved.</small>
     </aside>
   );

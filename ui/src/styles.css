@@ -907,6 +907,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
+/* First-run setup and release notes. */
+.release-experience-backdrop { position: fixed; inset: 0; z-index: 140; display: grid; place-items: center; padding: 22px; background: color-mix(in srgb, var(--text) 34%, transparent); -webkit-backdrop-filter: blur(7px); backdrop-filter: blur(7px); }
+.release-dialog { width: min(560px, 100%); overflow: hidden; border: 1px solid color-mix(in srgb, var(--border) 88%, white); border-radius: 22px; color: var(--text); background: var(--surface); box-shadow: 0 28px 90px color-mix(in srgb, var(--text) 30%, transparent); animation: event-bubble-in .2s ease-out; }
+.release-dialog > header { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 13px; padding: 21px 23px; border-bottom: 1px solid var(--border-soft); background: linear-gradient(135deg, var(--emerald-soft), var(--surface) 72%); }
+.release-dialog > header > div { min-width: 0; }.release-dialog > header small { color: var(--emerald); font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }.release-dialog > header h2 { margin-top: 3px; font-size: 22px; }
+.release-dialog-icon, .onboarding-hero-icon { display: grid; place-items: center; border-radius: 14px; color: var(--emerald); background: color-mix(in srgb, var(--emerald) 11%, var(--surface)); }.release-dialog-icon { width: 48px; height: 48px; border: 1px solid color-mix(in srgb, var(--emerald) 20%, var(--border)); }
+.onboarding-body, .release-notes-body { padding: 25px 28px 28px; }.onboarding-body { display: flex; min-height: 305px; flex-direction: column; align-items: flex-start; }.release-step-progress { display: flex; gap: 6px; width: 100%; margin-bottom: 28px; }.release-step-progress span { height: 4px; flex: 1; border-radius: 999px; background: var(--border); }.release-step-progress span.active { background: var(--emerald); }
+.onboarding-hero-icon { width: 64px; height: 64px; margin-bottom: 18px; background: var(--emerald-soft); }.onboarding-body h3 { max-width: 420px; margin-bottom: 10px; font-size: 25px; letter-spacing: -.55px; }.onboarding-body p { max-width: 455px; color: var(--muted); font-size: 15px; line-height: 1.58; }.onboarding-body strong { color: var(--text); }.onboarding-body .button { margin-top: 22px; }
+.onboarding-checklist { display: grid; gap: 9px; margin: 20px 0 0; padding: 0; list-style: none; color: var(--text); font-size: 13px; font-weight: 640; }.onboarding-checklist li { display: flex; align-items: center; gap: 8px; }.onboarding-checklist svg { color: var(--emerald); }
+.release-dialog > footer { display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 16px 23px 21px; border-top: 1px solid var(--border-soft); }.release-dialog > footer .button { min-height: 38px; }
+.release-date { margin-bottom: 18px; color: var(--muted); font-size: 12px; }.release-note-list { display: grid; gap: 12px; }.release-note-list article { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 11px; padding: 14px; border: 1px solid var(--border-soft); border-radius: 13px; background: var(--surface-subtle); }.release-note-list article > span { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 9px; color: var(--emerald); background: var(--emerald-soft); }.release-note-list h3 { margin-bottom: 3px; font-size: 14px; }.release-note-list p { color: var(--muted); font-size: 12px; line-height: 1.48; }
+
+@media (max-width: 620px) { .release-experience-backdrop { align-items: end; padding: 10px; }.release-dialog { border-radius: 20px 20px 12px 12px; }.release-dialog > header { padding: 17px; }.onboarding-body, .release-notes-body { padding: 21px 18px; }.onboarding-body { min-height: 290px; }.release-dialog > footer { padding: 14px 17px 17px; }.release-dialog > footer .button { flex: 1; }.sidebar-version { display: none; } }
+
 /* AmirOS product pass: collapsible rails, WhatsApp-native actions, profile and intelligence. */
 .app-shell, .inbox-page { transition: grid-template-columns .22s ease; }
 .app-shell.sidebar-collapsed { grid-template-columns: 82px minmax(0, 1fr); }
@@ -927,6 +941,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .profile-menu-icon .nav-icon { display: block; }
 @keyframes profile-menu-in { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .sidebar-rights { display: block; flex: 0 0 auto; margin: 8px 9px 0; padding-bottom: 2px; color: rgba(255,255,255,.46); font-size: 9px; line-height: 1.45; }
+.sidebar-version { display: inline-flex; align-items: center; align-self: flex-start; gap: 7px; margin: 8px 9px 0; padding: 5px 8px; border: 1px solid rgba(255,255,255,.16); border-radius: 999px; color: rgba(255,255,255,.82); background: rgba(255,255,255,.055); font-size: 10px; font-weight: 760; letter-spacing: .02em; transition: border-color .18s ease, background .18s ease, color .18s ease; }
+.sidebar-version span { color: rgba(255,255,255,.58); font-weight: 600; }.sidebar-version:hover { border-color: rgba(115,238,193,.55); color: #fff; background: rgba(115,238,193,.12); }.sidebar-version:focus-visible { outline: 3px solid rgba(115,238,193,.38); outline-offset: 2px; }
 .app-shell.sidebar-collapsed .sidebar { align-items: center; padding-inline: 9px; }
 .app-shell.sidebar-collapsed .brand { justify-content: center; padding: 0; }
 .app-shell.sidebar-collapsed .brand span,
@@ -935,7 +951,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .app-shell.sidebar-collapsed .assistant-note span,
 .app-shell.sidebar-collapsed .profile-copy,
 .app-shell.sidebar-collapsed .profile-button > span:last-child,
-.app-shell.sidebar-collapsed .sidebar-rights { display: none; }
+.app-shell.sidebar-collapsed .sidebar-rights,
+.app-shell.sidebar-collapsed .sidebar-version span { display: none; }
+.app-shell.sidebar-collapsed .sidebar-version { align-self: center; margin-inline: 0; padding-inline: 8px; }
 .app-shell.sidebar-collapsed .navigation { width: 100%; }
 .app-shell.sidebar-collapsed .nav-item { display: grid; grid-template-columns: 1fr; justify-items: center; width: 100%; padding: 0; }
 .app-shell.sidebar-collapsed .nav-item .nav-count { position: absolute; top: 3px; right: 3px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 9px; }

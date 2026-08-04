@@ -154,6 +154,15 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 }
 
 export const demoDashboard: DashboardData = {
+  release: {
+    version: "0.2.0",
+    releasedAt: "2026-08-04",
+    headline: "A smoother first launch",
+    notes: [
+      { title: "Welcome to AmirOS", detail: "A guided setup for your key, budget, and WhatsApp connection." },
+      { title: "Release notes, right in the app", detail: "See what changed whenever a new version is installed." },
+    ],
+  },
   connection: { status: "ready", detail: "Listening for WhatsApp messages" },
   paused: false,
   preset: "economy",

@@ -36,6 +36,7 @@ import { requestWhatsAppRelink } from "./whatsapp.js";
 import { buildCalendarSubscriptionFeed } from "./calendar-feed.js";
 import type { WritingStyleLearner } from "./writing-style.js";
 import type { IntelligenceLearner } from "./intelligence-learner.js";
+import { CURRENT_RELEASE } from "./release.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -1258,6 +1259,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
           modelOptions: MODEL_OPTIONS,
           usage,
           monthlySpendUsd: state.monthlySpendUsd(),
+          release: CURRENT_RELEASE,
           drafts: state.listDrafts(),
           activities: await activitiesWithContactNames(client, state, chatNameCache),
           settings: { ...state.getSettings(), apiKeyConfigured: ai.isConfigured() },

@@ -44,6 +44,7 @@ import { Sidebar } from "./components/Sidebar";
 import { TerminalView } from "./components/TerminalView";
 import { CalendarView } from "./components/CalendarView";
 import { FloatingAssistant } from "./components/FloatingAssistant";
+import { ReleaseExperience } from "./components/ReleaseExperience";
 import {
   AutomationsView,
   ContactsView,
@@ -136,6 +137,7 @@ export function App() {
   const [inboxInitialFilter, setInboxInitialFilter] = useState<"all" | "unread">("all");
   const [inboxContactSettingsTab, setInboxContactSettingsTab] = useState<"configure" | "knowledge" | "commitments">("configure");
   const [highlightedMessageId, setHighlightedMessageId] = useState<string>();
+  const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const mutationVersion = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -684,7 +686,7 @@ export function App() {
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} />
+      <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} />
       <div className="app-body">
         {error ? <div className="error-banner"><AlertTriangle size={17} />{error}<button onClick={() => setError(undefined)}>Dismiss</button></div> : null}
         {view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onOpenUnread={openUnreadInbox} onPreset={choosePreset} /> : null}
@@ -697,6 +699,7 @@ export function App() {
         {view === "terminal" ? <TerminalView connection={dashboard.connection} loadLog={getTerminalLog} subscribeLog={subscribeTerminalLog} /> : null}
         {view === "settings" ? <SettingsView data={dashboard} onSave={saveSettings} onSaveApiKey={saveApiKey} onRelink={relink} onPause={togglePaused} /> : null}
         <FloatingAssistant data={intelligence} loading={loadingIntelligence} onRefresh={refreshIntelligence} onAsk={askRelationships} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onSaveKnowledge={addMemory} onInsertReply={(chatId, body) => { setAssistantComposerDraft({ chatId, body }); openChat(chatId); }} />
+        <ReleaseExperience release={dashboard.release} onOpenSettings={() => navigate("settings")} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
       </div>
     </div>
   );
