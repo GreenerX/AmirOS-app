@@ -71,6 +71,8 @@ import type {
   IntelligenceSearchResult,
   RelationshipCommitment,
   ReplyMode,
+  KnowledgeTrackingDefault,
+  KnowledgeTrackingStatus,
   ThemeName,
   ViewName,
   WritingStyleProfile,
@@ -353,6 +355,11 @@ export function App() {
       setError(actionError instanceof Error ? actionError.message : "Could not save contact settings");
       return false;
     }
+  };
+
+  const decideKnowledgeTracking = async (chatId: string, status: KnowledgeTrackingStatus) => {
+    const saved = await changeContact(chatId, { knowledgeTracking: status });
+    if (saved) await refresh();
   };
 
   const addMemory = async (chatId: string, content: string) => {
@@ -641,6 +648,7 @@ export function App() {
     theme?: ThemeName;
     models?: DashboardData["models"];
     ownerProfile?: Partial<DashboardData["settings"]["ownerProfile"]>;
+    knowledgeTrackingDefault?: KnowledgeTrackingDefault;
   }) => {
     if (!dashboard) return;
     try {
@@ -665,6 +673,7 @@ export function App() {
       mutationVersion.current += 1;
       const connection = await relinkWhatsApp();
       setDashboard((current) => current ? { ...current, connection } : current);
+      return connection;
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "Could not regenerate the WhatsApp QR code");
       throw actionError;
@@ -689,7 +698,7 @@ export function App() {
       <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} />
       <div className="app-body">
         {error ? <div className="error-banner"><AlertTriangle size={17} />{error}<button onClick={() => setError(undefined)}>Dismiss</button></div> : null}
-        {view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onOpenUnread={openUnreadInbox} onPreset={choosePreset} /> : null}
+        {view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onOpenUnread={openUnreadInbox} onPreset={choosePreset} onTrackingDecision={decideKnowledgeTracking} onOpenTrackingChat={(chatId) => openChat(chatId)} /> : null}
         {view === "intelligence" ? <IntelligenceView data={intelligence} chats={chats} contacts={dashboard.settings.contacts} loading={loadingIntelligence} onRefresh={refreshIntelligence} onOpenChat={openChat} onOpenContactSettings={openContactSettings} onOpenCalendar={() => setView("calendar")} onGenerateSummary={(chatId, isGroup) => isGroup ? summarizeSelectedGroup(chatId) : generateProfile(chatId)} onCommitmentStatus={changeCommitment} onCalendarStatus={changeCalendarStatus} onRegenerateCalendarTitle={regenerateEventTitle} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onDeleteQuestion={deleteQuestion} /> : null}
         {view === "calendar" ? <CalendarView data={intelligence} onOpenChat={openChat} onStatus={changeCalendarStatus} onRegenerateTitle={regenerateEventTitle} /> : null}
         {view === "inbox" ? <InboxView chats={chats} unreadCount={unreadCount} initialFilter={inboxInitialFilter} initialContactSettingsTab={inboxContactSettingsTab} selectedChatId={selectedChatId} highlightedMessageId={highlightedMessageId} messages={visibleMessages} memory={visibleMemory} manualMemory={visibleManualMemory} profile={visibleProfile} insights={insights} commitments={commitments} styleProfile={styleProfile} groupSummary={groupSummary} groupDescription={groupDescription} composerDraft={assistantComposerDraft?.chatId === selectedChatId ? assistantComposerDraft?.body : undefined} onComposerDraftConsumed={() => setAssistantComposerDraft(undefined)} incomingMessageCount={incomingMessageCount} contact={visibleContact} drafts={dashboard.drafts} loading={loadingChat} onSelectChat={selectInboxChat} onMarkRead={readChat} onModeChange={changeMode} onContactChange={changeContact} onAddMemory={addMemory} onRemoveMemory={removeMemory} onGenerateProfile={generateProfile} onAnalyzeIntelligence={analyzeIntelligence} onInsightChange={changeInsight} onCommitmentStatus={changeCommitment} onGenerateWritingStyle={learnWritingStyle} onGenerateGroupSummary={summarizeSelectedGroup} onApproveDraft={approve} onDismissDraft={dismiss} onSend={send} onSendMedia={sendChatMedia} onGenerateImage={generateChatImage} onReact={react} onReply={reply} onForward={forward} onScanHistory={scanHistory} /> : null}
@@ -699,7 +708,7 @@ export function App() {
         {view === "terminal" ? <TerminalView connection={dashboard.connection} loadLog={getTerminalLog} subscribeLog={subscribeTerminalLog} /> : null}
         {view === "settings" ? <SettingsView data={dashboard} onSave={saveSettings} onSaveApiKey={saveApiKey} onRelink={relink} onPause={togglePaused} /> : null}
         <FloatingAssistant data={intelligence} loading={loadingIntelligence} onRefresh={refreshIntelligence} onAsk={askRelationships} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onSaveKnowledge={addMemory} onInsertReply={(chatId, body) => { setAssistantComposerDraft({ chatId, body }); openChat(chatId); }} />
-        <ReleaseExperience release={dashboard.release} onOpenSettings={() => navigate("settings")} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
+        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onChooseKnowledgeTracking={async (choice) => saveSettings({ knowledgeTrackingDefault: choice })} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
       </div>
     </div>
   );

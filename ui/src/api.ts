@@ -15,6 +15,7 @@ import type {
   ContactPreferences,
   ContactProfile,
   DashboardData,
+  KnowledgeTrackingDefault,
   ModelPreset,
   GroupConversationSummary,
   IntelligenceData,
@@ -501,6 +502,7 @@ export async function updateSettings(settings: {
   theme?: ThemeName;
   models?: DashboardData["models"];
   ownerProfile?: Partial<DashboardData["settings"]["ownerProfile"]>;
+  knowledgeTrackingDefault?: KnowledgeTrackingDefault;
 }): Promise<DashboardData["settings"]> {
   if (isDemo) {
     const current = structuredClone(demoDashboard.settings);

@@ -19,6 +19,7 @@ import {
   AmirosState,
   type AssistantSettings,
   type ContactPreferences,
+  type KnowledgeTrackingDefault,
   type ThemeName,
 } from "./amiros-state.js";
 import {
@@ -36,7 +37,7 @@ import { requestWhatsAppRelink } from "./whatsapp.js";
 import { buildCalendarSubscriptionFeed } from "./calendar-feed.js";
 import type { WritingStyleLearner } from "./writing-style.js";
 import type { IntelligenceLearner } from "./intelligence-learner.js";
-import { CURRENT_RELEASE } from "./release.js";
+import { CURRENT_RELEASE, RELEASE_HISTORY } from "./release.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -1259,9 +1260,11 @@ export function startAmirosDashboard(options: DashboardOptions) {
           modelOptions: MODEL_OPTIONS,
           usage,
           monthlySpendUsd: state.monthlySpendUsd(),
-          release: CURRENT_RELEASE,
+          release: { ...CURRENT_RELEASE, history: RELEASE_HISTORY },
           drafts: state.listDrafts(),
           activities: await activitiesWithContactNames(client, state, chatNameCache),
+          knowledgeTrackingRequests: state.listKnowledgeTrackingRequests()
+            .filter((request) => isKnownIntelligenceChat(request.chatId, request.contactName)),
           settings: { ...state.getSettings(), apiKeyConfigured: ai.isConfigured() },
         });
         return;
@@ -1897,6 +1900,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
         if (
           patch.knowledgeTracking !== undefined &&
           patch.knowledgeTracking !== "pending" &&
+          patch.knowledgeTracking !== "snoozed" &&
           patch.knowledgeTracking !== "enabled" &&
           patch.knowledgeTracking !== "disabled"
         ) {
@@ -2223,6 +2227,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
           assistant?: Partial<AssistantSettings>;
           models?: { text?: string; image?: string; voice?: string };
           ownerProfile?: { displayName?: string; avatarUrl?: string };
+          knowledgeTrackingDefault?: KnowledgeTrackingDefault;
         }>(request);
         if (patch.theme !== undefined && !isThemeName(patch.theme)) {
           sendJson(response, 400, { error: "Unknown color theme" });
@@ -2231,6 +2236,13 @@ export function startAmirosDashboard(options: DashboardOptions) {
         if (patch.monthlyBudgetUsd !== undefined &&
             (!Number.isFinite(patch.monthlyBudgetUsd) || patch.monthlyBudgetUsd < 1)) {
           sendJson(response, 400, { error: "Monthly budget must be at least 1" });
+          return;
+        }
+        if (patch.knowledgeTrackingDefault !== undefined &&
+            patch.knowledgeTrackingDefault !== "ask" &&
+            patch.knowledgeTrackingDefault !== "private" &&
+            patch.knowledgeTrackingDefault !== "off") {
+          sendJson(response, 400, { error: "Choose how AmirOS should handle knowledge tracking" });
           return;
         }
         if (patch.assistant) {

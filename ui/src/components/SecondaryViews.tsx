@@ -1,4 +1,5 @@
 import {
+  Brain,
   Bot,
   Check,
   Clock3,
@@ -36,6 +37,7 @@ import type {
   ChatSummary,
   DashboardData,
   ModelPreset,
+  KnowledgeTrackingDefault,
   ReplyMode,
   ThemeName,
 } from "../types";
@@ -175,6 +177,7 @@ type SettingsViewProps = {
     theme?: ThemeName;
     models?: DashboardData["models"];
     ownerProfile?: Partial<DashboardData["settings"]["ownerProfile"]>;
+    knowledgeTrackingDefault?: KnowledgeTrackingDefault;
   }) => Promise<void>;
 };
 
@@ -227,6 +230,7 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
   const [apiKeyError, setApiKeyError] = useState("");
   const [selectedTheme, setSelectedTheme] = useState(data.settings.theme);
   const [models, setModels] = useState(data.models);
+  const [knowledgeTrackingDefault, setKnowledgeTrackingDefault] = useState(data.settings.knowledgeTrackingDefault);
   const [ownerProfile, setOwnerProfile] = useState(data.settings.ownerProfile);
   const [uploadingProfile, setUploadingProfile] = useState(false);
   const profileFileRef = useRef<HTMLInputElement>(null);
@@ -236,6 +240,8 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
   const [calendarSubscriptionError, setCalendarSubscriptionError] = useState("");
   const [calendarSubscriptionCopied, setCalendarSubscriptionCopied] = useState(false);
   const [calendarBannerHidden, setCalendarBannerHidden] = useState(calendarSubscriptionBannerHidden);
+
+  useEffect(() => setKnowledgeTrackingDefault(data.settings.knowledgeTrackingDefault), [data.settings.knowledgeTrackingDefault]);
 
   useEffect(() => {
     let cancelled = false;
@@ -250,7 +256,7 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
   const save = async () => {
     setSaveState("saving");
     try {
-      await onSave({ assistant, monthlyBudgetUsd: budget, theme: selectedTheme, models, ownerProfile });
+      await onSave({ assistant, monthlyBudgetUsd: budget, theme: selectedTheme, models, ownerProfile, knowledgeTrackingDefault });
       setSaveState("saved");
       window.setTimeout(() => setSaveState("idle"), 1_800);
     } catch {
@@ -366,6 +372,9 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
         </section>
         <section className="panel settings-summary model-selection-settings"><span className="setting-hero-icon"><Sparkles size={25} /></span><div><h2>Assistant models</h2><p>Choose each capability directly. Presets remain available on Overview and Usage.</p>
           <div className="model-select-grid"><label>Text model<select value={models.text} onChange={(event) => setModels({ ...models, text: event.target.value })}>{data.modelOptions.text.map((model) => <option key={model} value={model}>{model}</option>)}</select></label><label>Image model<select value={models.image} onChange={(event) => setModels({ ...models, image: event.target.value })}>{data.modelOptions.image.map((model) => <option key={model} value={model}>{model}</option>)}</select></label><label>Transcription model<select value={models.voice} onChange={(event) => setModels({ ...models, voice: event.target.value })}>{data.modelOptions.voice.map((model) => <option key={model} value={model}>{model}</option>)}</select></label></div>
+        </div></section>
+        <section className="panel settings-summary knowledge-default-settings"><span className="setting-hero-icon"><Brain size={25} /></span><div><h2>New-chat knowledge tracking</h2><p>Choose what AmirOS does the first time it sees a new conversation. You can always override this per chat.</p>
+          <label>Default for new chats<select aria-label="Default knowledge tracking" value={knowledgeTrackingDefault} onChange={(event) => setKnowledgeTrackingDefault(event.target.value as KnowledgeTrackingDefault)}><option value="ask">Ask me for each chat</option><option value="private">Track private chats; ask for groups</option><option value="off">Keep tracking off</option></select></label>
         </div></section>
         <section className="panel settings-summary api-key-settings">
           <span className="setting-hero-icon"><KeyRound size={25} /></span>

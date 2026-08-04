@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 
 export type ReplyMode = "off" | "suggest" | "auto";
 export type OwnerTriggerAccess = "knowledge" | "calendar";
-export type KnowledgeTrackingStatus = "pending" | "enabled" | "disabled";
+export type KnowledgeTrackingStatus = "pending" | "snoozed" | "enabled" | "disabled";
+export type KnowledgeTrackingDefault = "ask" | "private" | "off";
 export type ThemeName =
   | "forest"
   | "ocean"
@@ -205,6 +206,16 @@ export type IntelligenceChatSnapshot = {
   updatedAt: number;
 };
 
+export type KnowledgeTrackingRequest = {
+  chatId: string;
+  contactName: string;
+  isGroup: boolean;
+  status: "pending" | "snoozed";
+  messageCount: number;
+  latestMessageAt: number;
+  preview: string;
+};
+
 export type AssistantSettings = {
   autoReplySelfChat: boolean;
   allowOutgoingTriggerCommands: boolean;
@@ -252,6 +263,8 @@ export type OutgoingMediaCaption = {
 
 type PersistedState = {
   theme: ThemeName;
+  knowledgeTrackingDefault: KnowledgeTrackingDefault;
+  chatNames: Record<string, string>;
   contacts: Record<string, ContactPreferences>;
   memories: Record<string, ConversationMemory>;
   intelligenceHistory: IntelligenceQuestionHistoryItem[];
@@ -296,11 +309,17 @@ function normalizeContactTriggerAccess(value: unknown): OwnerTriggerAccess[] {
 }
 
 function normalizeKnowledgeTracking(value: unknown, fallback: KnowledgeTrackingStatus = "pending"): KnowledgeTrackingStatus {
-  return value === "enabled" || value === "disabled" || value === "pending" ? value : fallback;
+  return value === "enabled" || value === "disabled" || value === "pending" || value === "snoozed" ? value : fallback;
+}
+
+function normalizeKnowledgeTrackingDefault(value: unknown): KnowledgeTrackingDefault {
+  return value === "private" || value === "off" ? value : "ask";
 }
 
 const DEFAULT_STATE: PersistedState = {
   theme: "forest",
+  knowledgeTrackingDefault: "ask",
+  chatNames: {},
   contacts: {},
   memories: {},
   intelligenceHistory: [],
@@ -628,6 +647,13 @@ export class AmirosState {
           parsed.theme === "graphite"
             ? parsed.theme
             : "forest",
+        knowledgeTrackingDefault: normalizeKnowledgeTrackingDefault(parsed.knowledgeTrackingDefault),
+        chatNames: Object.fromEntries(
+          Object.entries(parsed.chatNames || {}).flatMap(([chatId, name]) => {
+            const cleaned = typeof name === "string" ? name.replace(/\s+/g, " ").trim().slice(0, 120) : "";
+            return cleaned ? [[chatId, cleaned]] : [];
+          }),
+        ),
         // Existing contacts were already being analysed before this preference
         // existed, so preserve that opt-in during migration. New chats use the
         // default "pending" state and must be explicitly approved by the user.
@@ -917,10 +943,15 @@ export class AmirosState {
 
   getContact(chatId: string): ContactPreferences {
     const stored = this.persisted.contacts[chatId];
+    const defaultTracking = this.persisted.knowledgeTrackingDefault === "private"
+      ? (chatId.endsWith("@g.us") ? "pending" : "enabled")
+      : this.persisted.knowledgeTrackingDefault === "off"
+        ? "disabled"
+        : "pending";
     return {
       ...DEFAULT_CONTACT,
       ...stored,
-      knowledgeTracking: normalizeKnowledgeTracking(stored?.knowledgeTracking),
+      knowledgeTracking: normalizeKnowledgeTracking(stored?.knowledgeTracking, defaultTracking),
       ownerTriggerAccess: normalizeOwnerTriggerAccess(
         stored?.ownerTriggerAccess ?? DEFAULT_CONTACT.ownerTriggerAccess,
       ),
@@ -935,9 +966,15 @@ export class AmirosState {
     for (const chat of chats) {
       const memory = this.persisted.memories[chat.id];
       const name = chat.name?.replace(/\s+/g, " ").trim().slice(0, 120);
-      if (!memory || !name || memory.chatName === name) continue;
-      memory.chatName = name;
-      changed = true;
+      if (!name) continue;
+      if (this.persisted.chatNames[chat.id] !== name) {
+        this.persisted.chatNames[chat.id] = name;
+        changed = true;
+      }
+      if (memory && memory.chatName !== name) {
+        memory.chatName = name;
+        changed = true;
+      }
     }
     if (changed) this.save();
   }
@@ -947,7 +984,7 @@ export class AmirosState {
   }
 
   getChatName(chatId: string): string | undefined {
-    return this.persisted.memories[chatId]?.chatName;
+    return this.persisted.memories[chatId]?.chatName || this.persisted.chatNames[chatId];
   }
 
   rememberOutgoingMediaCaption(chatId: string, caption: string, timestamp = Date.now()): void {
@@ -1286,6 +1323,30 @@ export class AmirosState {
   getGroupSummary(chatId: string): GroupConversationSummary | undefined {
     const summary = this.persisted.memories[chatId]?.groupSummary;
     return summary ? structuredClone(summary) : undefined;
+  }
+
+  listKnowledgeTrackingRequests(): KnowledgeTrackingRequest[] {
+    return Object.entries(this.persisted.memories)
+      .flatMap(([chatId, memory]) => {
+        const status = this.getContact(chatId).knowledgeTracking;
+        if (status !== "pending") return [];
+        const incoming = memory.entries.filter((entry) =>
+          entry.role === "user" && (entry.author === "contact" || entry.author === "group_member"),
+        );
+        const latest = incoming.at(-1);
+        const contactName = (memory.chatName || this.persisted.chatNames[chatId])?.replace(/\s+/g, " ").trim();
+        if (!latest || !contactName) return [];
+        return [{
+          chatId,
+          contactName,
+          isGroup: chatId.endsWith("@g.us"),
+          status,
+          messageCount: incoming.length,
+          latestMessageAt: latest.timestamp,
+          preview: latest.content.slice(0, 280),
+        } satisfies KnowledgeTrackingRequest];
+      })
+      .sort((left, right) => right.latestMessageAt - left.latestMessageAt);
   }
 
   intelligenceSnapshot(): IntelligenceChatSnapshot[] {
@@ -1868,7 +1929,8 @@ export class AmirosState {
       extractSignals?: boolean;
     }>,
   ): number {
-    if (!this.getContact(chatId).memoryEnabled) return 0;
+    const contactAtFirstMessage = this.getContact(chatId);
+    if (!contactAtFirstMessage.memoryEnabled) return 0;
     const memory = this.persisted.memories[chatId] || {
       entries: [],
       manualItems: [],
@@ -1908,6 +1970,10 @@ export class AmirosState {
       added += 1;
     }
     if (added === 0) return 0;
+    // Freeze the first-run policy when a conversation actually receives a
+    // message. Changing the global default later must not silently change a
+    // chat that is already waiting for the user's approval.
+    if (!this.persisted.contacts[chatId]) this.persisted.contacts[chatId] = contactAtFirstMessage;
     memory.updatedAt = Date.now();
     this.persisted.memories[chatId] = memory;
     this.dedupeCalendarEventsAcrossChats();
@@ -2597,7 +2663,7 @@ export class AmirosState {
 
   updateSettings(
     patch: Partial<
-      Pick<PersistedState, "theme" | "quietHours" | "monthlyBudgetUsd" | "modelPreset" | "models">
+      Pick<PersistedState, "theme" | "quietHours" | "monthlyBudgetUsd" | "modelPreset" | "models" | "knowledgeTrackingDefault">
     > & {
       assistant?: Partial<AssistantSettings>;
       ownerProfile?: Partial<OwnerProfile>;

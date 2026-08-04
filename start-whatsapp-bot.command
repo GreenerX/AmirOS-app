@@ -13,6 +13,11 @@ amiros_is_available() {
   /usr/bin/curl --fail --silent --max-time 2 "$DASHBOARD_URL/api/dashboard" >/dev/null 2>&1
 }
 
+amiros_pid_is_watchdog() {
+  local candidate="$1"
+  /bin/ps -p "$candidate" -o command= 2>/dev/null | /usr/bin/grep -F "$PROJECT_DIR/scripts/amiros-watchdog.mjs" >/dev/null 2>&1
+}
+
 open_dashboard() {
   if [[ "${AMIROS_NO_OPEN:-0}" != "1" ]] && [[ -x /usr/bin/open ]]; then
     /usr/bin/open "$DASHBOARD_URL"
@@ -62,9 +67,10 @@ fi
 
 if [[ -f "$PID_FILE" ]]; then
   RECORDED_PID="$(<"$PID_FILE")"
-  if [[ "$RECORDED_PID" =~ '^[0-9]+$' ]] && kill -0 "$RECORDED_PID" 2>/dev/null; then
+  if [[ "$RECORDED_PID" =~ '^[0-9]+$' ]] && kill -0 "$RECORDED_PID" 2>/dev/null && amiros_pid_is_watchdog "$RECORDED_PID"; then
     echo "AmirOS process $RECORDED_PID is still starting."
   else
+    echo "Removing an old AmirOS process record so a fresh service can start."
     rm -f "$PID_FILE"
   fi
 fi

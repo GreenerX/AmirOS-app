@@ -87,6 +87,37 @@ describe("AmirosState", () => {
     expect(new AmirosState(filePath).getContact("legacy@c.us").knowledgeTracking).toBe("enabled");
   });
 
+  it("uses the chosen first-run tracking policy only for new chats and surfaces a safe approval request", () => {
+    const directory = mkdtempSync(join(tmpdir(), "amiros-tracking-policy-"));
+    temporaryDirectories.push(directory);
+    const state = new AmirosState(join(directory, "state.json"));
+
+    state.rememberChatName("dani@c.us", "Dani Faitelson");
+    state.rememberMessage("dani@c.us", {
+      role: "user",
+      author: "contact",
+      content: "Want to make plans this weekend?",
+      messageId: "dani-message-1",
+    });
+
+    expect(state.getContact("dani@c.us").knowledgeTracking).toBe("pending");
+    expect(state.listKnowledgeTrackingRequests()).toMatchObject([{
+      chatId: "dani@c.us",
+      contactName: "Dani Faitelson",
+      isGroup: false,
+      messageCount: 1,
+    }]);
+
+    state.updateSettings({ knowledgeTrackingDefault: "private" });
+    expect(state.getContact("new-person@c.us").knowledgeTracking).toBe("enabled");
+    expect(state.getContact("new-group@g.us").knowledgeTracking).toBe("pending");
+    // The original approval decision remains untouched when the global default changes.
+    expect(state.getContact("dani@c.us").knowledgeTracking).toBe("pending");
+
+    state.updateContact("dani@c.us", { knowledgeTracking: "snoozed" });
+    expect(state.listKnowledgeTrackingRequests()).toEqual([]);
+  });
+
   it("handles quiet-hour windows that cross midnight", () => {
     const { state } = createState();
     state.updateSettings({

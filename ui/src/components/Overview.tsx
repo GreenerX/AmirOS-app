@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 import { compactNumber, formatDeviceClock, formatTime, timeOfDayGreeting } from "../format";
 import { readHiddenIntelligenceActions } from "../intelligence-visibility";
 import { buildIntelligenceSnapshot, isKnownIntelligenceContactName } from "../intelligence-snapshot";
-import type { Activity, ChatSummary, DashboardData, IntelligenceData, ModelPreset, ViewName } from "../types";
+import type { Activity, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, ModelPreset, ViewName } from "../types";
 import { WhatsAppIcon } from "./BrandIcons";
 import { ContactAvatar } from "./ContactAvatar";
 
@@ -31,6 +31,8 @@ type OverviewProps = {
   onNavigate: (view: ViewName) => void;
   onOpenUnread: () => void;
   onPreset: (preset: ModelPreset) => Promise<void>;
+  onTrackingDecision: (chatId: string, status: KnowledgeTrackingStatus) => Promise<void>;
+  onOpenTrackingChat: (chatId: string) => void;
 };
 
 const OVERVIEW_QUOTES = [
@@ -93,7 +95,7 @@ function eventCountdown(timestamp: number, now: Date) {
   return `In ${dayDifference} days`;
 }
 
-export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, onPreset }: OverviewProps) {
+export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, onPreset, onTrackingDecision, onOpenTrackingChat }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
   useEffect(() => {
@@ -127,7 +129,8 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
   const newSignals = intelligence?.changes.filter((item) => item.status === "inferred" && isKnownIntelligenceContactName(item.contactName)) || [];
   const confirmedDetails = intelligenceSnapshot.details;
   const understoodRelationships = intelligenceSnapshot.relationships;
-  const confirmedKnowledgeHighlights = intelligenceSnapshot.confirmedKnowledge.slice(0, 3);
+  const confirmedKnowledgeHighlights = intelligenceSnapshot.confirmedKnowledge.slice(0, 5);
+  const trackingRequests = data.knowledgeTrackingRequests.filter((item) => item.status === "pending").slice(0, 3);
   const intelligenceAttention = visibleNeedsReply.length + openPromises.length + planSuggestions.length + newSignals.length;
   const focus = visibleNeedsReply[0]
     ? {
@@ -193,6 +196,30 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
           <select aria-label="Overview model preset" value={data.preset} onChange={(event) => void onPreset(event.target.value as ModelPreset)}><option value="economy">Economy</option><option value="balanced">Balanced</option><option value="quality">Quality</option></select>
         </div>
       </section>
+
+      {trackingRequests.length > 0 ? <section className="panel tracking-review-panel" aria-labelledby="tracking-review-title">
+        <div className="panel-heading">
+          <h2 id="tracking-review-title"><Brain size={19} /> New chats awaiting approval <span className="count-badge intelligence-count">{trackingRequests.length}</span></h2>
+          <span className="tracking-review-note">Nothing is analyzed until you choose.</span>
+        </div>
+        <div className="tracking-review-list">
+          {trackingRequests.map((request) => {
+            const chat = chats.find((item) => item.id === request.chatId);
+            return <article className="tracking-review-row" key={request.chatId}>
+              <button className="tracking-review-copy" type="button" onClick={() => onOpenTrackingChat(request.chatId)}>
+                <ContactAvatar name={request.contactName} src={chat?.avatarUrl} className="tracking-review-avatar" />
+                <span><strong dir="auto">{request.contactName}</strong><small>{request.isGroup ? "Group chat" : "Private chat"} · {request.messageCount} new {request.messageCount === 1 ? "message" : "messages"}</small><p dir="auto">{request.preview}</p></span>
+                <ArrowRight size={15} />
+              </button>
+              <div className="tracking-review-actions">
+                <button className="button compact primary" type="button" onClick={() => void onTrackingDecision(request.chatId, "enabled")}>Track this chat</button>
+                <button className="button compact ghost" type="button" onClick={() => void onTrackingDecision(request.chatId, "snoozed")}>Not now</button>
+                <button className="text-action muted" type="button" onClick={() => void onTrackingDecision(request.chatId, "disabled")}>Never track</button>
+              </div>
+            </article>;
+          })}
+        </div>
+      </section> : null}
 
       <div className="overview-primary-grid">
         <section className="panel intelligence-snapshot-panel">

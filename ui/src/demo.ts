@@ -155,12 +155,52 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.2.2",
-    releasedAt: "2026-08-04",
-    headline: "Start and stop with confidence",
+    version: "0.3.0",
+    releasedAt: "2026-08-05",
+    headline: "A simpler, smarter first start",
     notes: [
-      { title: "Reliable background stopping", detail: "Stop AmirOS can safely locate its own service." },
-      { title: "Release notes, right in the app", detail: "See what changed whenever a new version is installed." },
+      { title: "Set up everything in one place", detail: "Add an OpenAI API key and link WhatsApp with a QR code from the welcome guide." },
+      { title: "You choose what AmirOS learns", detail: "Choose approval-first, private-chat tracking, or no tracking for new chats." },
+      { title: "Every update stays easy to follow", detail: "Browse a simple history of What’s new notes directly in AmirOS." },
+    ],
+    history: [
+      {
+        version: "0.3.0",
+        releasedAt: "2026-08-05",
+        headline: "A simpler, smarter first start",
+        notes: [
+          { title: "Set up everything in one place", detail: "Add an OpenAI API key and link WhatsApp with a QR code from the welcome guide." },
+          { title: "You choose what AmirOS learns", detail: "Choose approval-first, private-chat tracking, or no tracking for new chats." },
+          { title: "Every update stays easy to follow", detail: "Browse a simple history of What’s new notes directly in AmirOS." },
+        ],
+      },
+      {
+        version: "0.2.2",
+        releasedAt: "2026-08-04",
+        headline: "Start and stop with confidence",
+        notes: [
+          { title: "Reliable stop shortcut", detail: "Stopping AmirOS is more dependable if the app loses track of its background service." },
+          { title: "Simple everyday controls", detail: "Use Open AmirOS to start it and Stop AmirOS when you are done." },
+        ],
+      },
+      {
+        version: "0.2.1",
+        releasedAt: "2026-08-04",
+        headline: "A smoother way to open AmirOS",
+        notes: [{ title: "Opens more reliably", detail: "Open AmirOS is better at starting when you double-click it in Finder." }],
+      },
+      {
+        version: "0.2.0",
+        releasedAt: "2026-08-04",
+        headline: "A guided first setup",
+        notes: [{ title: "A welcoming setup guide", detail: "New users are shown the key steps for getting started." }],
+      },
+      {
+        version: "0.1.0",
+        releasedAt: "2026-08-03",
+        headline: "The first AmirOS release",
+        notes: [{ title: "Your private WhatsApp assistant", detail: "The first dashboard, WhatsApp connection, and local memory features arrived." }],
+      },
     ],
   },
   connection: { status: "ready", detail: "Listening for WhatsApp messages" },
@@ -248,8 +288,10 @@ export const demoDashboard: DashboardData = {
       timestamp: now - 10_000_000,
     },
   ],
+  knowledgeTrackingRequests: [],
   settings: {
     theme: "forest",
+    knowledgeTrackingDefault: "ask",
     contacts: Object.fromEntries(demoChats.map((chat) => [chat.id, { ...demoContact, mode: chat.mode }])),
     quietHours: { enabled: true, start: "23:00", end: "07:00" },
     monthlyBudgetUsd: 20,

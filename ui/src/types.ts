@@ -11,7 +11,8 @@ export type ViewName =
 
 export type ReplyMode = "off" | "suggest" | "auto";
 export type OwnerTriggerAccess = "knowledge" | "calendar";
-export type KnowledgeTrackingStatus = "pending" | "enabled" | "disabled";
+export type KnowledgeTrackingStatus = "pending" | "snoozed" | "enabled" | "disabled";
+export type KnowledgeTrackingDefault = "ask" | "private" | "off";
 export type ModelPreset = "economy" | "balanced" | "quality";
 
 export type ReleaseNote = {
@@ -24,6 +25,7 @@ export type AmirOSRelease = {
   releasedAt: string;
   headline: string;
   notes: ReleaseNote[];
+  history?: AmirOSRelease[];
 };
 export type ThemeName =
   | "forest"
@@ -44,6 +46,16 @@ export type ContactPreferences = {
   customInstructions: string;
   ownerTriggerAccess: OwnerTriggerAccess[];
   contactTriggerAccess: OwnerTriggerAccess[];
+};
+
+export type KnowledgeTrackingRequest = {
+  chatId: string;
+  contactName: string;
+  isGroup: boolean;
+  status: "pending" | "snoozed";
+  messageCount: number;
+  latestMessageAt: number;
+  preview: string;
 };
 
 export type Draft = {
@@ -95,8 +107,10 @@ export type DashboardData = {
   monthlySpendUsd: number;
   drafts: Draft[];
   activities: Activity[];
+  knowledgeTrackingRequests: KnowledgeTrackingRequest[];
   settings: {
     theme: ThemeName;
+    knowledgeTrackingDefault: KnowledgeTrackingDefault;
     contacts: Record<string, ContactPreferences>;
     quietHours: { enabled: boolean; start: string; end: string };
     monthlyBudgetUsd: number;

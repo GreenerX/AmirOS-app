@@ -1,5 +1,12 @@
 # AmirOS release notes
 
+## v0.3.0 — August 5, 2026
+
+- Added a complete in-app setup flow: add an OpenAI API key, generate a WhatsApp QR code, and choose knowledge tracking before opening the dashboard.
+- Added a default knowledge-tracking choice for new chats, plus an approval area on the Overview page for chats that need a decision.
+- Added a simple version history inside the in-app “What’s new” window.
+- Improved service startup recovery when an old background-service record remains after an interrupted session.
+
 ## v0.2.2 — August 4, 2026
 
 - Made `stop-whatsapp-bot.command` reliably locate and stop AmirOS if its PID record is unavailable.
