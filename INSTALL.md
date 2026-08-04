@@ -9,44 +9,54 @@ knowledge, WhatsApp session, and OpenAI key stay on your computer.
 You need:
 
 - A Mac running macOS 13 or later
-- [Node.js 20 or newer](https://nodejs.org/en/download)
 - Google Chrome or Chromium
 - WhatsApp on your phone
 - An OpenAI API key with billing enabled
-- Access to the private AmirOS GitHub repository
 
 > AmirOS uses an unofficial WhatsApp Web integration. Use a separate or
 > non-critical number while testing, and avoid bulk or unsolicited messaging.
 
 ## 1. Download AmirOS
 
-The project owner must first invite you as a collaborator to the private GitHub
-repository. Accept that invitation while signed into GitHub.
+Download the AmirOS ZIP that your tester coordinator sends you. Double-click the
+ZIP to unzip it, then move the unzipped **AmirOS** folder to your **Documents**
+folder. Keep that folder there; AmirOS needs it each time it starts.
 
-Then open the repository, select **Code → Download ZIP**, and unzip the download
-somewhere you can keep it, such as `Documents/AmirOS`.
+> The ZIP is a clean copy. It does not include anyone else's WhatsApp account,
+> messages, saved knowledge, calendar, or OpenAI key.
 
-If you are comfortable with Git, cloning is also supported:
+## 2. Install Node.js once
+
+1. Open [nodejs.org/en/download](https://nodejs.org/en/download).
+2. Under **LTS**, download the **macOS Installer (.pkg)** for your Mac.
+3. Double-click the downloaded `.pkg` file.
+4. Keep choosing **Continue** and **Install**. Enter your Mac password if asked.
+5. When it finishes, close the installer.
+
+You only do this once per Mac.
+
+## 3. Double-click to install AmirOS
+
+1. Open the AmirOS folder in Finder.
+2. Double-click **Install AmirOS.command**.
+3. A Terminal window opens and installs AmirOS automatically. Keep it open.
+4. After a few minutes, AmirOS opens in your browser.
+
+If macOS says it cannot open the file, Control-click **Install AmirOS.command**,
+choose **Open**, then choose **Open** again.
+
+You do not need to type or copy any commands for the normal setup.
+
+### Optional: technical setup
+
+Only use this if someone from the AmirOS team asks you to:
 
 ```bash
-git clone https://github.com/GreenerX/AmirOS-app.git
-cd AmirOS-app
+npx --yes pnpm@10 install --frozen-lockfile
+npx --yes pnpm@10 ui:build
 ```
 
-## 2. Install the app dependencies
-
-Open **Terminal**, type `cd ` (including the space), then drag the unzipped
-AmirOS folder into the Terminal window and press Return. Run:
-
-```bash
-npm install --global pnpm
-pnpm install --frozen-lockfile
-pnpm ui:build
-```
-
-This is only needed the first time, or after an update that changes dependencies.
-
-## 3. Start AmirOS
+## 4. Start AmirOS later
 
 In Finder, open the AmirOS folder and double-click **Open AmirOS.command**.
 Approve macOS's prompt if it appears. AmirOS opens its local dashboard at:
@@ -58,7 +68,7 @@ http://127.0.0.1:3789
 If macOS blocks the launcher, Control-click the file, choose **Open**, then
 choose **Open** again.
 
-## 4. Complete first-run setup
+## 5. Complete first-run setup
 
 1. In AmirOS, open **Settings**.
 2. Add your own OpenAI API key and set a monthly spend limit.
@@ -72,18 +82,19 @@ choose **Open** again.
 
 ### If you downloaded a ZIP
 
-Download the newest ZIP from GitHub, unzip it into a new folder, then repeat
-step 2. Your old folder keeps your existing local data, so do **not** delete it
-until you have copied its private data as described below.
+Download the newest AmirOS ZIP that your tester coordinator sends you and unzip
+it into a new folder. Run **Install AmirOS.command** in the new folder, then
+follow the private-data steps below. Keep the old folder until you confirm the
+new version works.
 
-### If you cloned with Git
+### If you cloned with Git (technical testers only)
 
 Quit AmirOS, then run this inside its folder:
 
 ```bash
 git pull --ff-only
-pnpm install --frozen-lockfile
-pnpm ui:build
+npx --yes pnpm@10 install --frozen-lockfile
+npx --yes pnpm@10 ui:build
 ```
 
 Then double-click **Open AmirOS.command** again.
@@ -105,8 +116,9 @@ re-link WhatsApp from Settings if needed.
 
 - **The dashboard does not open:** visit `http://127.0.0.1:3789` directly after
   starting AmirOS.
-- **Node or pnpm is missing:** reinstall the current Node.js LTS release, close
-  Terminal, reopen it, and repeat step 2.
+- **Node is missing:** rerun the macOS Installer (.pkg) from
+  [nodejs.org/en/download](https://nodejs.org/en/download), then double-click
+  **Install AmirOS.command** again.
 - **WhatsApp stops syncing:** Settings → WhatsApp linked device → **Re-link
   WhatsApp**, then scan the new QR code.
 - **Need to stop AmirOS:** double-click `stop-whatsapp-bot.command` in the

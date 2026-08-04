@@ -26,6 +26,7 @@ const included = [
   "start-whatsapp-bot.command",
   "stop-whatsapp-bot.command",
   "Open AmirOS.command",
+  "Install AmirOS.command",
 ];
 
 rmSync(releaseRoot, { recursive: true, force: true });
@@ -41,10 +42,10 @@ writeFileSync(resolve(releaseRoot, "CUSTOMER-START-HERE.md"), `# Welcome to Amir
 This is a clean customer copy. It contains no WhatsApp link, API key, contact
 memory, calendar entries, activity history, or profile data from the developer.
 
-1. Install Node.js 20 or newer, then run \`pnpm install\`.
-2. Run \`pnpm build && pnpm ui:build\`.
-3. Double-click \`start-whatsapp-bot.command\`.
-4. Open Settings, add your OpenAI API key, choose a monthly AmirOS spend limit,
+1. Install the Node.js LTS release from https://nodejs.org/en/download.
+2. Double-click \`Install AmirOS.command\` and keep its window open until the
+   AmirOS dashboard opens.
+3. Open Settings, add your OpenAI API key, choose a monthly AmirOS spend limit,
    then link WhatsApp with the QR code.
 
 Your private local data is created only after setup:

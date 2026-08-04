@@ -13,8 +13,8 @@ and model presets persist across restarts.
 
 ## Testing AmirOS
 
-For the current macOS early-access setup—including downloading the private
-repository, installing dependencies, linking WhatsApp, updating safely, and
+For the current macOS early-access setup—including the one-time Node.js
+installation, one-click AmirOS setup, linking WhatsApp, updating safely, and
 protecting local data—follow [the tester setup guide](INSTALL.md).
 
 If the WhatsApp linked device is removed or expires, open **Settings → WhatsApp
