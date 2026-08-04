@@ -19,10 +19,36 @@ open_dashboard() {
   fi
 }
 
-if command -v node >/dev/null 2>&1; then
-  NODE_BIN="$(command -v node)"
-else
+NODE_BIN=""
+
+# Finder launches a non-interactive shell, which often does not inherit the
+# PATH configured by Homebrew, nvm, or Volta. Check the usual macOS locations
+# before showing an installation error.
+for candidate in \
+  "$(command -v node 2>/dev/null || true)" \
+  "/opt/homebrew/bin/node" \
+  "/usr/local/bin/node" \
+  "/opt/homebrew/opt/node@22/bin/node" \
+  "/opt/homebrew/opt/node@20/bin/node" \
+  "$HOME/.volta/bin/node" \
+  "$HOME/.asdf/shims/node"; do
+  if [[ -n "$candidate" && -x "$candidate" ]]; then
+    NODE_BIN="$candidate"
+    break
+  fi
+done
+
+# This exists only on the developer's Mac. It makes the local project usable
+# from Finder while Node is being installed, but is not expected in customer
+# releases and never replaces a normal Node installation when one is present.
+if [[ -z "$NODE_BIN" && -x "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node" ]]; then
+  NODE_BIN="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+  echo "Using the local Codex Node runtime until Node.js is installed system-wide."
+fi
+
+if [[ -z "$NODE_BIN" ]]; then
   echo "Node.js was not found. Install Node.js 20 or newer, then try again."
+  echo "Download it from https://nodejs.org/en/download"
   read -r "?Press Return to close..."
   exit 1
 fi

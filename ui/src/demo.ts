@@ -155,11 +155,11 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.2.0",
+    version: "0.2.1",
     releasedAt: "2026-08-04",
-    headline: "A smoother first launch",
+    headline: "A more reliable launch",
     notes: [
-      { title: "Welcome to AmirOS", detail: "A guided setup for your key, budget, and WhatsApp connection." },
+      { title: "Finder-friendly Node detection", detail: "Open AmirOS can find a normal macOS Node installation." },
       { title: "Release notes, right in the app", detail: "See what changed whenever a new version is installed." },
     ],
   },

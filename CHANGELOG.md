@@ -1,5 +1,10 @@
 # AmirOS release notes
 
+## v0.2.1 — August 4, 2026
+
+- Fixed the Finder launcher so it finds Node.js from common Homebrew, Volta, and asdf locations.
+- Added a temporary developer-only fallback for this Mac while Node.js is being installed system-wide.
+
 ## v0.2.0 — August 4, 2026
 
 - Added a first-run setup that introduces API-key, budget, and WhatsApp linking steps.

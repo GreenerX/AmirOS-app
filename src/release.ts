@@ -30,19 +30,19 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-04",
-  headline: "A smoother first launch",
+  headline: "A more reliable launch",
   notes: [
     {
-      title: "Welcome to AmirOS",
-      detail: "New installations now start with a guided setup for your AI key, WhatsApp connection, and dashboard.",
+      title: "Finder-friendly Node detection",
+      detail: "Open AmirOS now finds Node in the common macOS locations that Finder normally leaves out of its PATH.",
+    },
+    {
+      title: "A safer development fallback",
+      detail: "On this development Mac, AmirOS can temporarily use Codex’s local Node runtime until Node is installed system-wide.",
     },
     {
       title: "Release notes, right in the app",
-      detail: "Select the version button any time to see what changed. New notes open automatically once after every update.",
-    },
-    {
-      title: "A clearer path for testers",
-      detail: "The version shown here matches the release version in Git, so support conversations can start with one useful detail.",
+      detail: "Select the version button any time to see what changed. New notes still open automatically once after every update.",
     },
   ],
 };
