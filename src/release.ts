@@ -30,15 +30,15 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-04",
-  headline: "A more reliable launch",
+  headline: "Start and stop with confidence",
   notes: [
     {
-      title: "Finder-friendly Node detection",
-      detail: "Open AmirOS now finds Node in the common macOS locations that Finder normally leaves out of its PATH.",
+      title: "Reliable background stopping",
+      detail: "Stop AmirOS can now safely find its own background service even if its small process record is missing.",
     },
     {
-      title: "A safer development fallback",
-      detail: "On this development Mac, AmirOS can temporarily use Codex’s local Node runtime until Node is installed system-wide.",
+      title: "One simple way to stop",
+      detail: "Double-click stop-whatsapp-bot.command whenever you want to stop AmirOS, then use Open AmirOS.command to start it again.",
     },
     {
       title: "Release notes, right in the app",

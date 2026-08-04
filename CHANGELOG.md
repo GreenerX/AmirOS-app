@@ -1,5 +1,10 @@
 # AmirOS release notes
 
+## v0.2.2 — August 4, 2026
+
+- Made `stop-whatsapp-bot.command` reliably locate and stop AmirOS if its PID record is unavailable.
+- The recommended everyday controls are now `Open AmirOS.command` to launch and `stop-whatsapp-bot.command` to stop.
+
 ## v0.2.1 — August 4, 2026
 
 - Fixed the Finder launcher so it finds Node.js from common Homebrew, Volta, and asdf locations.
