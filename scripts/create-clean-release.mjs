@@ -27,6 +27,7 @@ const included = [
   "stop-whatsapp-bot.command",
   "Open AmirOS.command",
   "Install AmirOS.command",
+  "Update AmirOS.command",
 ];
 
 rmSync(releaseRoot, { recursive: true, force: true });
@@ -45,8 +46,8 @@ memory, calendar entries, activity history, or profile data from the developer.
 1. Install the Node.js LTS release from https://nodejs.org/en/download.
 2. Double-click \`Install AmirOS.command\` and keep its window open until the
    AmirOS dashboard opens.
-3. Open Settings, add your OpenAI API key, choose a monthly AmirOS spend limit,
-   then link WhatsApp with the QR code.
+3. Complete the first-run setup to add your OpenAI API key, choose a monthly
+   AmirOS spend limit, then link WhatsApp with the QR code.
 
 Your private local data is created only after setup:
 
@@ -55,6 +56,10 @@ Your private local data is created only after setup:
 - \`.env.local\` — your OpenAI API key
 
 Keep all three private. They are intentionally excluded from Git and releases.
+
+When an update is available, double-click \`Update AmirOS.command\`. It creates
+a private backup first, installs the newest AmirOS files, preserves your data,
+and reopens the dashboard.
 `, { encoding: "utf8", mode: 0o644 });
 
 console.log(`Created clean customer release: ${releaseRoot}`);

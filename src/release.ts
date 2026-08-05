@@ -30,23 +30,23 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-05",
-  headline: "A smoother, more personal AmirOS",
+  headline: "Updates that take care of themselves",
   notes: [
     {
-      title: "Settings now save themselves",
-      detail: "Changes are saved automatically as you make them. A small confirmation appears and fades away once AmirOS has safely stored the update.",
+      title: "One-click updates for testers",
+      detail: "Double-click Update AmirOS to safely install the newest version. Your WhatsApp link, knowledge, calendar, settings, profile photos, and API key stay on your Mac.",
     },
     {
-      title: "A more personal first setup",
-      detail: "New users can add their name, choose an illustrated avatar and color theme, connect OpenAI, link WhatsApp, and choose what AmirOS may learn before opening the dashboard.",
+      title: "A backup before every update",
+      detail: "AmirOS makes a private backup before an update, then restores your personal data automatically when it finishes.",
     },
     {
-      title: "Cleaner chats and profile photos",
-      detail: "Chats keep their time order and return to your previous position. Profile photos can be cropped, repositioned, saved as a collection, and removed individually.",
+      title: "Stronger recovery after an interruption",
+      detail: "If power or internet drops, AmirOS checks its WhatsApp connection, reconnects it when possible, and restarts the service if it stays stuck.",
     },
     {
-      title: "More reliable calendar suggestions",
-      detail: "AmirOS now respects the exact time written in a message, handles same-day weekday references more accurately, and gives clearer Apple Calendar subscription guidance.",
+      title: "Clearer help for new testers",
+      detail: "The setup guide now explains the one-click update process in simple terms, with no GitHub account required for public beta updates.",
     },
   ],
 };
@@ -57,6 +57,29 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.4.0",
+    releasedAt: "2026-08-05",
+    headline: "A smoother, more personal AmirOS",
+    notes: [
+      {
+        title: "Settings now save themselves",
+        detail: "Changes are saved automatically as you make them. A small confirmation appears and fades away once AmirOS has safely stored the update.",
+      },
+      {
+        title: "A more personal first setup",
+        detail: "New users can add their name, choose an illustrated avatar and color theme, connect OpenAI, link WhatsApp, and choose what AmirOS may learn before opening the dashboard.",
+      },
+      {
+        title: "Cleaner chats and profile photos",
+        detail: "Chats keep their time order and return to your previous position. Profile photos can be cropped, repositioned, saved as a collection, and removed individually.",
+      },
+      {
+        title: "More reliable calendar suggestions",
+        detail: "AmirOS now respects the exact time written in a message, handles same-day weekday references more accurately, and gives clearer Apple Calendar subscription guidance.",
+      },
+    ],
+  },
   {
     version: "0.3.0",
     releasedAt: "2026-08-05",

@@ -155,16 +155,27 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.4.0",
+    version: "0.5.0",
     releasedAt: "2026-08-05",
-    headline: "A smoother, more personal AmirOS",
+    headline: "Updates that take care of themselves",
     notes: [
-      { title: "Settings now save themselves", detail: "Changes save automatically and a small confirmation fades away after each successful update." },
-      { title: "A more personal first setup", detail: "Choose your name, avatar, theme, learning preferences, OpenAI connection, and WhatsApp connection before opening AmirOS." },
-      { title: "Cleaner chats and profile photos", detail: "Chats keep their order and position, while uploaded profile photos can be cropped and managed as a collection." },
-      { title: "More reliable calendar suggestions", detail: "Written times and same-day weekday references are handled more accurately." },
+      { title: "One-click updates for testers", detail: "Double-click Update AmirOS to safely install the newest version while keeping all personal data on this Mac." },
+      { title: "A backup before every update", detail: "A private backup is made first, then your knowledge, calendar, settings, photos, API key, and WhatsApp link are restored." },
+      { title: "Stronger recovery after an interruption", detail: "AmirOS checks its WhatsApp connection after power or internet interruptions and restarts safely if recovery gets stuck." },
+      { title: "Clearer help for new testers", detail: "The setup guide now explains simple public-beta updates without needing a GitHub account." },
     ],
     history: [
+      {
+        version: "0.5.0",
+        releasedAt: "2026-08-05",
+        headline: "Updates that take care of themselves",
+        notes: [
+          { title: "One-click updates for testers", detail: "Double-click Update AmirOS to safely install the newest version while keeping all personal data on this Mac." },
+          { title: "A backup before every update", detail: "A private backup is made first, then your knowledge, calendar, settings, photos, API key, and WhatsApp link are restored." },
+          { title: "Stronger recovery after an interruption", detail: "AmirOS checks its WhatsApp connection after power or internet interruptions and restarts safely if recovery gets stuck." },
+          { title: "Clearer help for new testers", detail: "The setup guide now explains simple public-beta updates without needing a GitHub account." },
+        ],
+      },
       {
         version: "0.4.0",
         releasedAt: "2026-08-05",

@@ -18,6 +18,65 @@ type RelinkableWhatsAppClient = Pick<
   authStrategy?: { logout?: () => Promise<void> };
 };
 
+type WhatsAppPage = {
+  isClosed?: () => boolean;
+  evaluate<T>(expression: string): Promise<T>;
+};
+
+export type WhatsAppSessionHealth = {
+  healthy: boolean;
+  detail: string;
+};
+
+/**
+ * WhatsApp Web can occasionally leave Chromium running after a network or
+ * power interruption while its page is no longer usable. The dashboard still
+ * answers HTTP requests in that state, so we inspect the actual Web session
+ * rather than treating a running server as proof that the bot can reply.
+ */
+export async function inspectWhatsAppSession(
+  page?: WhatsAppPage | null,
+): Promise<WhatsAppSessionHealth> {
+  if (!page) return { healthy: false, detail: "WhatsApp browser page is unavailable" };
+  if (page.isClosed?.()) return { healthy: false, detail: "WhatsApp browser page is closed" };
+
+  try {
+    const serialized = await page.evaluate<string>(
+      `JSON.stringify((() => {
+        try {
+          const socket = window.require("WAWebSocketModel")?.Socket;
+          return {
+            connected: socket?.state === "CONNECTED",
+            hasRuntime: typeof window.WWebJS !== "undefined",
+            socketState: String(socket?.state || "unknown")
+          };
+        } catch (error) {
+          return { connected: false, hasRuntime: false, socketState: "unavailable" };
+        }
+      })())`,
+    );
+    const status = JSON.parse(serialized) as {
+      connected?: boolean;
+      hasRuntime?: boolean;
+      socketState?: string;
+    };
+    if (status.connected && status.hasRuntime) {
+      return { healthy: true, detail: "WhatsApp Web is connected" };
+    }
+    return {
+      healthy: false,
+      detail: status.hasRuntime
+        ? `WhatsApp socket is ${status.socketState || "unavailable"}`
+        : "WhatsApp Web is still loading",
+    };
+  } catch (error) {
+    return {
+      healthy: false,
+      detail: `WhatsApp browser check failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 export async function resetWhatsAppSession(
   client: RelinkableWhatsAppClient,
   beforeInitialize?: () => void,
@@ -96,6 +155,9 @@ export function createWhatsAppClient(
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnectAttempts = 0;
   let listenerWatchdog: ReturnType<typeof setInterval> | undefined;
+  let connectionWatchdog: ReturnType<typeof setInterval> | undefined;
+  let connectionHealthFailures = 0;
+  let connectionHealthCheckRunning = false;
   let lastWatchdogWarningAt = 0;
   const browserArgs = config.puppeteerNoSandbox
     ? ["--no-sandbox", "--disable-setuid-sandbox"]
@@ -113,6 +175,9 @@ export function createWhatsAppClient(
   });
   const scheduleReconnect = (reason: string) => {
     if (reconnectTimer || relinkOperation) return;
+    isReady = false;
+    readinessRecoveryScheduled = false;
+    ownIds.clear();
     const delay = Math.min(60_000, 3_000 * Math.max(1, reconnectAttempts + 1));
     reconnectAttempts += 1;
     amiros?.setConnection("disconnected", `Reconnecting WhatsApp in ${Math.round(delay / 1_000)} seconds`);
@@ -210,10 +275,56 @@ export function createWhatsAppClient(
     }, 15_000);
   };
 
+  const startConnectionWatchdog = () => {
+    if (connectionWatchdog) return;
+    connectionWatchdog = setInterval(() => {
+      if (!isReady || relinkOperation || connectionHealthCheckRunning) return;
+      connectionHealthCheckRunning = true;
+      void (async () => {
+        const page = (client as WhatsAppClient & { pupPage?: WhatsAppPage }).pupPage;
+        const session = await inspectWhatsAppSession(page);
+        let healthy = session.healthy;
+        let detail = session.detail;
+
+        if (healthy) {
+          try {
+            const bridge = await ensureAmirosMessageBridge();
+            if (bridge === "unavailable") {
+              healthy = false;
+              detail = "WhatsApp message listener is unavailable";
+            }
+          } catch (error) {
+            healthy = false;
+            detail = `WhatsApp message listener check failed: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        }
+
+        if (healthy) {
+          connectionHealthFailures = 0;
+          return;
+        }
+
+        connectionHealthFailures += 1;
+        // A brief socket transition is normal after Wi-Fi returns. Require two
+        // failed checks before rebuilding the browser session.
+        if (connectionHealthFailures < 2) {
+          console.warn(`WhatsApp health check is waiting for recovery: ${detail}`);
+          return;
+        }
+        connectionHealthFailures = 0;
+        console.warn(`WhatsApp health check is restarting the connection: ${detail}`);
+        scheduleReconnect(`health check: ${detail}`);
+      })()
+        .catch((error) => console.warn("WhatsApp health watchdog failed:", error))
+        .finally(() => { connectionHealthCheckRunning = false; });
+    }, 20_000);
+  };
+
   const finishReadySetup = (recoveredPrimaryId?: string) => {
     if (isReady) return;
     isReady = true;
     reconnectAttempts = 0;
+    connectionHealthFailures = 0;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
@@ -241,6 +352,7 @@ export function createWhatsAppClient(
       ),
     );
     startListenerWatchdog();
+    startConnectionWatchdog();
   };
 
   const recoverMissingMessageListener = async () => {

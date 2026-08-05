@@ -4,7 +4,7 @@ import {
   resolveAutomationMode,
   resolveConversationId,
 } from "../src/processor.js";
-import { isSelfChatMessage, resetWhatsAppSession } from "../src/whatsapp.js";
+import { inspectWhatsAppSession, isSelfChatMessage, resetWhatsAppSession } from "../src/whatsapp.js";
 
 describe("WhatsApp self-chat routing", () => {
   const ownIds = new Set(["15551234567@c.us", "987654321@lid"]);
@@ -137,5 +137,29 @@ describe("WhatsApp linked-device reset", () => {
       "beforeInitialize",
       "initialize",
     ]);
+  });
+});
+
+describe("WhatsApp connection health", () => {
+  it("recognizes a connected WhatsApp browser session", async () => {
+    const health = await inspectWhatsAppSession({
+      isClosed: () => false,
+      evaluate: async <T>() => JSON.stringify({ connected: true, hasRuntime: true, socketState: "CONNECTED" }) as T,
+    });
+    expect(health).toEqual({ healthy: true, detail: "WhatsApp Web is connected" });
+  });
+
+  it("flags a detached or unavailable browser session for automatic recovery", async () => {
+    const closed = await inspectWhatsAppSession({
+      isClosed: () => true,
+      evaluate: async <T>() => "{}" as T,
+    });
+    const offline = await inspectWhatsAppSession({
+      isClosed: () => false,
+      evaluate: async <T>() => JSON.stringify({ connected: false, hasRuntime: true, socketState: "DISCONNECTED" }) as T,
+    });
+
+    expect(closed).toEqual({ healthy: false, detail: "WhatsApp browser page is closed" });
+    expect(offline).toEqual({ healthy: false, detail: "WhatsApp socket is DISCONNECTED" });
   });
 });

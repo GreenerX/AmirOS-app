@@ -94,39 +94,33 @@ Anyway** steps above. You only need to approve each launcher once.
    and scan the QR code shown in AmirOS.
 6. Send `!bot hello` in WhatsApp's **Message yourself** chat to test it.
 
-## Updating AmirOS during the beta
+## Updating AmirOS
 
-### If you downloaded a ZIP
+When you are told an update is available, double-click
+**Update AmirOS.command** inside your existing AmirOS folder. Keep the Terminal
+window open until AmirOS opens again in your browser.
 
-Download the newest AmirOS ZIP that your tester coordinator sends you and unzip
-it into a new folder. Run **Install AmirOS.command** in the new folder, then
-follow the private-data steps below. Keep the old folder until you confirm the
-new version works.
+The updater automatically:
 
-### If you cloned with Git (technical testers only)
+1. Stops AmirOS safely.
+2. Creates a private backup beside the app in **AmirOS Backups**.
+3. Downloads and installs the newest app files.
+4. Restores your own data.
+5. Opens the updated dashboard.
 
-Quit AmirOS, then run this inside its folder:
+You do not need a GitHub account, and you do not need to copy files manually.
 
-```bash
-git pull --ff-only
-npx --yes pnpm@10 install --frozen-lockfile
-npx --yes pnpm@10 ui:build
-```
+## Your private data
 
-Then double-click **Open AmirOS.command** again.
-
-## Keeping your data during an update
-
-Your private data is not stored in Git and must never be shared:
+These items are never included in app updates and must never be shared:
 
 - `.env.local` — OpenAI API key and local settings
 - `work/amiros-state.json` — saved knowledge, calendar, preferences, and history
 - `.wwebjs_auth/` — WhatsApp linked-device session
 
-For a ZIP-based update, copy those items from the old AmirOS folder to the new
-one **only while AmirOS is stopped**. Never upload them, commit them, or send
-them to support. If anything goes wrong, keep the old folder as a backup and
-re-link WhatsApp from Settings if needed.
+Never upload them, commit them, or send them to support. If an update cannot
+finish, your last private backup remains in the **AmirOS Backups** folder next
+to the app. If needed, you can re-link WhatsApp from Settings.
 
 ## Troubleshooting
 
