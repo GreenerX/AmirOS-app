@@ -74,6 +74,7 @@ console.log(
 
 const shutdown = async () => {
   console.log("Stopping WhatsApp bot...");
+  intelligenceLearner.shutdown();
   dashboard.close();
   await whatsapp.destroy().catch(() => undefined);
   process.exit(0);

@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AmirosState } from "../src/amiros-state.js";
-import { IntelligenceLearner } from "../src/intelligence-learner.js";
+import { IntelligenceLearner, RELATIONSHIP_LEARNING_DEBOUNCE_MS } from "../src/intelligence-learner.js";
 
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -45,7 +46,7 @@ describe("IntelligenceLearner", () => {
     }));
     const learner = new IntelligenceLearner(state, { analyzeRelationship });
 
-    await learner.analyzeIncoming(chatId);
+    await learner.analyzeNow(chatId);
 
     expect(analyzeRelationship).toHaveBeenCalledTimes(1);
     expect(state.getInsights(chatId)).toEqual([
@@ -89,7 +90,7 @@ describe("IntelligenceLearner", () => {
     }));
     const learner = new IntelligenceLearner(state, { analyzeRelationship });
 
-    await learner.analyzeIncoming(chatId);
+    await learner.analyzeNow(chatId);
 
     expect(state.getTodoTasks(chatId)).toEqual([
       expect.objectContaining({
@@ -125,7 +126,7 @@ describe("IntelligenceLearner", () => {
     }));
     const learner = new IntelligenceLearner(state, { analyzeRelationship });
 
-    await learner.analyzeIncoming(ownerChatId);
+    await learner.analyzeNow(ownerChatId);
 
     expect(state.getInsights(ownerChatId)).toEqual([
       expect.objectContaining({ content: "Amir and Dani live on King Street.", status: "inferred" }),
@@ -159,7 +160,7 @@ describe("IntelligenceLearner", () => {
     }));
     const learner = new IntelligenceLearner(state, { analyzeRelationship });
 
-    await learner.analyzeIncoming(ownerChatId);
+    await learner.analyzeNow(ownerChatId);
 
     expect(state.getInsights(ownerChatId)).toEqual([]);
     expect(state.getInsights(daniChatId)).toEqual([
@@ -167,25 +168,96 @@ describe("IntelligenceLearner", () => {
     ]);
   });
 
-  it("coalesces messages that arrive while the same chat is being analyzed", async () => {
+  it("batches several quick messages in one chat into one automatic analysis", async () => {
     const state = createState();
     const chatId = "group@g.us";
     state.updateContact(chatId, { knowledgeTracking: "enabled" });
-    state.rememberMessage(chatId, { role: "user", content: "First", messageId: "1" });
-    let releaseFirst!: () => void;
-    const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
-    const analyzeRelationship = vi.fn(async () => {
-      if (analyzeRelationship.mock.calls.length === 1) await first;
-      return { insights: [], commitments: [], events: [], todos: [] };
-    });
+    state.rememberMessages(chatId, [
+      { role: "user", content: "First", messageId: "1" },
+      { role: "user", content: "Second", messageId: "2" },
+      { role: "user", content: "Third", messageId: "3" },
+    ]);
+    const analyzeRelationship = vi.fn(async () => ({ insights: [], commitments: [], events: [], todos: [] }));
     const learner = new IntelligenceLearner(state, { analyzeRelationship });
+    vi.useFakeTimers();
 
-    const running = learner.analyzeIncoming(chatId);
-    void learner.analyzeIncoming(chatId);
-    releaseFirst();
-    await running;
+    const first = learner.analyzeIncoming(chatId);
+    const second = learner.analyzeIncoming(chatId);
+    const third = learner.analyzeIncoming(chatId);
+    await vi.advanceTimersByTimeAsync(RELATIONSHIP_LEARNING_DEBOUNCE_MS - 1);
+    expect(analyzeRelationship).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.all([first, second, third]);
 
-    // A repeated trigger without a new message is intentionally a no-op.
+    expect(analyzeRelationship).toHaveBeenCalledTimes(1);
+    const calls = analyzeRelationship.mock.calls as unknown as Array<[{ candidateMessageIds?: string[] }]>;
+    expect(calls[0]?.[0]?.candidateMessageIds).toEqual(["1", "2", "3"]);
+  });
+
+  it("keeps automatic learning timers separate for different chats", async () => {
+    const state = createState();
+    const firstChat = "dani@c.us";
+    const secondChat = "andrew@c.us";
+    state.updateContact(firstChat, { knowledgeTracking: "enabled" });
+    state.updateContact(secondChat, { knowledgeTracking: "enabled" });
+    state.rememberMessage(firstChat, { role: "user", content: "First chat", messageId: "first" });
+    state.rememberMessage(secondChat, { role: "user", content: "Second chat", messageId: "second" });
+    const analyzeRelationship = vi.fn(async () => ({ insights: [], commitments: [], events: [], todos: [] }));
+    const learner = new IntelligenceLearner(state, { analyzeRelationship });
+    vi.useFakeTimers();
+
+    const first = learner.analyzeIncoming(firstChat);
+    await vi.advanceTimersByTimeAsync(15_000);
+    const second = learner.analyzeIncoming(secondChat);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await first;
+    expect(analyzeRelationship).toHaveBeenCalledTimes(1);
+    const calls = analyzeRelationship.mock.calls as unknown as Array<[{ chatId: string }]>;
+    expect(calls[0]?.[0]?.chatId).toBe(firstChat);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await second;
+    expect(analyzeRelationship).toHaveBeenCalledTimes(2);
+    expect(calls[1]?.[0]?.chatId).toBe(secondChat);
+  });
+
+  it("restarts a chat's 45-second wait when another message arrives", async () => {
+    const state = createState();
+    const chatId = "dani@c.us";
+    state.updateContact(chatId, { knowledgeTracking: "enabled" });
+    state.rememberMessage(chatId, { role: "user", content: "First", messageId: "first" });
+    const analyzeRelationship = vi.fn(async () => ({ insights: [], commitments: [], events: [], todos: [] }));
+    const learner = new IntelligenceLearner(state, { analyzeRelationship });
+    vi.useFakeTimers();
+
+    const first = learner.analyzeIncoming(chatId);
+    await vi.advanceTimersByTimeAsync(30_000);
+    state.rememberMessage(chatId, { role: "user", content: "Second", messageId: "second" });
+    const second = learner.analyzeIncoming(chatId);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(analyzeRelationship).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.all([first, second]);
+    expect(analyzeRelationship).toHaveBeenCalledTimes(1);
+    const calls = analyzeRelationship.mock.calls as unknown as Array<[{ candidateMessageIds?: string[] }]>;
+    expect(calls[0]?.[0]?.candidateMessageIds).toEqual(["first", "second"]);
+  });
+
+  it("runs manual analysis immediately and cancels the pending automatic wait", async () => {
+    const state = createState();
+    const chatId = "dani@c.us";
+    state.updateContact(chatId, { knowledgeTracking: "enabled" });
+    state.rememberMessage(chatId, { role: "user", content: "Analyze me now", messageId: "manual" });
+    const analyzeRelationship = vi.fn(async () => ({ insights: [], commitments: [], events: [], todos: [] }));
+    const learner = new IntelligenceLearner(state, { analyzeRelationship });
+    vi.useFakeTimers();
+
+    const scheduled = learner.analyzeIncoming(chatId);
+    await learner.analyzeNow(chatId);
+    expect(analyzeRelationship).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(RELATIONSHIP_LEARNING_DEBOUNCE_MS);
+    await scheduled;
     expect(analyzeRelationship).toHaveBeenCalledTimes(1);
   });
 
@@ -197,10 +269,10 @@ describe("IntelligenceLearner", () => {
     const analyzeRelationship = vi.fn(async () => ({ insights: [], commitments: [], events: [], todos: [] }));
     const learner = new IntelligenceLearner(state, { analyzeRelationship });
 
-    await learner.analyzeIncoming(chatId);
-    await learner.analyzeIncoming(chatId);
+    await learner.analyzeNow(chatId);
+    await learner.analyzeNow(chatId);
     state.rememberMessage(chatId, { role: "user", author: "contact", content: "I also like mint.", messageId: "second" });
-    await learner.analyzeIncoming(chatId);
+    await learner.analyzeNow(chatId);
 
     expect(analyzeRelationship).toHaveBeenCalledTimes(2);
     const calls = analyzeRelationship.mock.calls as unknown as Array<[{ memory: Array<{ messageId?: string }>; candidateMessageIds?: string[] }]>;
@@ -214,7 +286,7 @@ describe("IntelligenceLearner", () => {
     expect(secondRequest?.candidateMessageIds).toEqual(["second"]);
   });
 
-  it("drains every unseen message in bounded analysis batches", async () => {
+  it("does not skip queued tracked messages when a large burst needs multiple analysis batches", async () => {
     const state = createState();
     const chatId = "dani@c.us";
     const timestamp = 1_800_000_000_000;
@@ -229,7 +301,10 @@ describe("IntelligenceLearner", () => {
     const analyzeRelationship = vi.fn(async () => ({ insights: [], commitments: [], events: [], todos: [] }));
     const learner = new IntelligenceLearner(state, { analyzeRelationship });
 
-    await learner.analyzeIncoming(chatId);
+    vi.useFakeTimers();
+    const scheduled = learner.analyzeIncoming(chatId);
+    await vi.advanceTimersByTimeAsync(RELATIONSHIP_LEARNING_DEBOUNCE_MS);
+    await scheduled;
 
     expect(analyzeRelationship).toHaveBeenCalledTimes(3);
     const calls = analyzeRelationship.mock.calls as unknown as Array<[{ candidateMessageIds?: string[] }]>;
@@ -249,7 +324,7 @@ describe("IntelligenceLearner", () => {
     const analyzeRelationship = vi.fn(async () => ({ insights: [], commitments: [], events: [], todos: [] }));
     const learner = new IntelligenceLearner(state, { analyzeRelationship });
 
-    await learner.analyzeIncoming(chatId);
+    await learner.analyzeNow(chatId);
 
     expect(state.getContact(chatId).knowledgeTracking).toBe("pending");
     expect(analyzeRelationship).not.toHaveBeenCalled();
@@ -276,7 +351,7 @@ describe("IntelligenceLearner", () => {
     }));
     const learner = new IntelligenceLearner(state, { analyzeRelationship });
 
-    await learner.analyzeIncoming(chatId);
+    await learner.analyzeNow(chatId);
 
     expect(analyzeRelationship).not.toHaveBeenCalled();
   });

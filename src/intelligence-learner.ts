@@ -3,6 +3,14 @@ import type { AmirosState } from "./amiros-state.js";
 
 type RelationshipIntelligenceAi = Pick<AiService, "analyzeRelationship">;
 
+export const RELATIONSHIP_LEARNING_DEBOUNCE_MS = 45_000;
+
+type ScheduledAnalysis = {
+  timer: ReturnType<typeof setTimeout>;
+  promise: Promise<void>;
+  resolve: () => void;
+};
+
 export class IntelligenceLearner {
   /**
    * Keep a single automatic pass economical even when a first history scan
@@ -12,14 +20,77 @@ export class IntelligenceLearner {
   private static readonly MAX_BATCHES_PER_DRAIN = 8;
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly rerun = new Set<string>();
+  private readonly scheduled = new Map<string, ScheduledAnalysis>();
+  private stopped = false;
 
   constructor(
     private readonly state: AmirosState,
     private readonly ai: RelationshipIntelligenceAi,
   ) {}
 
+  /**
+   * Schedule automatic relationship learning. A fresh message in the same
+   * chat restarts only that chat's timer, so a burst is analyzed together.
+   */
   analyzeIncoming(chatId: string): Promise<void> {
+    if (this.stopped) return Promise.resolve();
     this.rerun.add(chatId);
+
+    const existing = this.scheduled.get(chatId);
+    if (existing) {
+      clearTimeout(existing.timer);
+      existing.timer = this.startTimer(chatId, existing);
+      return existing.promise;
+    }
+
+    let resolve!: () => void;
+    const scheduled: ScheduledAnalysis = {
+      timer: undefined as unknown as ReturnType<typeof setTimeout>,
+      promise: new Promise<void>((done) => { resolve = done; }),
+      resolve: () => resolve(),
+    };
+    scheduled.timer = this.startTimer(chatId, scheduled);
+    this.scheduled.set(chatId, scheduled);
+    return scheduled.promise;
+  }
+
+  /**
+   * Used by intentional/manual work. It bypasses the automatic delay without
+   * changing the normal WhatsApp message path.
+   */
+  analyzeNow(chatId: string): Promise<void> {
+    const scheduled = this.scheduled.get(chatId);
+    if (scheduled) {
+      clearTimeout(scheduled.timer);
+      this.scheduled.delete(chatId);
+    }
+
+    const task = this.startDrain(chatId);
+    if (scheduled) void task.finally(scheduled.resolve);
+    return task;
+  }
+
+  /** Clear pending timers before the server exits. In-flight API work is not cancelled. */
+  shutdown(): void {
+    this.stopped = true;
+    for (const scheduled of this.scheduled.values()) {
+      clearTimeout(scheduled.timer);
+      scheduled.resolve();
+    }
+    this.scheduled.clear();
+  }
+
+  private startTimer(chatId: string, scheduled: ScheduledAnalysis): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(() => {
+      if (this.scheduled.get(chatId) !== scheduled) return;
+      this.scheduled.delete(chatId);
+      void this.startDrain(chatId).finally(scheduled.resolve);
+    }, RELATIONSHIP_LEARNING_DEBOUNCE_MS);
+    timer.unref?.();
+    return timer;
+  }
+
+  private startDrain(chatId: string): Promise<void> {
     const existing = this.inFlight.get(chatId);
     if (existing) return existing;
 
@@ -35,7 +106,7 @@ export class IntelligenceLearner {
         // The cap above is deliberately finite. Keep draining on a later turn
         // when there is still work, rather than silently leaving an old history
         // batch behind until another message happens to arrive.
-        if (this.rerun.has(chatId)) queueMicrotask(() => void this.analyzeIncoming(chatId));
+        if (this.rerun.has(chatId) && !this.stopped) queueMicrotask(() => void this.analyzeIncoming(chatId));
       });
     this.inFlight.set(chatId, task);
     return task;
