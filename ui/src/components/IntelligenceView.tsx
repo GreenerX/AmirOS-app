@@ -1,7 +1,7 @@
 import {
   ArrowRight, BookOpenCheck, CalendarCheck, CalendarDays, CalendarPlus, Check, CheckCircle2,
   ChevronDown, ChevronUp, CircleHelp, Clock3, ExternalLink, History, ListTodo,
-  MessageCircleQuestion, MessageSquareText, PencilLine, RefreshCw, Reply, Search, Sparkles, Users, X,
+  MessageCircleQuestion, MessageSquareText, PencilLine, RefreshCw, Reply, Search, Sparkles, Trash2, Users, X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
@@ -26,6 +26,7 @@ type ActionKind = Exclude<QueueFilter, "all">;
 type KnowledgeFilter = "all" | ContactInsight["kind"];
 type PeopleFilter = "all" | "people" | "groups";
 type PeopleMetric = "knowledge" | "plans";
+type TodoFilter = "all" | "open" | "completed";
 
 type PeopleMetricSelection = {
   chatId: string;
@@ -372,6 +373,8 @@ export function IntelligenceView({
   const [peopleMetricSelection, setPeopleMetricSelection] = useState<PeopleMetricSelection>();
   const [todoEditor, setTodoEditor] = useState<(TodoTask & { contactName: string })>();
   const [completingTodoIds, setCompletingTodoIds] = useState<Set<string>>(() => new Set());
+  const [todoFilter, setTodoFilter] = useState<TodoFilter>("all");
+  const [todoListExpanded, setTodoListExpanded] = useState(false);
 
   const chatById = useMemo(() => new Map(chats.map((chat) => [chat.id, chat])), [chats]);
   const intelligenceById = useMemo(() => new Map((data?.chats || []).map((chat) => [chat.chatId, chat])), [data?.chats]);
@@ -415,26 +418,45 @@ export function IntelligenceView({
     }), [data?.todos]);
   const suggestedTodoCount = useMemo(() => (data?.todos || [])
     .filter((item) => item.status === "inferred" && isKnownIntelligenceContactName(item.contactName)).length, [data?.todos]);
+  const todoCounts = useMemo(() => ({
+    all: trackedTodos.length,
+    open: trackedTodos.filter((item) => item.status === "open").length,
+    completed: trackedTodos.filter((item) => item.status === "done").length,
+  }), [trackedTodos]);
+  const filteredTrackedTodos = useMemo(() => trackedTodos.filter((item) => (
+    todoFilter === "all" || (todoFilter === "open" ? item.status === "open" : item.status === "done")
+  )), [todoFilter, trackedTodos]);
+  const visibleTrackedTodos = useMemo(
+    () => todoListExpanded ? filteredTrackedTodos : filteredTrackedTodos.slice(0, 4),
+    [filteredTrackedTodos, todoListExpanded],
+  );
   const knowledgeSummary = {
     relationships: intelligenceSnapshot.relationships,
     details: intelligenceSnapshot.details,
   };
 
-  const completeTodo = async (todo: TodoTask & { contactName: string }) => {
-    if (!onTodoStatus || todo.status === "done") return;
-    setCompletingTodoIds((current) => new Set(current).add(todo.id));
+  const toggleTodo = async (todo: TodoTask & { contactName: string }) => {
+    if (!onTodoStatus) return;
+    const isCompleting = todo.status !== "done";
+    if (isCompleting) setCompletingTodoIds((current) => new Set(current).add(todo.id));
     try {
-      await Promise.all([
-        onTodoStatus(todo.chatId, todo.id, "done"),
-        new Promise<void>((resolve) => window.setTimeout(resolve, 330)),
-      ]);
+      await Promise.all(isCompleting
+        ? [onTodoStatus(todo.chatId, todo.id, "done"), new Promise<void>((resolve) => window.setTimeout(resolve, 330))]
+        : [onTodoStatus(todo.chatId, todo.id, "open")]);
     } finally {
-      setCompletingTodoIds((current) => {
+      if (isCompleting) setCompletingTodoIds((current) => {
         const next = new Set(current);
         next.delete(todo.id);
         return next;
       });
     }
+  };
+
+  const deleteTodo = async (todo: TodoTask & { contactName: string }) => {
+    if (!onTodoStatus) return;
+    if (!window.confirm(`Delete “${todo.title}”?`)) return;
+    await onTodoStatus(todo.chatId, todo.id, "dismissed");
+    if (todoEditor?.id === todo.id) setTodoEditor(undefined);
   };
 
   useEffect(() => {
@@ -807,15 +829,27 @@ export function IntelligenceView({
       <aside className="intel-rail">
         {selectedAction ? <section className="intel-inspector"><header><span className={`intel-kind-icon kind-${selectedAction.kind}`}><ActionIcon kind={selectedAction.kind} /></span><div><small>{ACTION_LABELS[selectedAction.kind]} evidence</small><h2 dir="auto">{selectedAction.title}</h2></div><button aria-label="Close evidence" onClick={() => setSelectedActionId(undefined)}><X size={17} /></button></header><div className="intel-inspector-contact"><ContactAvatar name={selectedAction.contactName} src={chatById.get(selectedAction.chatId)?.avatarUrl} className="intel-inspector-avatar" /><span><strong>{selectedAction.contactName}</strong><small>{contacts[selectedAction.chatId]?.relationship || (intelligenceById.get(selectedAction.chatId)?.isGroup ? "Group conversation" : "Private conversation")}</small></span></div><section><small>Why AmirOS surfaced this</small><p>{selectedAction.reason}</p></section><section><small>Original evidence</small><blockquote dir="auto">“{selectedAction.evidence || selectedAction.title || selectedAction.summary}”</blockquote>{selectedAction.senderName ? <span>Sent by {selectedAction.senderName}</span> : null}</section><footer><button className="button primary" onClick={() => void primaryAction(selectedAction)}>{actionButtonLabel(selectedAction)}</button><button className="button" onClick={() => openActionSource(selectedAction)}>Open source message</button><button className="text-action muted" onClick={() => void dismissAction(selectedAction)}>Dismiss suggestion</button></footer></section> : <>
           <section className="intel-rail-card intel-next"><header><h2>Up next</h2><CalendarDays size={17} /></header>{nextEvent ? (() => { const date = eventLabel(nextEvent.startAt); return <><div className="intel-next-event"><span><small>{date.month}</small><b>{date.day}</b><em>{date.weekday}</em></span><div><strong dir="auto">{nextEvent.title}</strong><small><Clock3 size={13} />{date.time}</small>{nextEvent.location ? <small>{nextEvent.location}</small> : null}</div></div><button className="button secondary" onClick={onOpenCalendar}>Open in Calendar</button></>; })() : <div className="intel-rail-empty"><CalendarCheck size={22} /><p>No upcoming confirmed events.</p><button onClick={onOpenCalendar}>View Calendar</button></div>}</section>
-          <section className="intel-rail-card intel-next intel-todos"><header><h2>To-dos</h2><ListTodo size={17} /></header>{trackedTodos.length > 0 ? <><div className="intel-todo-list">{trackedTodos.map((todo) => {
-            const isDone = todo.status === "done";
-            const isCompleting = completingTodoIds.has(todo.id);
-            return <div className={`intel-todo-row ${isDone ? "is-completed" : ""} ${isCompleting ? "is-completing" : ""}`} key={todo.id}>
-              <button className="intel-todo-check" type="button" aria-label={isDone ? `${todo.title} is complete` : `Mark ${todo.title} as complete`} disabled={!onTodoStatus || isDone} onClick={() => void completeTodo(todo)}><Check size={14} aria-hidden="true" /></button>
-              <button className="intel-todo-copy" type="button" onClick={() => setTodoEditor(todo)}><strong dir="auto">{todo.title}</strong><small>{isDone ? `Completed ${todoDateLabel(todo.completedAt || todo.updatedAt)}` : `Added ${todoDateLabel(todo.createdAt)}${todo.dueAt ? ` · Due ${todoDateLabel(todo.dueAt)}` : ""} · ${todoPriorityLabel(todo.priority || "normal")}`}</small></button>
-              <button className="intel-todo-edit" type="button" aria-label={`Edit ${todo.title}`} onClick={() => setTodoEditor(todo)}><PencilLine size={13} /></button>
-            </div>;
-          })}</div><button className="button secondary" onClick={() => { setActiveTab("briefing"); setQueueFilter("todo"); }}>{suggestedTodoCount > 0 ? `Review ${suggestedTodoCount} suggestion${suggestedTodoCount === 1 ? "" : "s"}` : "Review task suggestions"}</button></> : suggestedTodoCount > 0 ? <div className="intel-rail-empty"><ListTodo size={22} /><p>{suggestedTodoCount} to-do {suggestedTodoCount === 1 ? "suggestion is" : "suggestions are"} waiting for review.</p><button onClick={() => { setActiveTab("briefing"); setQueueFilter("todo"); }}>Review suggestions</button></div> : <div className="intel-rail-empty"><ListTodo size={22} /><p>No to-dos yet.</p><button onClick={() => { setActiveTab("briefing"); setQueueFilter("todo"); }}>View To-dos</button></div>}</section>
+          <section className="intel-rail-card intel-next intel-todos">
+            <header><h2>To-dos</h2><ListTodo size={17} /></header>
+            {trackedTodos.length > 0 ? <>
+              <div className="todo-filter-bar" aria-label="Filter to-dos">
+                {(["all", "open", "completed"] as TodoFilter[]).map((filter) => <button key={filter} type="button" className={todoFilter === filter ? "is-active" : ""} aria-pressed={todoFilter === filter} onClick={() => { setTodoFilter(filter); setTodoListExpanded(false); }}>
+                  {filter === "all" ? "All" : filter === "open" ? "Open" : "Completed"}<span>{todoCounts[filter]}</span>
+                </button>)}
+              </div>
+              {visibleTrackedTodos.length > 0 ? <div className="intel-todo-list">{visibleTrackedTodos.map((todo) => {
+                const isDone = todo.status === "done";
+                const isCompleting = completingTodoIds.has(todo.id);
+                return <div className={`intel-todo-row ${isDone ? "is-completed" : ""} ${isCompleting ? "is-completing" : ""}`} key={todo.id}>
+                  <button className="intel-todo-check" type="button" aria-label={isDone ? `Mark ${todo.title} as open` : `Mark ${todo.title} as complete`} disabled={!onTodoStatus} onClick={() => void toggleTodo(todo)}><Check size={14} aria-hidden="true" /></button>
+                  <button className="intel-todo-copy" type="button" onClick={() => setTodoEditor(todo)}><strong dir="auto">{todo.title}</strong><small>{isDone ? `Completed ${todoDateLabel(todo.completedAt || todo.updatedAt)}` : `Added ${todoDateLabel(todo.createdAt)}${todo.dueAt ? ` · Due ${todoDateLabel(todo.dueAt)}` : ""} · ${todoPriorityLabel(todo.priority || "normal")}`}</small></button>
+                  <span className="intel-todo-actions"><button className="intel-todo-edit" type="button" aria-label={`Edit ${todo.title}`} onClick={() => setTodoEditor(todo)}><PencilLine size={13} /></button><button className="intel-todo-delete" type="button" aria-label={`Delete ${todo.title}`} disabled={!onTodoStatus} onClick={() => void deleteTodo(todo)}><Trash2 size={13} /></button></span>
+                </div>;
+              })}</div> : <p className="intel-todo-filter-empty">No {todoFilter === "completed" ? "completed" : "open"} to-dos.</p>}
+              {filteredTrackedTodos.length > 4 ? <button className="todo-expand-button" type="button" onClick={() => setTodoListExpanded((value) => !value)}>{todoListExpanded ? "Show fewer" : `Show all ${filteredTrackedTodos.length}`}</button> : null}
+              <button className="button secondary" onClick={() => { setActiveTab("briefing"); setQueueFilter("todo"); }}>{suggestedTodoCount > 0 ? `Review ${suggestedTodoCount} suggestion${suggestedTodoCount === 1 ? "" : "s"}` : "Review task suggestions"}</button>
+            </> : suggestedTodoCount > 0 ? <div className="intel-rail-empty"><ListTodo size={22} /><p>{suggestedTodoCount} to-do {suggestedTodoCount === 1 ? "suggestion is" : "suggestions are"} waiting for review.</p><button onClick={() => { setActiveTab("briefing"); setQueueFilter("todo"); }}>Review suggestions</button></div> : <div className="intel-rail-empty"><ListTodo size={22} /><p>No to-dos yet.</p><button onClick={() => { setActiveTab("briefing"); setQueueFilter("todo"); }}>View To-dos</button></div>}
+          </section>
           <section className="intel-rail-card intel-recent"><button className="intel-rail-heading" onClick={() => setLatestOpen((value) => !value)}><span><MessageCircleQuestion size={16} /><b>Recent answer</b></span>{latestOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button>{latest ? <div className={latestOpen ? "open" : "collapsed"}><strong dir="auto">{latest.question}</strong>{latestOpen ? <><p dir="auto">{latest.answer}</p>{latest.sources[0] ? <button onClick={() => onOpenChat(latest.sources[0]!.chatId)}>Open source chat<ExternalLink size={12} /></button> : null}</> : null}</div> : <p className="intel-muted-empty">Ask your first question from the AmirOS bubble.</p>}<button className="intel-history-shortcut" onClick={() => setActiveTab("history")}><History size={14} />View question history</button></section>
           <section className="intel-rail-card intel-knowledge"><header><h2>Knowledge snapshot</h2><Users size={17} /></header><div><span><b>{knowledgeSummary.relationships}</b><small>relationships understood</small></span><span><b>{knowledgeSummary.details}</b><small>confirmed details</small></span></div><button onClick={() => setActiveTab("knowledge")}>Open knowledge<ArrowRight size={14} /></button></section>
         </>}

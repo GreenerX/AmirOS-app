@@ -40,6 +40,8 @@ type OverviewProps = {
   onTodoStatus: (chatId: string, todoId: string, status: TodoTask["status"]) => Promise<void>;
 };
 
+type TodoFilter = "all" | "open" | "completed";
+
 const OVERVIEW_QUOTES = [
   { text: "The only way to do great work is to love what you do.", author: "Steve Jobs" },
   { text: "Your time is limited, so don’t waste it living someone else’s life.", author: "Steve Jobs" },
@@ -114,6 +116,9 @@ function todoTimingLabel(todo: TodoTask) {
 export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, onPreset, onTrackingDecision, onOpenTrackingChat, onOpenTodoReview, onTodoStatus }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
+  const [todoFilter, setTodoFilter] = useState<TodoFilter>("all");
+  const [todoListExpanded, setTodoListExpanded] = useState(false);
+  const [completingTodoIds, setCompletingTodoIds] = useState<Set<string>>(() => new Set());
   useEffect(() => {
     const interval = window.setInterval(() => setDeviceTime(new Date()), 1_000);
     return () => window.clearInterval(interval);
@@ -152,6 +157,18 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
       const rightTime = typeof right.dueAt === "number" ? toMilliseconds(right.dueAt) : toMilliseconds(right.createdAt);
       return leftTime - rightTime;
     }), [intelligence]);
+  const todoCounts = useMemo(() => ({
+    all: trackedTodos.length,
+    open: trackedTodos.filter((todo) => todo.status === "open").length,
+    completed: trackedTodos.filter((todo) => todo.status === "done").length,
+  }), [trackedTodos]);
+  const filteredTrackedTodos = useMemo(() => trackedTodos.filter((todo) => (
+    todoFilter === "all" || (todoFilter === "open" ? todo.status === "open" : todo.status === "done")
+  )), [todoFilter, trackedTodos]);
+  const visibleTrackedTodos = useMemo(
+    () => todoListExpanded ? filteredTrackedTodos : filteredTrackedTodos.slice(0, 4),
+    [filteredTrackedTodos, todoListExpanded],
+  );
   const suggestedTodos = useMemo(() => (intelligence?.todos || [])
     .filter((todo) => todo.status === "inferred"), [intelligence]);
   const newSignals = intelligence?.changes.filter((item) => item.status === "inferred" && isKnownIntelligenceContactName(item.contactName)) || [];
@@ -177,17 +194,15 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
             ? { kind: "New relationship detail", title: newSignals[0].contactName, detail: newSignals[0].content, chatId: newSignals[0].chatId, contactName: newSignals[0].contactName }
             : undefined;
   const focusChat = focus ? chats.find((chat) => chat.id === focus.chatId) : undefined;
-  const [completingTodoIds, setCompletingTodoIds] = useState<Set<string>>(() => new Set());
-  const completeTodo = async (todo: TodoTask) => {
-    if (todo.status === "done") return;
-    setCompletingTodoIds((current) => new Set(current).add(todo.id));
+  const toggleTodo = async (todo: TodoTask) => {
+    const isCompleting = todo.status !== "done";
+    if (isCompleting) setCompletingTodoIds((current) => new Set(current).add(todo.id));
     try {
-      await Promise.all([
-        onTodoStatus(todo.chatId, todo.id, "done"),
-        new Promise<void>((resolve) => window.setTimeout(resolve, 330)),
-      ]);
+      await Promise.all(isCompleting
+        ? [onTodoStatus(todo.chatId, todo.id, "done"), new Promise<void>((resolve) => window.setTimeout(resolve, 330))]
+        : [onTodoStatus(todo.chatId, todo.id, "open")]);
     } finally {
-      setCompletingTodoIds((current) => {
+      if (isCompleting) setCompletingTodoIds((current) => {
         const next = new Set(current);
         next.delete(todo.id);
         return next;
@@ -296,19 +311,23 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
               </section>
 
               <section className="overview-agenda-column overview-agenda-todos" aria-labelledby="overview-todo-list-title">
-                <header>
+                <header className="overview-todo-header">
                   <span><ListTodo size={17} /><span><small>Tasks</small><h3 id="overview-todo-list-title">To-do list</h3></span></span>
-                  <button className="text-button" type="button" onClick={onOpenTodoReview}>{suggestedTodos.length > 0 ? `Review ${suggestedTodos.length}` : "View tasks"} <ArrowRight size={14} /></button>
+                  <span className="overview-todo-header-actions"><button className="text-button" type="button" onClick={onOpenTodoReview}>{suggestedTodos.length > 0 ? `Review ${suggestedTodos.length}` : "View tasks"} <ArrowRight size={14} /></button></span>
                 </header>
-                {trackedTodos.length > 0 ? <div className="overview-agenda-list">
-                  {trackedTodos.map((todo) => <div className={`overview-agenda-todo-row ${todo.status === "done" ? "is-completed" : ""} ${completingTodoIds.has(todo.id) ? "is-completing" : ""}`} key={todo.id}>
-                    <button className="overview-todo-check" type="button" aria-label={todo.status === "done" ? `${todo.title} is complete` : `Mark ${todo.title} as complete`} disabled={todo.status === "done"} onClick={() => void completeTodo(todo)}><Check size={16} /></button>
+                {trackedTodos.length > 0 ? <><div className="overview-todo-filter-bar" aria-label="Filter to-dos">
+                  {(["all", "open", "completed"] as TodoFilter[]).map((filter) => <button key={filter} className={todoFilter === filter ? "is-active" : ""} type="button" aria-pressed={todoFilter === filter} onClick={() => { setTodoFilter(filter); setTodoListExpanded(false); }}>{filter === "all" ? "All" : filter === "open" ? "Open" : "Completed"}<span>{todoCounts[filter]}</span></button>)}
+                </div>
+                {visibleTrackedTodos.length > 0 ? <div className="overview-agenda-list">
+                  {visibleTrackedTodos.map((todo) => <div className={`overview-agenda-todo-row ${todo.status === "done" ? "is-completed" : ""} ${completingTodoIds.has(todo.id) ? "is-completing" : ""}`} key={todo.id}>
+                    <button className="overview-todo-check" type="button" aria-label={todo.status === "done" ? `Mark ${todo.title} as open` : `Mark ${todo.title} as complete`} onClick={() => void toggleTodo(todo)}><Check size={16} /></button>
                     <button className="overview-agenda-item" type="button" onClick={onOpenTodoReview}>
                       <span><strong dir="auto">{todo.title}</strong><small>{todo.status === "done" ? `Completed ${eventDateTime(toMilliseconds(todo.completedAt || todo.updatedAt))}` : typeof todo.dueAt === "number" && Number.isFinite(todo.dueAt) ? todoTimingLabel(todo) : `Added ${eventDateTime(toMilliseconds(todo.createdAt))}`}</small></span>
                       <ArrowRight size={14} />
                     </button>
                   </div>)}
-                </div> : suggestedTodos.length > 0 ? <div className="overview-agenda-empty"><ListTodo size={19} /><span><strong>{suggestedTodos.length} task {suggestedTodos.length === 1 ? "suggestion" : "suggestions"} waiting</strong><small>Review a message before it becomes a to-do.</small></span></div> : <div className="overview-agenda-empty"><ListTodo size={19} /><span><strong>No to-dos yet</strong><small>Actionable messages will appear here for review.</small></span></div>}
+                </div> : <div className="overview-agenda-empty overview-todo-filter-empty"><ListTodo size={19} /><span><strong>No {todoFilter === "completed" ? "completed" : "open"} to-dos</strong><small>Try another filter to see saved tasks.</small></span></div>}
+                {filteredTrackedTodos.length > 4 ? <button className="overview-todo-expand" type="button" onClick={() => setTodoListExpanded((value) => !value)}>{todoListExpanded ? "Show fewer" : `Show all ${filteredTrackedTodos.length}`}</button> : null}</> : suggestedTodos.length > 0 ? <div className="overview-agenda-empty"><ListTodo size={19} /><span><strong>{suggestedTodos.length} task {suggestedTodos.length === 1 ? "suggestion" : "suggestions"} waiting</strong><small>Review a message before it becomes a to-do.</small></span></div> : <div className="overview-agenda-empty"><ListTodo size={19} /><span><strong>No to-dos yet</strong><small>Actionable messages will appear here for review.</small></span></div>}
               </section>
             </div>
           </div>
