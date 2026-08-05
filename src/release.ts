@@ -29,28 +29,12 @@ export const AMIROS_VERSION = packageVersion();
 
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
-  releasedAt: "2026-08-05",
-  headline: "A clearer, more reliable daily assistant",
+  releasedAt: "2026-08-06",
+  headline: "A smoother, safer update experience",
   notes: [
     {
-      title: "A to-do list that remembers",
-      detail: "Checked-off tasks now stay in your list with a clear completion time. Active tasks remain at the top and completed tasks move below them, so you can always see what you got done.",
-    },
-    {
-      title: "Your day, in one place",
-      detail: "The Overview now brings upcoming plans and to-dos together in a cleaner agenda, with quick links to open the full calendar or task list.",
-    },
-    {
-      title: "Smarter relationship knowledge",
-      detail: "AmirOS is better at keeping useful conversation knowledge organised, while making it easier to review new suggestions before they are saved.",
-    },
-    {
-      title: "More dependable conversations",
-      detail: "Chats now handle long messages, mentions, and returning to a conversation more smoothly, helping you pick up where you left off.",
-    },
-    {
-      title: "Updates from inside AmirOS",
-      detail: "When a newer public version is available, AmirOS can let you know and start the private, backed-up update from the dashboard.",
+      title: "Faster, safer updates",
+      detail: "AmirOS now keeps your WhatsApp link safely in place during an update instead of making a large extra copy of it. Updates finish much more reliably while your private data stays on your Mac.",
     },
   ],
 };
@@ -61,6 +45,33 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.6.1",
+    releasedAt: "2026-08-05",
+    headline: "A clearer, more reliable daily assistant",
+    notes: [
+      {
+        title: "A to-do list that remembers",
+        detail: "Checked-off tasks now stay in your list with a clear completion time. Active tasks remain at the top and completed tasks move below them, so you can always see what you got done.",
+      },
+      {
+        title: "Your day, in one place",
+        detail: "The Overview now brings upcoming plans and to-dos together in a cleaner agenda, with quick links to open the full calendar or task list.",
+      },
+      {
+        title: "Smarter relationship knowledge",
+        detail: "AmirOS is better at keeping useful conversation knowledge organised, while making it easier to review new suggestions before they are saved.",
+      },
+      {
+        title: "More dependable conversations",
+        detail: "Chats now handle long messages, mentions, and returning to a conversation more smoothly, helping you pick up where you left off.",
+      },
+      {
+        title: "Updates from inside AmirOS",
+        detail: "When a newer public version is available, AmirOS can let you know and start the private, backed-up update from the dashboard.",
+      },
+    ],
+  },
   {
     version: "0.5.0",
     releasedAt: "2026-08-05",

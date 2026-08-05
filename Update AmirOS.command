@@ -61,7 +61,11 @@ stop_amiros() {
 backup_private_data() {
   BACKUP_DIR="$BACKUP_ROOT/$(date '+%Y-%m-%d-%H%M%S')"
   mkdir -p "$BACKUP_DIR" || return 1
-  for private_item in .env.local .env .wwebjs_auth work; do
+  # The updater explicitly excludes the WhatsApp session from every install
+  # operation, so it remains safely in place. Copying its Chrome profile can
+  # take a very long time (and makes an otherwise small update look stuck).
+  # Back up the smaller configuration and AmirOS state directory instead.
+  for private_item in .env.local .env work; do
     if [[ -e "$PROJECT_DIR/$private_item" ]]; then
       /usr/bin/ditto "$PROJECT_DIR/$private_item" "$BACKUP_DIR/$private_item" || return 1
     fi
@@ -69,7 +73,7 @@ backup_private_data() {
 }
 
 restore_private_data() {
-  for private_item in .env.local .env .wwebjs_auth work; do
+  for private_item in .env.local .env work; do
     if [[ -e "$BACKUP_DIR/$private_item" ]]; then
       /usr/bin/ditto "$BACKUP_DIR/$private_item" "$PROJECT_DIR/$private_item" || return 1
     fi
