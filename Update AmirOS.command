@@ -87,17 +87,20 @@ update_from_git() {
   /usr/bin/git -C "$PROJECT_DIR" pull --ff-only origin "$BRANCH" || return 1
 }
 
-update_from_release_zip() {
+prepare_release_zip() {
   local temporary_directory="$1"
   local archive_path="$temporary_directory/AmirOS.zip"
-  local source_directory
   echo "Downloading the latest AmirOS release..."
   /usr/bin/curl --fail --location --silent --show-error \
     "$UPDATE_REPOSITORY/archive/refs/heads/$BRANCH.zip" \
     --output "$archive_path" || return 1
   /usr/bin/unzip -q "$archive_path" -d "$temporary_directory" || return 1
-  source_directory="$(/usr/bin/find "$temporary_directory" -maxdepth 1 -type d -name 'AmirOS-app-*' -print -quit)"
-  [[ -n "$source_directory" ]] || return 1
+  RELEASE_SOURCE_DIRECTORY="$(/usr/bin/find "$temporary_directory" -maxdepth 1 -type d -name 'AmirOS-app-*' -print -quit)"
+  [[ -n "$RELEASE_SOURCE_DIRECTORY" ]] || return 1
+}
+
+install_release_zip() {
+  local source_directory="$1"
   # This intentionally merges code files only. The exclusions ensure a
   # downloaded release can never replace private data, installed dependencies,
   # or a user's local Git history.
@@ -126,28 +129,30 @@ fi
 
 echo
 echo "Updating AmirOS..."
-echo "Your WhatsApp link, API key, knowledge, calendar, and profile will be backed up first."
+echo "First checking that a safe update is available..."
 echo
-
-stop_amiros
-backup_private_data || fail "AmirOS could not back up your private data."
-echo "Private data backup created at: $BACKUP_DIR"
 
 TEMPORARY_DIRECTORY="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/amiros-update.XXXXXX")" || fail "AmirOS could not prepare the update."
 trap 'rm -rf "$TEMPORARY_DIRECTORY"' EXIT
 
 if [[ -d "$PROJECT_DIR/.git" ]] && /usr/bin/git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  if update_from_git; then
-    :
-  else
-    update_status=$?
-    if [[ "$update_status" -eq 2 ]]; then
-      fail "This copy has local app changes. AmirOS left them untouched; ask the app owner to release those changes before updating."
-    fi
-    fail "AmirOS could not download the update. Check your internet connection and try again."
+  if [[ -n "$(/usr/bin/git -C "$PROJECT_DIR" status --porcelain --untracked-files=no)" ]]; then
+    fail "This copy has local app changes. AmirOS left them untouched; ask the app owner to release those changes before updating."
   fi
+  /usr/bin/git -C "$PROJECT_DIR" fetch origin "$BRANCH" || fail "AmirOS could not download the update. Check your internet connection and try again."
 else
-  update_from_release_zip "$TEMPORARY_DIRECTORY" || fail "AmirOS could not download the update. Check your internet connection and try again."
+  prepare_release_zip "$TEMPORARY_DIRECTORY" || fail "AmirOS could not download the update. Check your internet connection and try again."
+fi
+
+echo "Update package is ready. Backing up your private AmirOS data..."
+stop_amiros
+backup_private_data || fail "AmirOS could not back up your private data."
+echo "Private data backup created at: $BACKUP_DIR"
+
+if [[ -d "$PROJECT_DIR/.git" ]] && /usr/bin/git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  update_from_git || fail "AmirOS could not install the downloaded update. Your private backup is safe at: $BACKUP_DIR"
+else
+  install_release_zip "$RELEASE_SOURCE_DIRECTORY" || fail "AmirOS could not install the downloaded update. Your private backup is safe at: $BACKUP_DIR"
 fi
 
 restore_private_data || fail "The new AmirOS files are installed, but your private backup could not be restored. Your backup remains at: $BACKUP_DIR"

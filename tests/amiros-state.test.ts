@@ -76,6 +76,26 @@ describe("AmirosState", () => {
     expect(reloaded.getContact("new@c.us").contactTriggerAccess).toEqual([]);
   });
 
+  it("persists explicitly selected contact pronouns without guessing legacy contacts", () => {
+    const { state, filePath } = createState();
+
+    state.updateContact("dani@c.us", { pronouns: "she/her" });
+    expect(state.getContact("dani@c.us").pronouns).toBe("she/her");
+    expect(new AmirosState(filePath).getContact("dani@c.us").pronouns).toBe("she/her");
+
+    writeFileSync(filePath, JSON.stringify({
+      contacts: {
+        "legacy@c.us": {
+          mode: "auto", relationship: "Friend", tone: "Friendly", language: "Automatic",
+          pronouns: "guessed", memoryEnabled: true, customInstructions: "",
+          ownerTriggerAccess: [], contactTriggerAccess: [],
+        },
+      },
+      memories: {},
+    }));
+    expect(new AmirosState(filePath).getContact("legacy@c.us").pronouns).toBe("unspecified");
+  });
+
   it("asks before automatically tracking a new chat while preserving existing tracked contacts", () => {
     const { state, filePath } = createState();
     expect(state.getContact("new@c.us").knowledgeTracking).toBe("pending");
@@ -290,6 +310,33 @@ describe("AmirosState", () => {
       chatId: "friend@c.us",
       needsReply: true,
     });
+  });
+
+  it("does not surface an outgoing owner message as a reply due", () => {
+    const { state } = createState();
+    state.rememberMessage("andrew@c.us", {
+      role: "user",
+      author: "contact",
+      content: "Are you going to the same event?",
+      messageId: "andrew-question",
+      timestamp: 1,
+    });
+    state.rememberMessage("andrew@c.us", {
+      role: "user",
+      author: "owner",
+      content: "I'm about to do the same.",
+      messageId: "amir-reply",
+      timestamp: 2,
+      countAsIncoming: false,
+    });
+
+    expect(state.intelligenceSnapshot()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        chatId: "andrew@c.us",
+        needsReply: false,
+        lastIncoming: expect.objectContaining({ content: "Are you going to the same event?" }),
+      }),
+    ]));
   });
 
   it("supports reviewing intelligence and searching across isolated chats", () => {
@@ -519,6 +566,287 @@ describe("AmirosState", () => {
     const reloaded = new AmirosState(filePath);
     expect(reloaded.getCommitments(chatId)).toEqual([
       expect.objectContaining({ id: original.id, status: "dismissed" }),
+    ]);
+  });
+
+  it("marks a to-do complete without deleting its evidence or history", () => {
+    const { state, filePath } = createState();
+    const chatId = "dani@c.us";
+    const timestamp = Date.now();
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [],
+      commitments: [],
+      todos: [{
+        title: "Call the dentist",
+        evidence: {
+          messageId: "todo-complete-source",
+          excerpt: "Could you please call the dentist?",
+          timestamp,
+        },
+      }],
+    });
+
+    const original = state.getTodoTasks(chatId)[0]!;
+    expect(original.priority).toBe("normal");
+
+    const scheduled = state.updateTodoTask(chatId, original.id, {
+      dueAt: timestamp + 86_400_000,
+      priority: "high",
+    });
+    expect(scheduled).toMatchObject({
+      id: original.id,
+      dueAt: timestamp + 86_400_000,
+      priority: "high",
+    });
+
+    const completed = state.completeTodoTask(chatId, original.id);
+
+    expect(completed).toMatchObject({
+      id: original.id,
+      status: "done",
+      priority: "high",
+      dueAt: timestamp + 86_400_000,
+    });
+    expect(completed?.completedAt).toEqual(expect.any(Number));
+    expect(completed?.evidence).toEqual(original.evidence);
+    expect(new AmirosState(filePath).getTodoTasks(chatId)).toEqual([
+      expect.objectContaining({
+        id: original.id,
+        status: "done",
+        priority: "high",
+        dueAt: timestamp + 86_400_000,
+        completedAt: expect.any(Number),
+        evidence: original.evidence,
+      }),
+    ]);
+  });
+
+  it("keeps explicit self-chat bot prompts as context without creating automatic tasks or promises", () => {
+    const { state, filePath } = createState();
+    const chatId = "self@c.us";
+    const timestamp = Date.now();
+    state.updateContact(chatId, { knowledgeTracking: "enabled" });
+    state.rememberMessage(chatId, {
+      role: "user",
+      author: "owner",
+      content: "Please remind me to call the dentist tomorrow.",
+      senderName: "Amir",
+      messageId: "self-bot-command",
+      timestamp,
+      countAsIncoming: false,
+      extractSignals: true,
+      excludeFromAutomaticLearning: true,
+    });
+
+    // The model-output merge has the same guard, so a stale async response
+    // cannot turn an excluded command into a promise or task later.
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [],
+      commitments: [{
+        content: "Call the dentist tomorrow",
+        owner: "me",
+        evidence: {
+          messageId: "self-bot-command",
+          excerpt: "Please remind me to call the dentist tomorrow.",
+          timestamp,
+        },
+      }],
+      todos: [{
+        title: "Call the dentist tomorrow",
+        evidence: {
+          messageId: "self-bot-command",
+          excerpt: "Please remind me to call the dentist tomorrow.",
+          timestamp,
+        },
+      }],
+    });
+    state.rememberMessage(chatId, {
+      role: "assistant",
+      author: "assistant",
+      content: "I can help you with that.",
+      messageId: "self-bot-answer",
+      timestamp: timestamp + 1,
+      countAsIncoming: false,
+    });
+
+    expect(state.getUnanalyzedKnowledgeMessages(chatId)).toEqual([]);
+    expect(state.getCommitments(chatId)).toEqual([]);
+    expect(state.getTodoTasks(chatId)).toEqual([]);
+    expect(state.getConversationMemory(chatId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ messageId: "self-bot-command", excludeFromAutomaticLearning: true }),
+    ]));
+    expect(state.isKnownAssistantOutput(chatId, "I  can help you with that.")).toBe(true);
+    expect(new AmirosState(filePath).isKnownAssistantOutput(chatId, "I can help you with that.")).toBe(true);
+  });
+
+  it("deduplicates equivalent to-dos while preserving reviewed task decisions after a rescan", () => {
+    const timestamp = Date.now();
+    const dueAt = timestamp + 86_400_000;
+
+    for (const status of ["open", "done", "dismissed"] as const) {
+      const { state, filePath } = createState();
+      const chatId = `${status}@c.us`;
+      state.mergeAnalyzedIntelligence(chatId, {
+        insights: [],
+        commitments: [],
+        todos: [{
+          title: "Call the dentist about tomorrow's appointment",
+          dueAt,
+          evidence: {
+            messageId: `${status}-todo-1`,
+            excerpt: "Could you please call the dentist about your appointment tomorrow?",
+            timestamp,
+          },
+        }],
+      });
+      const original = state.getTodoTasks(chatId)[0]!;
+      state.updateTodoTask(chatId, original.id, { status });
+
+      state.mergeAnalyzedIntelligence(chatId, {
+        insights: [],
+        commitments: [],
+        todos: [{
+          title: "Call the dentist to confirm tomorrow's appointment",
+          dueAt,
+          evidence: {
+            messageId: `${status}-todo-2`,
+            excerpt: "Please call the dentist to confirm your appointment tomorrow.",
+            timestamp: timestamp + 60_000,
+          },
+        }],
+      });
+
+      const reloaded = new AmirosState(filePath).getTodoTasks(chatId);
+      expect(reloaded).toHaveLength(1);
+      expect(reloaded[0]).toMatchObject({ id: original.id, status });
+    }
+  });
+
+  it("keeps another group member's tasks out of the owner's to-do list", () => {
+    const { state } = createState();
+    const groupId = "friends@g.us";
+    const timestamp = 1_800_000_000_000;
+    state.updateOwnerProfile({ displayName: "Amir Friedman" });
+    state.updateContact(groupId, { knowledgeTracking: "enabled" });
+    // Store the source conversation without local extraction so this directly
+    // tests the validation applied to AI-produced to-do suggestions.
+    state.rememberMessages(groupId, [
+      {
+        role: "user",
+        author: "group_member",
+        senderName: "Dani",
+        content: "I need to pay the electricity bill tomorrow.",
+        messageId: "dani-own-task",
+        timestamp,
+        countAsIncoming: false,
+      },
+      {
+        role: "user",
+        author: "group_member",
+        senderName: "Dani",
+        content: "Can someone please book the restaurant for Friday?",
+        messageId: "dani-general-task",
+        timestamp: timestamp + 1,
+        countAsIncoming: false,
+      },
+      {
+        role: "user",
+        author: "owner",
+        senderName: "Amir Friedman",
+        content: "I need to call the dentist tomorrow.",
+        messageId: "owner-task",
+        timestamp: timestamp + 2,
+        countAsIncoming: false,
+      },
+      {
+        role: "user",
+        author: "group_member",
+        senderName: "Dani",
+        content: "Amir, could you collect the package from the lobby?",
+        messageId: "direct-owner-task",
+        timestamp: timestamp + 3,
+        countAsIncoming: false,
+      },
+    ]);
+
+    state.mergeAnalyzedIntelligence(groupId, {
+      insights: [],
+      commitments: [],
+      todos: [
+        {
+          title: "Pay the electricity bill",
+          evidence: { messageId: "dani-own-task", excerpt: "I need to pay the electricity bill tomorrow.", senderName: "Dani", timestamp },
+        },
+        {
+          title: "Book the restaurant for Friday",
+          evidence: { messageId: "dani-general-task", excerpt: "Can someone please book the restaurant for Friday?", senderName: "Dani", timestamp: timestamp + 1 },
+        },
+        {
+          title: "Call the dentist tomorrow",
+          evidence: { messageId: "owner-task", excerpt: "I need to call the dentist tomorrow.", senderName: "Amir Friedman", timestamp: timestamp + 2 },
+        },
+        {
+          title: "Collect the package from the lobby",
+          evidence: { messageId: "direct-owner-task", excerpt: "Amir, could you collect the package from the lobby?", senderName: "Dani", timestamp: timestamp + 3 },
+        },
+      ],
+    });
+
+    expect(state.getTodoTasks(groupId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: "inferred", evidence: expect.objectContaining({ messageId: "owner-task" }) }),
+      expect.objectContaining({ status: "inferred", evidence: expect.objectContaining({ messageId: "direct-owner-task" }) }),
+    ]));
+    expect(state.getTodoTasks(groupId).map((task) => task.evidence.messageId).sort()).toEqual([
+      "direct-owner-task",
+      "owner-task",
+    ]);
+  });
+
+  it("does not turn a group member's own or general request into an immediate owner to-do", () => {
+    const { state } = createState();
+    const groupId = "friends@g.us";
+    const timestamp = 1_800_000_010_000;
+    state.updateOwnerProfile({ displayName: "Amir Friedman" });
+    state.updateContact(groupId, { knowledgeTracking: "enabled" });
+
+    state.rememberMessage(groupId, {
+      role: "user",
+      author: "group_member",
+      senderName: "Dani",
+      content: "I need to pay the electricity bill tomorrow.",
+      messageId: "immediate-dani-own-task",
+      timestamp,
+    });
+    state.rememberMessage(groupId, {
+      role: "user",
+      author: "group_member",
+      senderName: "Dani",
+      content: "Can someone please book the restaurant for Friday?",
+      messageId: "immediate-dani-general-task",
+      timestamp: timestamp + 1,
+    });
+    state.rememberMessage(groupId, {
+      role: "user",
+      author: "owner",
+      senderName: "Amir Friedman",
+      content: "I need to call the dentist tomorrow.",
+      messageId: "immediate-owner-task",
+      timestamp: timestamp + 2,
+      countAsIncoming: false,
+      extractSignals: true,
+    });
+    state.rememberMessage(groupId, {
+      role: "user",
+      author: "group_member",
+      senderName: "Dani",
+      content: "Amir, could you collect the package from the lobby?",
+      messageId: "immediate-direct-owner-task",
+      timestamp: timestamp + 3,
+    });
+
+    expect(state.getTodoTasks(groupId).map((task) => task.evidence.messageId).sort()).toEqual([
+      "immediate-direct-owner-task",
+      "immediate-owner-task",
     ]);
   });
 

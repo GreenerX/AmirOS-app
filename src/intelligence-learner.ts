@@ -4,6 +4,12 @@ import type { AmirosState } from "./amiros-state.js";
 type RelationshipIntelligenceAi = Pick<AiService, "analyzeRelationship">;
 
 export class IntelligenceLearner {
+  /**
+   * Keep a single automatic pass economical even when a first history scan
+   * discovers a large backlog. Any remaining batches are cooperatively queued
+   * after this pass, so they never need a brand-new WhatsApp message to resume.
+   */
+  private static readonly MAX_BATCHES_PER_DRAIN = 8;
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly rerun = new Set<string>();
 
@@ -24,31 +30,40 @@ export class IntelligenceLearner {
           error: error instanceof Error ? error.message : String(error),
         });
       })
-      .finally(() => this.inFlight.delete(chatId));
+      .finally(() => {
+        this.inFlight.delete(chatId);
+        // The cap above is deliberately finite. Keep draining on a later turn
+        // when there is still work, rather than silently leaving an old history
+        // batch behind until another message happens to arrive.
+        if (this.rerun.has(chatId)) queueMicrotask(() => void this.analyzeIncoming(chatId));
+      });
     this.inFlight.set(chatId, task);
     return task;
   }
 
   private async drain(chatId: string): Promise<void> {
+    let batches = 0;
     do {
       this.rerun.delete(chatId);
-      await this.analyzeLatest(chatId);
-    } while (this.rerun.has(chatId));
+      const hasMore = await this.analyzeLatest(chatId);
+      batches += 1;
+      if (hasMore) this.rerun.add(chatId);
+    } while (this.rerun.has(chatId) && batches < IntelligenceLearner.MAX_BATCHES_PER_DRAIN);
   }
 
-  private async analyzeLatest(chatId: string): Promise<void> {
+  private async analyzeLatest(chatId: string): Promise<boolean> {
     const contact = this.state.getContact(chatId);
-    if (!contact.memoryEnabled) return;
+    if (!contact.memoryEnabled) return false;
     if (contact.knowledgeTracking !== "enabled") {
       // A chat awaiting approval must never build up a hidden backlog that is
       // unexpectedly analysed later. Recording this cursor makes the choice
       // forward-looking: enable tracking, then new messages are considered.
       const latest = this.state.getConversationMemory(chatId, 1);
       if (latest.length > 0) this.state.markKnowledgeMessagesAnalyzed(chatId, latest);
-      return;
+      return false;
     }
     const newEntries = this.state.getUnanalyzedKnowledgeMessages(chatId, 30);
-    if (newEntries.length === 0) return;
+    if (newEntries.length === 0) return false;
     // Give the model a small amount of preceding context for pronouns and
     // plans, while making it clear that only the unseen entries are candidates
     // for new suggestions. This keeps analysis incremental and affordable.
@@ -65,6 +80,8 @@ export class IntelligenceLearner {
       contactName,
       isGroup: chatId.endsWith("@g.us"),
       memory,
+      candidateMessageIds: newEntries.flatMap((entry) => entry.messageId ? [entry.messageId] : []),
+      candidateSince: newEntries.reduce((earliest, entry) => Math.min(earliest, entry.timestamp), newEntries[0]?.timestamp || Date.now()),
       ownerName,
       knownSubjectNames: this.state.getKnownKnowledgeSubjectNames(),
     });
@@ -77,6 +94,8 @@ export class IntelligenceLearner {
       knowledgeTargets: routed.targetChatIds.length,
       commitments: analysis.commitments.length,
       events: analysis.events.length,
+      todos: analysis.todos?.length || 0,
     });
+    return this.state.getUnanalyzedKnowledgeMessages(chatId, 1).length > 0;
   }
 }

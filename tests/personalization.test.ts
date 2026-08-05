@@ -21,6 +21,7 @@ const context: ReplyContext = {
     relationship: "Client",
     tone: "Professional",
     language: "Hebrew",
+    pronouns: "unspecified",
     memoryEnabled: true,
     knowledgeTracking: "enabled",
     customInstructions: "Always confirm delivery dates before promising them.",
@@ -63,6 +64,24 @@ describe("AI contact personalization", () => {
     expect(instructions).toContain("do not silently soften it");
     expect(instructions).toContain("Never schedule calls before 10:00");
     expect(instructions).toContain("Direct communicator");
+  });
+
+  it("uses explicitly chosen pronouns only in that direct contact's chat", () => {
+    const directContext: ReplyContext = {
+      ...context,
+      chatName: "Dani Faitelson",
+      senderName: "Dani Faitelson",
+      isGroup: false,
+      contact: { ...context.contact!, pronouns: "she/her" },
+    };
+
+    expect(buildPersonalizedInstructions(directContext)).toContain(
+      "Dani Faitelson uses she/her pronouns",
+    );
+    expect(buildPersonalizedInstructions({
+      ...context,
+      contact: { ...context.contact!, pronouns: "she/her" },
+    })).not.toContain("uses she/her pronouns");
   });
 
   it("makes the learned per-chat writing style a mandatory phrasing guide", () => {

@@ -20,6 +20,7 @@ describe("contact profile PDF export", () => {
         relationship: "Client",
         tone: "Warm & concise",
         language: "English",
+        pronouns: "unspecified",
         memoryEnabled: true,
         knowledgeTracking: "enabled",
         customInstructions: "Keep pricing updates brief.",

@@ -21,9 +21,11 @@ import type {
   IntelligenceData,
   IntelligenceSearchResult,
   RelationshipCommitment,
+  TodoTask,
   ThemeName,
   TerminalLog,
   WritingStyleProfile,
+  AmirOSUpdateStatus,
 } from "./types";
 
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
@@ -69,6 +71,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function getDashboard(): Promise<DashboardData> {
   return isDemo ? structuredClone(demoDashboard) : request("/api/dashboard");
+}
+
+export async function getUpdateStatus(refresh = false): Promise<AmirOSUpdateStatus> {
+  if (isDemo) {
+    return {
+      status: "current",
+      currentVersion: demoDashboard.release.version,
+      latestVersion: demoDashboard.release.version,
+      checkedAt: Date.now(),
+    };
+  }
+  return request(`/api/update${refresh ? "?refresh=1" : ""}`);
+}
+
+export async function startAmirosUpdate(): Promise<{ ok: true; latestVersion: string }> {
+  if (isDemo) return { ok: true, latestVersion: "0.5.1" };
+  return request("/api/update", { method: "POST", body: "{}" });
 }
 
 export async function getChats(): Promise<ChatSummary[]> {
@@ -228,6 +247,36 @@ export async function updateContactCommitment(
     `/api/contacts/${encodeURIComponent(chatId)}/commitments/${encodeURIComponent(commitmentId)}`,
     { method: "PATCH", body: JSON.stringify({ status }) },
   )).commitments;
+}
+
+export async function updateTodoTask(
+  chatId: string,
+  todoId: string,
+  patch: { status?: TodoTask["status"]; dueAt?: number | null; priority?: TodoTask["priority"] },
+): Promise<TodoTask> {
+  const status = patch.status;
+  if (isDemo) {
+    return {
+      id: todoId,
+      chatId,
+      contactName: demoChats.find((chat) => chat.id === chatId)?.name || "WhatsApp contact",
+      title: "To-do updated",
+      status: status || "open",
+      priority: patch.priority || "normal",
+      dueAt: patch.dueAt === null ? undefined : patch.dueAt,
+      completedAt: status === "done" ? Date.now() : undefined,
+      evidence: { excerpt: "Demo to-do", timestamp: Date.now() },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+  }
+  const path = `/api/contacts/${encodeURIComponent(chatId)}/todos/${encodeURIComponent(todoId)}`;
+  return (await request<{ todo: TodoTask }>(
+    status === "done" ? `${path}/complete` : path,
+    status === "done"
+      ? { method: "POST" }
+      : { method: "PATCH", body: JSON.stringify(patch) },
+  )).todo;
 }
 
 export async function generateWritingStyle(chatId: string): Promise<WritingStyleProfile> {

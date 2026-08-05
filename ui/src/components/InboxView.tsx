@@ -1,6 +1,5 @@
 import {
   ArrowLeft,
-  BookmarkCheck,
   Bot,
   Brain,
   CalendarDays,
@@ -48,11 +47,11 @@ import type {
   ContactMemoryItem,
   ContactInsight,
   ContactPreferences,
+  ContactPronouns,
   ContactProfile,
   Draft,
   GroupConversationSummary,
   OwnerTriggerAccess,
-  RelationshipCommitment,
   ReplyMode,
   WritingStyleProfile,
 } from "../types";
@@ -61,7 +60,7 @@ type InboxViewProps = {
   chats: ChatSummary[];
   unreadCount: number;
   initialFilter?: Filter;
-  initialContactSettingsTab?: "configure" | "knowledge" | "commitments";
+  initialContactSettingsTab?: "configure" | "knowledge";
   selectedChatId?: string;
   highlightedMessageId?: string;
   messages: ChatMessage[];
@@ -69,7 +68,6 @@ type InboxViewProps = {
   manualMemory: ContactMemoryItem[];
   profile?: ContactProfile;
   insights: ContactInsight[];
-  commitments: RelationshipCommitment[];
   styleProfile?: WritingStyleProfile;
   groupSummary?: GroupConversationSummary;
   groupDescription?: string;
@@ -91,7 +89,6 @@ type InboxViewProps = {
   onGenerateProfile: (chatId: string) => Promise<void>;
   onAnalyzeIntelligence: (chatId: string) => Promise<void>;
   onInsightChange: (chatId: string, insightId: string, patch: { status?: ContactInsight["status"]; content?: string }) => Promise<void>;
-  onCommitmentStatus: (chatId: string, commitmentId: string, status: RelationshipCommitment["status"]) => Promise<void>;
   onGenerateWritingStyle: (chatId: string) => Promise<void>;
   onGenerateGroupSummary: (chatId: string) => Promise<void>;
   onApproveDraft: (draft: Draft, body: string) => Promise<void>;
@@ -174,6 +171,13 @@ const TONE_OPTIONS = [
   "Formal",
 ] as const;
 
+const PRONOUN_OPTIONS: Array<{ value: ContactPronouns; label: string }> = [
+  { value: "unspecified", label: "Not specified" },
+  { value: "she/her", label: "She / her" },
+  { value: "he/him", label: "He / him" },
+  { value: "they/them", label: "They / them" },
+];
+
 const REACTIONS = ["❤️", "👍", "😂", "😮", "😢", "🙏"];
 const COMPOSER_EMOJIS = ["😊", "😂", "❤️", "👍", "🙏", "🎉", "✨", "🔥", "🤔", "🙌"];
 const PARTICIPANT_COLORS = ["#0f766e", "#7c3aed", "#c2410c", "#0369a1", "#a21caf", "#4d7c0f", "#be123c", "#8a5a16"];
@@ -226,7 +230,6 @@ export function InboxView({
   manualMemory,
   profile,
   insights,
-  commitments,
   styleProfile,
   groupSummary,
   groupDescription,
@@ -245,7 +248,6 @@ export function InboxView({
   onGenerateProfile,
   onAnalyzeIntelligence,
   onInsightChange,
-  onCommitmentStatus,
   onGenerateWritingStyle,
   onGenerateGroupSummary,
   onApproveDraft,
@@ -272,7 +274,7 @@ export function InboxView({
   const [insertedDraftId, setInsertedDraftId] = useState<string>();
   const [chatRailCollapsed, setChatRailCollapsed] = useState(() => localStorage.getItem("amiros-chat-rail") === "collapsed");
   const [contactRailCollapsed, setContactRailCollapsed] = useState(() => localStorage.getItem("amiros-contact-rail") === "collapsed");
-  const [contactSettingsTab, setContactSettingsTab] = useState<"configure" | "knowledge" | "commitments">(initialContactSettingsTab);
+  const [contactSettingsTab, setContactSettingsTab] = useState<"configure" | "knowledge">(initialContactSettingsTab);
   const [openContactSection, setOpenContactSection] = useState<string | undefined>("relationship");
   const [scanState, setScanState] = useState<"idle" | "scanning" | string>("idle");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -311,8 +313,9 @@ export function InboxView({
   const [sending, setSending] = useState(false);
   const messageCanvasRef = useRef<HTMLDivElement>(null);
   const restoredChatRef = useRef("");
+  const restoringChatScrollRef = useRef(false);
+  const restoreChatScrollRef = useRef<(() => void) | undefined>(undefined);
   const pendingInsights = insights.filter((item) => item.status === "inferred");
-  const openCommitments = commitments.filter((item) => item.status === "open");
 
   useEffect(() => setDraftBody(activeDraft?.body || ""), [activeDraft?.id, activeDraft?.body]);
   useEffect(() => {
@@ -351,25 +354,87 @@ export function InboxView({
     [contact?.contactTriggerAccess, selectedChat?.id],
   );
   useEffect(() => {
+    // A chat can keep its component mounted while its messages are refreshed. Reset the
+    // one-time positioning marker as soon as that refresh starts.
+    if (loading) restoredChatRef.current = "";
+  }, [loading, selectedChat?.id]);
+
+  useEffect(() => {
     if (loading || !selectedChat || chronologicalMessages.length === 0) return;
     if (restoredChatRef.current === selectedChat.id) return;
+
     restoredChatRef.current = selectedChat.id;
-    const storageKey = `amiros-chat-scroll:${selectedChat.id}`;
-    const frame = window.requestAnimationFrame(() => {
+    restoringChatScrollRef.current = true;
+    let cancelled = false;
+    let resizeObserver: ResizeObserver | undefined;
+    let settleTimer: number | undefined;
+    let secondFrame: number | undefined;
+    const firstUnreadMessage = selectedChat.unreadCount > 0
+      ? chronologicalMessages.filter((message) => !message.fromMe).at(-selectedChat.unreadCount)
+      : undefined;
+
+    const restorePosition = () => {
+      if (cancelled) return;
       const canvas = messageCanvasRef.current;
       if (!canvas) return;
-      const savedPosition = Number(sessionStorage.getItem(storageKey));
-      const hasSavedPosition = Number.isFinite(savedPosition) && savedPosition >= 0;
-      canvas.scrollTop = hasSavedPosition ? Math.min(savedPosition, canvas.scrollHeight) : canvas.scrollHeight;
-      const incoming = [...canvas.querySelectorAll<HTMLElement>('[data-from-me="false"]')];
-      if (incoming.length > 0) void onMarkRead(selectedChat.id);
+
+      if (firstUnreadMessage) {
+        const row = canvas.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(firstUnreadMessage.id)}"]`);
+        if (row) {
+          row.scrollIntoView({ block: "center", behavior: "auto" });
+          return;
+        }
+      }
+
+      const savedPosition = Number(sessionStorage.getItem(`amiros-chat-scroll:${selectedChat.id}`));
+      const maxScroll = Math.max(0, canvas.scrollHeight - canvas.clientHeight);
+      // Ignore a zero or end-of-list position written while a chat is still mounting.
+      // Genuine manual positions are preserved, otherwise new chats always open at the end.
+      const hasMeaningfulSavedPosition = Number.isFinite(savedPosition)
+        && savedPosition > 16
+        && savedPosition < maxScroll - 16;
+      canvas.scrollTop = hasMeaningfulSavedPosition ? savedPosition : canvas.scrollHeight;
+    };
+
+    restoreChatScrollRef.current = restorePosition;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        restorePosition();
+        const canvas = messageCanvasRef.current;
+        if (canvas && typeof ResizeObserver !== "undefined") {
+          resizeObserver = new ResizeObserver(restorePosition);
+          resizeObserver.observe(canvas);
+        }
+        settleTimer = window.setTimeout(() => {
+          restorePosition();
+          restoringChatScrollRef.current = false;
+          resizeObserver?.disconnect();
+          const incoming = [...(messageCanvasRef.current?.querySelectorAll<HTMLElement>('[data-from-me="false"]') ?? [])];
+          if (incoming.length > 0) void onMarkRead(selectedChat.id);
+        }, 450);
+      });
+      // The nested animation frame is intentionally kept separate so the message DOM,
+      // including media, has a chance to lay out before scrolling.
     });
-    return () => window.cancelAnimationFrame(frame);
-  }, [chronologicalMessages.length, loading, onMarkRead, selectedChat?.id]);
+
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame !== undefined) window.cancelAnimationFrame(secondFrame);
+      if (settleTimer !== undefined) window.clearTimeout(settleTimer);
+      resizeObserver?.disconnect();
+      if (restoreChatScrollRef.current === restorePosition) restoreChatScrollRef.current = undefined;
+      restoringChatScrollRef.current = false;
+    };
+  }, [chronologicalMessages, loading, onMarkRead, selectedChat?.id, selectedChat?.unreadCount]);
 
   const rememberChatScroll = () => {
-    if (!selectedChat || !messageCanvasRef.current) return;
+    if (!selectedChat || !messageCanvasRef.current || restoringChatScrollRef.current) return;
     sessionStorage.setItem(`amiros-chat-scroll:${selectedChat.id}`, String(messageCanvasRef.current.scrollTop));
+  };
+
+  const restoreAfterMediaLoad = () => {
+    if (restoringChatScrollRef.current) restoreChatScrollRef.current?.();
   };
 
   useEffect(() => {
@@ -650,7 +715,7 @@ export function InboxView({
           <button className="icon-button contact-rail-toggle" aria-label={contactRailCollapsed ? "Show contact settings" : "Hide contact settings"} onClick={toggleContactRail}>{contactRailCollapsed ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}</button>
         </header>
 
-        <div ref={messageCanvasRef} onScroll={rememberChatScroll} className={loading ? "message-canvas loading" : "message-canvas"}>
+        <div ref={messageCanvasRef} onScroll={rememberChatScroll} onLoadCapture={restoreAfterMediaLoad} className={loading ? "message-canvas loading" : "message-canvas"}>
           <div className="history-scan-row"><button onClick={() => void scanOlder()} disabled={scanState === "scanning"}><RefreshCw size={14} className={scanState === "scanning" ? "spin" : ""} />{scanState === "idle" ? "Fetch & scan older messages" : scanState === "scanning" ? "Scanning older messages…" : scanState}</button></div>
           {loading ? <div className="empty-chat"><RefreshCw className="loading-history-icon" size={18} />Loading this conversation…</div> : null}
           {chronologicalMessages.map((message, index) => {
@@ -734,7 +799,6 @@ export function InboxView({
         <div className="contact-settings-tabs" role="tablist" aria-label="Contact settings sections">
           <button role="tab" aria-selected={contactSettingsTab === "configure"} className={contactSettingsTab === "configure" ? "active" : ""} onClick={() => setContactSettingsTab("configure")}>Configure</button>
           <button role="tab" aria-selected={contactSettingsTab === "knowledge"} className={contactSettingsTab === "knowledge" ? "active" : ""} onClick={() => setContactSettingsTab("knowledge")}>Knowledge {pendingInsights.length > 0 ? <span>{pendingInsights.length}</span> : null}</button>
-          <button role="tab" aria-selected={contactSettingsTab === "commitments"} className={contactSettingsTab === "commitments" ? "active" : ""} onClick={() => setContactSettingsTab("commitments")}>Commitments {openCommitments.length > 0 ? <span>{openCommitments.length}</span> : null}</button>
         </div>
 
         {contactSettingsTab === "configure" ? <div className="contact-settings-section" role="tabpanel">
@@ -801,6 +865,7 @@ export function InboxView({
           <label><span><UserRound size={18} />Relationship</span><select aria-label="Contact relationship" value={contact?.relationship || (selectedChat.isGroup ? "Friends group" : "Contact")} onChange={(event) => void onContactChange(selectedChat.id, { relationship: event.target.value })}>{(selectedChat.isGroup ? GROUP_RELATIONSHIP_OPTIONS : RELATIONSHIP_OPTIONS).map((option) => <option key={option}>{option}</option>)}</select></label>
           <label><span><MessageSquareText size={18} />Tone</span><select aria-label="Contact tone" value={contact?.tone || "Warm & concise"} onChange={(event) => void onContactChange(selectedChat.id, { tone: event.target.value })}>{TONE_OPTIONS.map((option) => <option key={option}>{option}</option>)}</select></label>
           <label><span><Languages size={18} />Language</span><select aria-label="Contact language" value={contact?.language || "Automatic"} onChange={(event) => void onContactChange(selectedChat.id, { language: event.target.value })}><option>Automatic</option><option>English</option><option>Hebrew</option><option>Arabic</option></select></label>
+          {!selectedChat.isGroup ? <label><span><UserRound size={18} />How AmirOS refers to them</span><select aria-label="Contact pronouns" value={contact?.pronouns || "unspecified"} onChange={(event) => void onContactChange(selectedChat.id, { pronouns: event.target.value as ContactPronouns })}>{PRONOUN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>Optional. AmirOS uses this only for this contact and never guesses.</small></label> : null}
           <label className="contact-toggle"><span><MemoryStick size={18} />Remember context</span><input aria-label="Remember context" type="checkbox" checked={contact?.memoryEnabled ?? true} onChange={(event) => void onContactChange(selectedChat.id, { memoryEnabled: event.target.checked })} /></label>
           <label className="knowledge-tracking-setting"><span><Brain size={18} />Knowledge tracking<small>{contact?.knowledgeTracking === "pending" ? "Approval needed before AmirOS creates suggestions from this chat." : contact?.knowledgeTracking === "snoozed" ? "AmirOS will not ask again unless you choose a new setting here." : contact?.knowledgeTracking === "disabled" ? "This chat is ignored by automatic Intelligence suggestions." : "New messages are scanned once for useful, non-duplicate suggestions."}</small></span><select aria-label="Knowledge tracking" value={contact?.knowledgeTracking || "pending"} onChange={(event) => void onContactChange(selectedChat.id, { knowledgeTracking: event.target.value as ContactPreferences["knowledgeTracking"] })}><option value="pending">Ask me first</option><option value="snoozed">Decide later</option><option value="enabled">Track knowledge</option><option value="disabled">Do not track</option></select></label>
           </div>
@@ -911,19 +976,6 @@ export function InboxView({
           </div>
           </section>
         </details>
-        </div> : null}
-
-        {contactSettingsTab === "commitments" ? <div className="contact-settings-section commitments-tab-panel" role="tabpanel">
-          <div className="contact-section-eyebrow"><BookmarkCheck size={14} />Open commitments</div>
-          <section className="contact-commitments contact-commitments-tab">
-            <div className="commitments-tab-heading"><h3>Promises and follow-ups</h3><small>{openCommitments.length} open</small></div>
-            {openCommitments.map((item) => <article className="contact-commitment" key={item.id}>
-              <span className="commitment-status-icon"><BookmarkCheck size={15} /></span>
-              <span className="commitment-copy"><strong>{item.owner === "me" ? "My commitment" : item.assigneeName ? `${item.assigneeName}'s commitment` : "Their commitment"}</strong><small>{item.content}</small>{item.dueAt ? <time>Due {new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(item.dueAt < 10_000_000_000 ? item.dueAt * 1_000 : item.dueAt))}</time> : null}</span>
-              <div className="commitment-actions"><button onClick={() => void onCommitmentStatus(selectedChat.id, item.id, "done")}><Check size={13} />Done</button><button onClick={() => void onCommitmentStatus(selectedChat.id, item.id, "dismissed")}><Trash2 size={13} />Dismiss</button></div>
-            </article>)}
-            {openCommitments.length === 0 ? <div className="commitments-empty"><Check size={20} /><span><strong>No open commitments</strong><small>New promises and follow-ups from this conversation will appear here.</small></span></div> : null}
-          </section>
         </div> : null}
 
         <footer className="contact-settings-footer"><span><Check size={14} />Selections save automatically</span><small>Instructions save with their button</small></footer>

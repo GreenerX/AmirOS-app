@@ -11,6 +11,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
@@ -22,6 +23,7 @@ import {
   type AssistantSettings,
   type ContactPreferences,
   type KnowledgeTrackingDefault,
+  type TodoTask,
   type ThemeName,
 } from "./amiros-state.js";
 import {
@@ -40,6 +42,7 @@ import { buildCalendarSubscriptionFeed } from "./calendar-feed.js";
 import type { WritingStyleLearner } from "./writing-style.js";
 import type { IntelligenceLearner } from "./intelligence-learner.js";
 import { CURRENT_RELEASE, RELEASE_HISTORY } from "./release.js";
+import { checkForAmirosUpdate, type UpdateStatus } from "./update-check.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -61,6 +64,29 @@ type DashboardOptions = {
   intelligenceLearner?: IntelligenceLearner;
   port: number;
 };
+
+type VisibleTodoTask = Pick<TodoTask, "status" | "dueAt" | "createdAt" | "updatedAt" | "completedAt">;
+
+/**
+ * Reviewed to-dos are history, not disposable queue items. Keep completed
+ * tasks in every dashboard response (only dismissed suggestions disappear),
+ * and place them after tasks that still need attention.
+ */
+export function visibleTodoTasks<T extends VisibleTodoTask>(todos: T[]): T[] {
+  const statusRank = (status: TodoTask["status"]) =>
+    status === "inferred" ? 0 : status === "open" ? 1 : status === "done" ? 2 : 3;
+  return [...todos]
+    .filter((todo) => todo.status !== "dismissed")
+    .sort((left, right) => {
+      const rankDifference = statusRank(left.status) - statusRank(right.status);
+      if (rankDifference) return rankDifference;
+      if (left.status === "done" && right.status === "done") {
+        return (right.completedAt || right.updatedAt) - (left.completedAt || left.updatedAt);
+      }
+      return (left.dueAt || left.createdAt) - (right.dueAt || right.createdAt)
+        || right.updatedAt - left.updatedAt;
+    });
+}
 
 function sendJson(response: ServerResponse, status: number, value: unknown): void {
   response.writeHead(status, {
@@ -218,7 +244,14 @@ type ChatLike = {
   t?: number;
   archived?: boolean;
   archive?: boolean;
-  lastMessage?: { body?: string; timestamp?: number; t?: number; remoteId?: string } | null;
+  lastMessage?: {
+    body?: string;
+    timestamp?: number;
+    t?: number;
+    remoteId?: string;
+    messageId?: string;
+    mentionIds?: string[];
+  } | null;
 };
 
 export function isDisplayableWhatsAppChat(chat: Pick<ChatLike, "id" | "isGroup" | "lastMessage" | "timestamp" | "t">): boolean {
@@ -290,11 +323,13 @@ type CachedMessageModel = {
   type?: string;
   mediaData?: { caption?: string };
   mediaObject?: { caption?: string };
+  mentionedJidList?: Array<string | { _serialized?: string }>;
   _data?: {
     body?: string;
     caption?: string;
     mediaData?: { caption?: string };
     mediaObject?: { caption?: string };
+    mentionedJidList?: Array<string | { _serialized?: string }>;
   };
   quotedMsg?: CachedMessageModel;
   msgContextInfo?: { quotedMsg?: CachedMessageModel };
@@ -318,8 +353,55 @@ export type DashboardMessage = {
   hasMedia: boolean;
   senderId?: string;
   senderName?: string;
+  mentionIds?: string[];
+  ownerMentioned?: boolean;
   quotedMessage?: QuotedDashboardMessage;
 };
+
+type MentionLabel = { id: string; name: string };
+
+function isUsableContactName(value: string | undefined): value is string {
+  if (!value || !value.trim()) return false;
+  return !/^\+?[\d\s().-]{7,}$/u.test(value);
+}
+
+function mentionIdsInBody(body: string | undefined): string[] {
+  if (!body) return [];
+  return [...body.matchAll(/@(\d{5,})\b/g)].map((match) => match[1]!);
+}
+
+/**
+ * WhatsApp stores a displayed @mention as an opaque numeric ID in the message
+ * body. Replace it only when we have the matching contact name, leaving any
+ * unresolved text exactly as WhatsApp supplied it.
+ */
+export function replaceMentionIdsWithNames(body: string, mentions: MentionLabel[]): string {
+  if (!body || mentions.length === 0) return body;
+  const namesByDigits = new Map(
+    mentions
+      .map(({ id, name }) => [id.replace(/\D/g, ""), name.replace(/\s+/g, " ").trim()] as const)
+      .filter(([id, name]) => id.length >= 5 && Boolean(name) && !/^\+?[\d\s().-]{7,}$/u.test(name)),
+  );
+  if (namesByDigits.size === 0) return body;
+  return body.replace(/@(\d{5,})\b/g, (original, digits: string) => {
+    const name = namesByDigits.get(digits)
+      || [...namesByDigits.entries()].find(([id]) => id.endsWith(digits) || digits.endsWith(id))?.[1];
+    return name ? `@${name}` : original;
+  });
+}
+
+function mentionLabelsForIds(mentionIds: string[], nameCache: Map<string, string>): MentionLabel[] {
+  return mentionIds.flatMap((mentionId) => {
+    const directName = nameCache.get(mentionId);
+    if (directName) return [{ id: mentionId, name: directName }];
+    const digits = mentionId.replace(/\D/g, "");
+    const matchingEntry = [...nameCache.entries()].find(([cachedId]) => {
+      const cachedDigits = cachedId.replace(/\D/g, "");
+      return digits.length >= 5 && (cachedDigits.endsWith(digits) || digits.endsWith(cachedDigits));
+    });
+    return matchingEntry ? [{ id: matchingEntry[0], name: matchingEntry[1] }] : [];
+  });
+}
 
 /**
  * WhatsApp's cache occasionally keeps a quoted message body but drops the
@@ -654,7 +736,8 @@ async function getChatModelsResiliently(client: WhatsAppClient): Promise<ChatLik
               msgs?: { getModelsArray?(): Array<{
                 body?: string;
                 t?: number;
-                id?: { remote?: string | { _serialized?: string } };
+                mentionedJidList?: Array<string | { _serialized?: string }>;
+                id?: { _serialized?: string; remote?: string | { _serialized?: string } };
               }> };
             }>;
           };
@@ -668,6 +751,16 @@ async function getChatModelsResiliently(client: WhatsAppClient): Promise<ChatLik
         const lastMessage = messages[messages.length - 1];
         const remote = lastMessage?.id?.remote;
         const remoteId = typeof remote === "string" ? remote : remote?._serialized;
+        const bodyMentionIds = typeof lastMessage?.body === "string"
+          ? [...lastMessage.body.matchAll(/@(\d{5,})\b/g)].map((match) => match[1]!)
+          : [];
+        const mentionIds = [
+          ...(lastMessage?.mentionedJidList || []).flatMap((mention: string | { _serialized?: string }) => {
+          const id = typeof mention === "string" ? mention : mention?._serialized;
+          return id ? [id] : [];
+          }),
+          ...bodyMentionIds,
+        ];
         return [{
           id: { _serialized: id, user: chat.id?.user },
           formattedTitle: chat.formattedTitle || chat.name,
@@ -675,7 +768,13 @@ async function getChatModelsResiliently(client: WhatsAppClient): Promise<ChatLik
           unreadCount: chat.unreadCount || 0,
           t: chat.t || 0,
           archive: Boolean(chat.archive),
-          lastMessage: lastMessage ? { body: lastMessage.body, t: lastMessage.t, remoteId } : null,
+          lastMessage: lastMessage ? {
+            body: lastMessage.body,
+            t: lastMessage.t,
+            remoteId,
+            messageId: lastMessage.id?._serialized,
+            mentionIds,
+          } : null,
         }];
       });
     });
@@ -687,6 +786,8 @@ async function getChatModelsResiliently(client: WhatsAppClient): Promise<ChatLik
         from?: string | { _serialized?: string };
         body?: string;
         timestamp?: number;
+        mentionedIds?: string[];
+        id?: { _serialized?: string };
       };
       const from = lastMessage?.from;
       const remoteId = typeof from === "string" ? from : from?._serialized;
@@ -701,6 +802,8 @@ async function getChatModelsResiliently(client: WhatsAppClient): Promise<ChatLik
           body: lastMessage.body,
           timestamp: lastMessage.timestamp,
           remoteId,
+          messageId: lastMessage.id?._serialized,
+          mentionIds: [...new Set([...(lastMessage.mentionedIds || []), ...mentionIdsInBody(lastMessage.body)])],
         } : null,
       };
     });
@@ -711,23 +814,49 @@ async function listChats(
   client: WhatsAppClient,
   state: AmirosState,
   chatNameCache?: Map<string, string>,
+  senderNameCache?: Map<string, string>,
 ) {
   const chats = await getChatModelsResiliently(client);
-  const namedChats = chats
-    .filter(isDisplayableWhatsAppChat)
+  const displayableChats = chats.filter(isDisplayableWhatsAppChat);
+  const contactNameCache = senderNameCache || chatNameCache || new Map<string, string>();
+  // Inbox previews can contain WhatsApp's opaque @mention IDs too. Resolve the
+  // small set used in the visible chat list before shortening the preview.
+  await hydrateContactNames(
+    client,
+    displayableChats.flatMap((chat) => chat.lastMessage?.mentionIds || []),
+    contactNameCache,
+  );
+  await hydrateMentionNamesFromWebCache(
+    client,
+    displayableChats.flatMap((chat) => chat.lastMessage?.mentionIds || []),
+    contactNameCache,
+  );
+  await hydratePreviewMentionNames(client, displayableChats, contactNameCache);
+  // Some outgoing messages contain a literal LID tag even though WhatsApp's
+  // compact chat model omits its mention metadata. The full message reader
+  // already resolves those IDs against group senders, so reuse it once and
+  // keep the result in the shared sender-name cache for later refreshes.
+  await Promise.all(displayableChats
+    .filter((chat) => {
+      const ids = chat.lastMessage?.mentionIds || [];
+      return ids.length > 0 && mentionLabelsForIds(ids, contactNameCache).length < ids.length;
+    })
+    .map((chat) => listMessages(client, chat.id._serialized, contactNameCache, state, 100).catch(() => [])));
+  const namedChats = displayableChats
     .map((chat) => {
       const id = chat.id._serialized;
       const timestamp =
         chat.timestamp || chat.t || chat.lastMessage?.timestamp || chat.lastMessage?.t || 0;
       const name = chat.name || chat.formattedTitle || chat.id.user || "WhatsApp contact";
-      chatNameCache?.set(id, name);
+      contactNameCache.set(id, name);
+      const previewMentions = mentionLabelsForIds(chat.lastMessage?.mentionIds || [], contactNameCache);
       return {
         id,
         name,
         isGroup: Boolean(chat.isGroup),
         unreadCount: chat.unreadCount || 0,
         timestamp,
-        preview: safeMessagePreview(chat.lastMessage?.body),
+        preview: safeMessagePreview(replaceMentionIdsWithNames(chat.lastMessage?.body || "", previewMentions)),
         mode: state.getContact(id).mode,
         avatarUrl: `/api/chats/${encodeURIComponent(id)}/avatar`,
         archived: Boolean(chat.archived || chat.archive),
@@ -803,45 +932,191 @@ async function activitiesWithContactNames(
   }));
 }
 
+async function hydrateContactNames(
+  client: WhatsAppClient,
+  ids: Iterable<string>,
+  senderNameCache: Map<string, string>,
+): Promise<void> {
+  const missingIds = [...new Set([...ids].filter((id) => !senderNameCache.has(id)))];
+  await Promise.all(
+    missingIds.map(async (id) => {
+      try {
+        const contact = await withTimeout(client.getContactById(id), 4_000);
+        const name = contact.name || contact.pushname || contact.shortName || contact.number;
+        if (isUsableContactName(name)) senderNameCache.set(id, name);
+      } catch {
+        // Leave unknown IDs unchanged instead of showing an incorrect name.
+      }
+    }),
+  );
+}
+
+async function hydrateMentionNamesFromWebCache(
+  client: WhatsAppClient,
+  mentionIds: Iterable<string>,
+  senderNameCache: Map<string, string>,
+): Promise<void> {
+  const unresolved = [...new Set([...mentionIds].filter((id) => !senderNameCache.has(id)))];
+  if (unresolved.length === 0) return;
+  const page = (client as WhatsAppClient & {
+    pupPage: null | {
+      evaluate<T, A>(callback: (argument: A) => T, argument: A): Promise<T>;
+    };
+  }).pupPage;
+  if (!page) return;
+  try {
+    const matches = await page.evaluate((targetIds: string[]) => {
+      const whatsappWindow = globalThis as typeof globalThis & {
+        require(name: string): {
+          Contact?: { getModelsArray?(): Array<Record<string, unknown>> };
+        };
+      };
+      const digits = (value: unknown) => typeof value === "string" ? value.replace(/\D/g, "") : "";
+      const matchingId = (candidates: unknown[], targetId: string) => {
+        const targetDigits = digits(targetId);
+        return candidates.some((candidate) => {
+          const candidateDigits = digits(candidate);
+          return targetDigits.length >= 5 && candidateDigits === targetDigits;
+        });
+      };
+      const collectIdentifierValues = (value: unknown, depth = 0, seen = new Set<unknown>()): string[] => {
+        if (typeof value === "string") return [value];
+        if (!value || typeof value !== "object" || depth >= 3 || seen.has(value)) return [];
+        seen.add(value);
+        return Object.values(value as Record<string, unknown>).flatMap((entry) =>
+          collectIdentifierValues(entry, depth + 1, seen));
+      };
+      const contacts = whatsappWindow.require("WAWebCollections").Contact?.getModelsArray?.() || [];
+      return targetIds.flatMap((targetId) => {
+        const contact = contacts.find((candidate: Record<string, unknown>) => {
+          const data = candidate._data as Record<string, unknown> | undefined;
+          return matchingId([
+            candidate.id,
+            candidate.lid,
+            candidate.pn,
+            candidate.phoneNumber,
+            data?.id,
+            data?.lid,
+            data?.pn,
+            data?.phoneNumber,
+          ].flatMap((value) => {
+            if (typeof value === "string") return [value];
+            if (value && typeof value === "object") {
+              const record = value as { _serialized?: string; user?: string; server?: string };
+              return [record._serialized, record.user && record.server ? `${record.user}@${record.server}` : record.user]
+                .filter((entry): entry is string => Boolean(entry));
+            }
+            return [];
+          }).concat(collectIdentifierValues(data)), targetId);
+        });
+        const data = contact?._data as Record<string, unknown> | undefined;
+        const name = [
+          contact?.name,
+          contact?.pushname,
+          contact?.shortName,
+          contact?.formattedName,
+          data?.name,
+          data?.pushname,
+          data?.shortName,
+          data?.formattedName,
+          data?.verifiedName,
+        ]
+          .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+        return isUsableContactName(name) ? [{ id: targetId, name }] : [];
+      });
+    }, unresolved);
+    for (const match of matches) senderNameCache.set(match.id, match.name);
+  } catch {
+    // WhatsApp's internal contact cache is optional; keep unresolved tags intact.
+  }
+}
+
+async function hydratePreviewMentionNames(
+  client: WhatsAppClient,
+  chats: ChatLike[],
+  senderNameCache: Map<string, string>,
+): Promise<void> {
+  await Promise.all(chats.map(async (chat) => {
+    const lastMessage = chat.lastMessage;
+    const unresolvedMentionIds = (lastMessage?.mentionIds || []).filter((id) => !senderNameCache.has(id));
+    if (!lastMessage || unresolvedMentionIds.length === 0) return;
+    try {
+      let message = lastMessage.messageId
+        ? await withTimeout(client.getMessageById(lastMessage.messageId), 4_000).catch(() => undefined)
+        : undefined;
+      const saveMentionContacts = async (candidate: typeof message): Promise<void> => {
+        const mentions = await candidate?.getMentions().catch(() => []);
+        for (const contact of mentions || []) {
+          const id = contact.id?._serialized;
+          const name = contact.name || contact.pushname || contact.shortName || contact.number;
+          if (id && isUsableContactName(name)) senderNameCache.set(id, name);
+        }
+      };
+      await saveMentionContacts(message);
+      // The lightweight cache can retain an ID but drop its mention contacts.
+      // In that case, check the small latest message window and use the group
+      // sender identities as an additional LID-to-contact-name fallback.
+      if (!message || mentionLabelsForIds(unresolvedMentionIds, senderNameCache).length < unresolvedMentionIds.length) {
+        const sourceChat = await withTimeout(client.getChatById(chat.id._serialized), 4_000);
+        // A mention can target a quieter group member, so retain enough local
+        // history to connect their stable WhatsApp ID to the name we already
+        // show beside their own messages.
+        const recent = await withTimeout(sourceChat.fetchMessages({ limit: 100 }), 6_000);
+        await hydrateContactNames(
+          client,
+          recent.flatMap((candidate) => typeof candidate.author === "string" ? [candidate.author] : []),
+          senderNameCache,
+        );
+        message = [...recent].reverse().find((candidate) =>
+          candidate.mentionedIds?.some((id) => unresolvedMentionIds.includes(id)) ||
+          candidate.body === lastMessage.body,
+        );
+        await saveMentionContacts(message);
+      }
+    } catch {
+      // Keep the preview available if WhatsApp has evicted the original message.
+    }
+  }));
+}
+
 async function withGroupSenderNames(
   client: WhatsAppClient,
   chatId: string,
   messages: DashboardMessage[],
   senderNameCache: Map<string, string>,
 ): Promise<DashboardMessage[]> {
-  if (!chatId.endsWith("@g.us")) return messages;
-  const missingIds = [...new Set(
-    messages
-      .filter((message) => !message.fromMe && message.senderId && !senderNameCache.has(message.senderId))
-      .map((message) => message.senderId as string),
-  )];
-  await Promise.all(
-    missingIds.map(async (senderId) => {
-      try {
-        const contact = await withTimeout(client.getContactById(senderId), 4_000);
-        const name = contact.name || contact.pushname || contact.shortName || contact.number;
-        if (name) senderNameCache.set(senderId, name);
-      } catch {
-        senderNameCache.set(senderId, "Group participant");
-      }
-    }),
-  );
-  return messages.map((message) => ({
-    ...message,
-    senderName: message.fromMe
-      ? "You"
-      : message.senderId
-        ? senderNameCache.get(message.senderId) || "Group participant"
-        : undefined,
-    quotedMessage: message.quotedMessage ? {
-      ...message.quotedMessage,
-      senderName: message.quotedMessage.fromMe
-        ? "You"
-        : message.quotedMessage.senderId
-          ? senderNameCache.get(message.quotedMessage.senderId) || "Group participant"
-          : message.quotedMessage.senderName,
-    } : undefined,
-  }));
+  const ids = messages.flatMap((message) => [
+    ...(chatId.endsWith("@g.us") && !message.fromMe && message.senderId ? [message.senderId] : []),
+    ...(message.mentionIds || []),
+  ]);
+  await hydrateContactNames(client, ids, senderNameCache);
+  return messages.map((message) => {
+    const mentions = mentionLabelsForIds(message.mentionIds || [], senderNameCache);
+    const fullBody = message.fullBody
+      ? replaceMentionIdsWithNames(message.fullBody, mentions)
+      : message.fullBody;
+    const body = replaceMentionIdsWithNames(message.body, mentions);
+    return {
+      ...message,
+      body,
+      fullBody,
+      senderName: chatId.endsWith("@g.us")
+        ? message.fromMe
+          ? "You"
+          : message.senderId
+            ? senderNameCache.get(message.senderId) || "Group participant"
+            : undefined
+        : message.senderName,
+      quotedMessage: message.quotedMessage ? {
+        ...message.quotedMessage,
+        senderName: message.quotedMessage.fromMe
+          ? "You"
+          : message.quotedMessage.senderId
+            ? senderNameCache.get(message.quotedMessage.senderId) || "Group participant"
+            : message.quotedMessage.senderName,
+      } : undefined,
+    };
+  });
 }
 
 async function groupDescription(client: WhatsAppClient, chatId: string): Promise<string | undefined> {
@@ -924,6 +1199,15 @@ async function listMessages(
         messageWithCaption.mediaObject?.caption || messageWithCaption.mediaData?.caption ||
         messageWithCaption._data?.mediaObject?.caption || messageWithCaption._data?.mediaData?.caption || "";
       const preview = safeMessagePreview(rawBody);
+      const mentionIds = new Set([...message.mentionedIds || [], ...mentionIdsInBody(rawBody)]);
+      const mentionedContacts = await message.getMentions().catch(() => []);
+      for (const mentionedContact of mentionedContacts) {
+        const mentionId = mentionedContact.id?._serialized;
+        if (!mentionId) continue;
+        mentionIds.add(mentionId);
+        const name = mentionedContact.name || mentionedContact.pushname || mentionedContact.shortName || mentionedContact.number;
+        if (isUsableContactName(name)) senderNameCache.set(mentionId, name);
+      }
       let quotedMessage: QuotedDashboardMessage | undefined;
       if (message.hasQuotedMsg) {
         try {
@@ -953,6 +1237,8 @@ async function listMessages(
         hasMedia: message.hasMedia,
         mediaUrl: message.hasMedia ? mediaUrlFor(chatId, id) : undefined,
         senderId: chatId.endsWith("@g.us") ? message.author : undefined,
+        mentionIds: [...mentionIds],
+        ownerMentioned: Boolean(message.fromMe || mentionedContacts.some((contact) => contact.isMe)),
         quotedMessage,
       };
     }));
@@ -968,6 +1254,11 @@ async function listMessages(
     }).pupPage;
     if (!page) throw new Error("WhatsApp is still syncing");
     const result = await page.evaluate(async ({ targetChatId, messageLimit }: { targetChatId: string; messageLimit: number }) => {
+      // This callback runs inside WhatsApp Web, not in the Node.js process.
+      // Keep the mention parser local to the page context instead of referencing
+      // the server-side helper above, which is not available here.
+      const mentionIdsInMessageBody = (body: string | undefined): string[] =>
+        body ? [...body.matchAll(/@(\d{5,})\b/g)].map((match) => match[1]!) : [];
       const whatsappWindow = globalThis as typeof globalThis & {
         WWebJS: {
           getMessageModel(message: CachedMessageModel): CachedMessageModel;
@@ -1053,6 +1344,18 @@ async function listMessages(
             : messageId?._serialized ||
               (stringifiedId && stringifiedId !== "[object Object]" ? stringifiedId : undefined) ||
               composedId;
+          const rawMentionIds = normalized.mentionedJidList || normalized._data?.mentionedJidList ||
+            message.mentionedJidList || message._data?.mentionedJidList || [];
+          const mentionIds = [
+            ...rawMentionIds.flatMap((mention) => {
+            const id = typeof mention === "string" ? mention : mention?._serialized;
+            return id ? [id] : [];
+            }),
+            ...mentionIdsInMessageBody(
+              normalized.body || normalized.caption || normalized._data?.body || normalized._data?.caption ||
+              message.body || message.caption,
+            ),
+          ];
           return {
             id: serializedId || `${targetChatId}-${normalized.t || message.t || index}`,
             downloadable: Boolean(serializedId),
@@ -1071,6 +1374,8 @@ async function listMessages(
               Boolean(normalized.directPath || normalized.mediaData || message.mediaData) ||
               ["ptt", "audio", "image", "video", "document", "sticker"].includes(type),
             senderId,
+            mentionIds,
+            ownerMentioned: Boolean(messageId?.fromMe),
             quotedMessage: quoted ? {
               id: quotedId || `quoted-${normalized.t || message.t || index}`,
               body: quoted.body || quoted.caption || "Media message",
@@ -1103,22 +1408,29 @@ async function listMessages(
   }
 }
 
-function rememberDashboardMessages(
+export function rememberDashboardMessages(
   state: AmirosState,
   chatId: string,
   messages: DashboardMessage[],
 ): number {
   return state.rememberMessages(chatId, messages.flatMap((message) => {
-    if (message.fromMe) return [];
     const content = (message.fullBody || message.body).trim();
     if (!content || content === "Media message") return [];
+    // WhatsApp can replay an outgoing message after AmirOS restarts. If this
+    // exact text was recorded as AmirOS output, keep the existing assistant
+    // entry instead of importing it as a new owner-authored message.
+    if (message.fromMe && state.isKnownAssistantOutput(chatId, content)) return [];
     return [{
       role: "user" as const,
-      author: chatId.endsWith("@g.us") ? "group_member" as const : "contact" as const,
+      author: message.fromMe ? "owner" as const : chatId.endsWith("@g.us") ? "group_member" as const : "contact" as const,
       content,
-      senderName: message.senderName,
+      senderName: message.fromMe ? state.getSettings().ownerProfile.displayName : message.senderName,
+      mentionIds: message.mentionIds,
+      ownerMentioned: message.ownerMentioned,
       timestamp: message.timestamp < 10_000_000_000 ? message.timestamp * 1_000 : message.timestamp,
       messageId: message.id,
+      countAsIncoming: !message.fromMe,
+      extractSignals: message.fromMe,
     }];
   }));
 }
@@ -1250,6 +1562,16 @@ export function startAmirosDashboard(options: DashboardOptions) {
   const chatNameCache = new Map<string, string>();
   const senderNameCache = new Map<string, string>();
   const calendarFeedToken = persistentCalendarFeedToken();
+  let updateCheck: UpdateStatus | undefined;
+  let updateCheckExpiresAt = 0;
+  const latestUpdateStatus = async (force = false): Promise<UpdateStatus> => {
+    if (!force && updateCheck && Date.now() < updateCheckExpiresAt) return updateCheck;
+    updateCheck = await checkForAmirosUpdate(CURRENT_RELEASE.version);
+    // Avoid a background GitHub call on every dashboard refresh. A manual
+    // request always refreshes immediately, while normal use checks hourly.
+    updateCheckExpiresAt = Date.now() + 60 * 60_000;
+    return updateCheck;
+  };
   const server = createServer(async (request, response) => {
     try {
       if (request.method === "OPTIONS") {
@@ -1297,6 +1619,12 @@ export function startAmirosDashboard(options: DashboardOptions) {
 
       if (request.method === "GET" && pathname === "/api/dashboard") {
         const usage = ai.usageSnapshot();
+        const todos = visibleTodoTasks(state.listTodoTasks())
+          .map((todo) => ({
+            ...todo,
+            contactName: chatNameCache.get(todo.chatId) || todo.contactName || todo.evidence.senderName || "WhatsApp contact",
+          }))
+          .filter((todo) => isKnownIntelligenceChat(todo.chatId, todo.contactName || "WhatsApp contact"));
         sendJson(response, 200, {
           connection: state.connection(),
           paused: state.isPaused(),
@@ -1311,11 +1639,46 @@ export function startAmirosDashboard(options: DashboardOptions) {
           monthlySpendUsd: state.monthlySpendUsd(),
           release: { ...CURRENT_RELEASE, history: RELEASE_HISTORY },
           drafts: state.listDrafts(),
+          todos,
           activities: await activitiesWithContactNames(client, state, chatNameCache),
           knowledgeTrackingRequests: state.listKnowledgeTrackingRequests()
             .filter((request) => isKnownIntelligenceChat(request.chatId, request.contactName)),
           settings: { ...state.getSettings(), apiKeyConfigured: ai.isConfigured() },
         });
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/update") {
+        sendJson(response, 200, await latestUpdateStatus(url.searchParams.get("refresh") === "1"));
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/update") {
+        const update = await latestUpdateStatus(true);
+        if (update.status !== "available") {
+          sendJson(response, 409, {
+            error: update.status === "current"
+              ? "You already have the latest version of AmirOS."
+              : update.detail || "AmirOS could not check for an update right now.",
+          });
+          return;
+        }
+        const updaterPath = resolve("Update AmirOS.command");
+        if (!existsSync(updaterPath)) {
+          sendJson(response, 409, { error: "This AmirOS copy needs one final ZIP update before one-click updates are available." });
+          return;
+        }
+        state.addActivity("system", "AmirOS update started", `Updating to v${update.latestVersion}`);
+        sendJson(response, 202, { ok: true, latestVersion: update.latestVersion });
+        // Respond before opening the updater: it stops this server, restores
+        // private data, rebuilds AmirOS, and opens the updated dashboard.
+        setTimeout(() => {
+          const updater = spawn("/usr/bin/open", [updaterPath], {
+            detached: true,
+            stdio: "ignore",
+          });
+          updater.unref();
+        }, 350).unref();
         return;
       }
 
@@ -1417,7 +1780,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
       }
 
       if (request.method === "GET" && pathname === "/api/chats") {
-        sendJson(response, 200, { chats: await listChats(client, state, chatNameCache) });
+        sendJson(response, 200, { chats: await listChats(client, state, chatNameCache, senderNameCache) });
         return;
       }
 
@@ -1491,6 +1854,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
         const messages = await listMessages(client, chatId, senderNameCache, state);
         const added = rememberDashboardMessages(state, chatId, messages);
         if (added > 0) void intelligenceLearner?.analyzeIncoming(chatId);
+        const contactName = chatNameCache.get(chatId) || state.getChatName(chatId) || "WhatsApp contact";
         sendJson(response, 200, {
           chatId,
           messages,
@@ -1502,6 +1866,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
           insights: state.getInsights(chatId),
           commitments: state.getCommitments(chatId),
           events: state.getCalendarEvents(chatId),
+          todos: state.getTodoTasks(chatId).map((todo) => ({ ...todo, chatId, contactName })),
           styleProfile: state.getWritingStyleProfile(chatId),
           groupSummary: state.getGroupSummary(chatId),
           incomingMessageCount: state.getIncomingMessageCount(chatId),
@@ -1542,6 +1907,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
             return {
               ...item,
               contactName,
+              todos: item.todos.map((todo) => ({ ...todo, chatId: item.chatId, contactName })),
               isGroup: item.chatId.endsWith("@g.us"),
               needsReply: isReplyWorthyIntelligenceMessage(
                 item.chatId,
@@ -1559,6 +1925,8 @@ export function startAmirosDashboard(options: DashboardOptions) {
           .filter((event) => event.status !== "dismissed" && event.startAt >= Date.now() - 86_400_000)
           .map((event) => ({ ...event, chatId: item.chatId, contactName: item.contactName })))
           .sort((a, b) => a.startAt - b.startAt);
+        const todos = visibleTodoTasks(chats.flatMap((item) => item.todos
+          .map((todo) => ({ ...todo, chatId: item.chatId, contactName: item.contactName }))));
         const chatNamesById = new Map(chats.map((chat) => [chat.chatId, chat.contactName]));
         const changesByCluster = new Map<string, (typeof chats)[number]["insights"][number] & {
           chatId: string;
@@ -1611,6 +1979,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
           ).slice(0, 20),
           commitments,
           events,
+          todos,
           changes: [...changesByCluster.values()]
             .sort((a, b) => b.updatedAt - a.updatedAt)
             .slice(0, 30),
@@ -1996,6 +2365,16 @@ export function startAmirosDashboard(options: DashboardOptions) {
           sendJson(response, 400, { error: "Knowledge tracking has an unsupported state" });
           return;
         }
+        if (
+          patch.pronouns !== undefined &&
+          patch.pronouns !== "unspecified" &&
+          patch.pronouns !== "she/her" &&
+          patch.pronouns !== "he/him" &&
+          patch.pronouns !== "they/them"
+        ) {
+          sendJson(response, 400, { error: "Pronouns contain an unsupported value" });
+          return;
+        }
         ai.clearConversation(chatId);
         const contact = state.updateContact(chatId, patch);
         // Enabling tracking takes effect immediately. The learner still uses
@@ -2154,6 +2533,65 @@ export function startAmirosDashboard(options: DashboardOptions) {
           return;
         }
         sendJson(response, 200, { commitment, commitments: state.getCommitments(chatId) });
+        return;
+      }
+
+      const todoMatch = pathname.match(/^\/api\/contacts\/([^/]+)\/todos\/([^/]+)$/);
+      const todoCompleteMatch = pathname.match(/^\/api\/contacts\/([^/]+)\/todos\/([^/]+)\/complete$/);
+      if (request.method === "POST" && todoCompleteMatch?.[1] && todoCompleteMatch[2]) {
+        const chatId = decodeURIComponent(todoCompleteMatch[1]);
+        const todoId = decodeURIComponent(todoCompleteMatch[2]);
+        const todo = state.completeTodoTask(chatId, todoId);
+        if (!todo) {
+          sendJson(response, 404, { error: "To-do not found" });
+          return;
+        }
+        const contactName = chatNameCache.get(chatId) || state.getChatName(chatId) || "WhatsApp contact";
+        sendJson(response, 200, {
+          todo: { ...todo, chatId, contactName },
+          todos: state.getTodoTasks(chatId).map((item) => ({ ...item, chatId, contactName })),
+        });
+        return;
+      }
+      if (request.method === "PATCH" && todoMatch?.[1] && todoMatch[2]) {
+        const chatId = decodeURIComponent(todoMatch[1]);
+        const todoId = decodeURIComponent(todoMatch[2]);
+        const body = await readJson<{
+          status?: "inferred" | "open" | "done" | "dismissed";
+          title?: string;
+          dueAt?: number | null;
+          priority?: "low" | "normal" | "high";
+        }>(request);
+        if (body.status !== undefined && !["inferred", "open", "done", "dismissed"].includes(body.status)) {
+          sendJson(response, 400, { error: "Unknown to-do status" });
+          return;
+        }
+        if (body.title !== undefined && (!body.title.trim() || body.title.trim().length > 1_000)) {
+          sendJson(response, 400, { error: "To-do title must be between 1 and 1000 characters" });
+          return;
+        }
+        if (body.dueAt !== undefined && body.dueAt !== null && (!Number.isFinite(body.dueAt) || body.dueAt <= 0)) {
+          sendJson(response, 400, { error: "To-do due date must be a valid timestamp" });
+          return;
+        }
+        if (body.priority !== undefined && !["low", "normal", "high"].includes(body.priority)) {
+          sendJson(response, 400, { error: "Unknown to-do priority" });
+          return;
+        }
+        if (body.status === undefined && body.title === undefined && body.dueAt === undefined && body.priority === undefined) {
+          sendJson(response, 400, { error: "Choose a to-do update" });
+          return;
+        }
+        const todo = state.updateTodoTask(chatId, todoId, body);
+        if (!todo) {
+          sendJson(response, 404, { error: "To-do not found" });
+          return;
+        }
+        const contactName = chatNameCache.get(chatId) || state.getChatName(chatId) || "WhatsApp contact";
+        sendJson(response, 200, {
+          todo: { ...todo, chatId, contactName },
+          todos: state.getTodoTasks(chatId).map((item) => ({ ...item, chatId, contactName })),
+        });
         return;
       }
 

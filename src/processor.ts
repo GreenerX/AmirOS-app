@@ -246,7 +246,8 @@ export class MessageProcessor {
 
     if (message.fromMe) {
       const isSuppressedOutput = this.consumeSuppressedOutput(chatId, message);
-      if (isSuppressedOutput) return;
+      const isRecordedAssistantOutput = this.amiros?.isKnownAssistantOutput(chatId, message.body || "") || false;
+      if (isSuppressedOutput || isRecordedAssistantOutput) return;
       if (isSelfChat && message.hasQuotedMsg) return;
     }
     if (
@@ -316,6 +317,13 @@ export class MessageProcessor {
         const summary = this.modelSummary();
         this.suppressOutput(chatId, "chat", summary);
         await message.reply(summary, chatId);
+        this.amiros?.rememberMessage(chatId, {
+          role: "assistant",
+          author: "assistant",
+          content: summary,
+          timestamp: Date.now(),
+          countAsIncoming: false,
+        });
         this.amiros?.addActivity("system", "Model summary sent", chatId);
         console.log("Model summary sent", { messageId });
         return;
@@ -330,11 +338,19 @@ export class MessageProcessor {
               : `💡 *Try:* ${this.config.botTriggerPrefix} ask your question`;
         this.suppressOutput(chatId, "chat", usage);
         await message.reply(usage, chatId);
+        this.amiros?.rememberMessage(chatId, {
+          role: "assistant",
+          author: "assistant",
+          content: usage,
+          timestamp: Date.now(),
+          countAsIncoming: false,
+        });
         return;
       }
 
       if (command.kind === "image") {
         const image = await this.ai.generateImage(command.prompt);
+        const imageCaption = `🎨 ${command.prompt.slice(0, 895)}`;
         const media = new MessageMedia(
           "image/png",
           image.toString("base64"),
@@ -343,10 +359,10 @@ export class MessageProcessor {
         this.suppressOutput(
           chatId,
           "image",
-          `🎨 ${command.prompt.slice(0, 895)}`,
+          imageCaption,
         );
         await message.reply(media, chatId, {
-          caption: `🎨 ${command.prompt.slice(0, 895)}`,
+          caption: imageCaption,
         });
         this.amiros?.addActivity(
           "image",
@@ -358,15 +374,17 @@ export class MessageProcessor {
           this.amiros?.rememberExchange(
             chatId,
             command.prompt,
-            `Generated and sent an image: ${command.prompt}`,
+            imageCaption,
             identity.senderName,
             false,
+            "owner",
+            isSelfChat && resolved.explicit,
           );
         } else {
           this.amiros?.rememberMessage(chatId, {
             role: "assistant",
             author: "assistant",
-            content: `Generated and sent an image: ${command.prompt}`,
+            content: imageCaption,
           });
         }
         console.log("Generated image sent", { messageId });
@@ -383,6 +401,7 @@ export class MessageProcessor {
       this.amiros?.rememberChatName(chatId, identity.chatName);
       const currentMessageId = message.id?._serialized || message.id?.id;
       const currentMessageTimestamp = message.timestamp ? message.timestamp * 1_000 : Date.now();
+      const isExplicitSelfChatCommand = message.fromMe && isSelfChat && resolved.explicit;
       if (message.fromMe && command.prompt.trim()) {
         this.amiros?.rememberMessage(chatId, {
           role: "user",
@@ -392,10 +411,13 @@ export class MessageProcessor {
           timestamp: currentMessageTimestamp,
           messageId: currentMessageId,
           countAsIncoming: false,
-          extractSignals: true,
+          extractSignals: !isExplicitSelfChatCommand,
+          excludeFromAutomaticLearning: isExplicitSelfChatCommand,
         });
-        void this.intelligenceLearner?.analyzeIncoming(chatId);
-        await this.refreshWritingStyle(chatId);
+        if (!isExplicitSelfChatCommand) {
+          void this.intelligenceLearner?.analyzeIncoming(chatId);
+          await this.refreshWritingStyle(chatId);
+        }
       }
       const calendarCapture = this.amiros?.getCalendarCaptureResult(
         chatId,
@@ -421,7 +443,7 @@ export class MessageProcessor {
           ownerName,
         })
         : undefined;
-      await this.refreshWritingStyle(chatId);
+      if (!isExplicitSelfChatCommand) await this.refreshWritingStyle(chatId);
       const contextScope = isSelfChat
         ? "owner"
         : ownerTriggered && (includeGlobalKnowledge || includeGlobalCalendar)
@@ -523,6 +545,13 @@ export class MessageProcessor {
       await message
         .reply(failureMessage, chatId)
         .catch(() => undefined);
+      this.amiros?.rememberMessage(chatId, {
+        role: "assistant",
+        author: "assistant",
+        content: failureMessage,
+        timestamp: Date.now(),
+        countAsIncoming: false,
+      });
     }
   }
 
@@ -650,10 +679,17 @@ export class MessageProcessor {
   private async messageIdentity(
     message: Message,
     isGroup: boolean,
-  ): Promise<{ chatName?: string; senderName?: string }> {
-    const [chat, sender] = await Promise.all([
+  ): Promise<{ chatName?: string; senderName?: string; mentionIds?: string[]; ownerMentioned?: boolean }> {
+    // Some cached/recovered WhatsApp message shapes do not expose
+    // `getMentions()`. Mentions enrich attribution but must never prevent the
+    // message itself from being remembered or analysed.
+    const getMentions = (message as Message & {
+      getMentions?: () => Promise<Array<{ isMe?: boolean }>>;
+    }).getMentions;
+    const [chat, sender, mentions] = await Promise.all([
       message.getChat().catch(() => undefined),
       isGroup ? message.getContact().catch(() => undefined) : Promise.resolve(undefined),
+      isGroup && typeof getMentions === "function" ? getMentions.call(message).catch(() => []) : Promise.resolve([]),
     ]);
     const senderName = sender
       ? sender.name || sender.pushname || sender.shortName || sender.number
@@ -661,6 +697,8 @@ export class MessageProcessor {
     return {
       chatName: chat?.name,
       senderName: message.fromMe && isGroup ? senderName || "You" : senderName,
+      mentionIds: [...new Set((message.mentionedIds || []).filter(Boolean))],
+      ownerMentioned: Boolean(message.fromMe || mentions.some((contact) => contact.isMe)),
     };
   }
 
@@ -674,12 +712,18 @@ export class MessageProcessor {
     const identity = await this.messageIdentity(message, isGroup);
     this.amiros?.rememberChatName(chatId, identity.chatName);
     this.amiros?.rememberMessage(chatId, {
-      role: message.fromMe ? "assistant" : "user",
+      role: "user",
       author: message.fromMe ? "owner" : isGroup ? "group_member" : "contact",
       content,
-      senderName: identity.senderName,
+      senderName: message.fromMe
+        ? this.amiros?.getSettings().ownerProfile.displayName || identity.senderName
+        : identity.senderName,
+      mentionIds: identity.mentionIds,
+      ownerMentioned: identity.ownerMentioned,
       timestamp: message.timestamp ? message.timestamp * 1_000 : undefined,
       messageId: message.id?._serialized || message.id?.id,
+      countAsIncoming: !message.fromMe,
+      extractSignals: message.fromMe,
     });
     if (message.fromMe) {
       void this.intelligenceLearner?.analyzeIncoming(chatId);

@@ -2,10 +2,13 @@ import {
   ArrowRight,
   Bot,
   Brain,
+  CalendarDays,
   CalendarCheck,
   CalendarClock,
+  Check,
   CircleDollarSign,
   Image,
+  ListTodo,
   MessageCircle,
   Mic,
   Pause,
@@ -20,7 +23,7 @@ import { useEffect, useMemo, useState } from "react";
 import { compactNumber, formatDeviceClock, formatTime, timeOfDayGreeting } from "../format";
 import { readHiddenIntelligenceActions } from "../intelligence-visibility";
 import { buildIntelligenceSnapshot, isKnownIntelligenceContactName } from "../intelligence-snapshot";
-import type { Activity, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, ModelPreset, ViewName } from "../types";
+import type { Activity, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, ModelPreset, TodoTask, ViewName } from "../types";
 import { WhatsAppIcon } from "./BrandIcons";
 import { ContactAvatar } from "./ContactAvatar";
 
@@ -33,6 +36,8 @@ type OverviewProps = {
   onPreset: (preset: ModelPreset) => Promise<void>;
   onTrackingDecision: (chatId: string, status: KnowledgeTrackingStatus) => Promise<void>;
   onOpenTrackingChat: (chatId: string) => void;
+  onOpenTodoReview: () => void;
+  onTodoStatus: (chatId: string, todoId: string, status: TodoTask["status"]) => Promise<void>;
 };
 
 const OVERVIEW_QUOTES = [
@@ -95,7 +100,18 @@ function eventCountdown(timestamp: number, now: Date) {
   return `In ${dayDifference} days`;
 }
 
-export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, onPreset, onTrackingDecision, onOpenTrackingChat }: OverviewProps) {
+function toMilliseconds(timestamp: number) {
+  return timestamp < 10_000_000_000 ? timestamp * 1_000 : timestamp;
+}
+
+function todoTimingLabel(todo: TodoTask) {
+  if (typeof todo.dueAt === "number" && Number.isFinite(todo.dueAt)) {
+    return `Due ${eventDateTime(toMilliseconds(todo.dueAt))}`;
+  }
+  return todo.status === "inferred" ? "Suggested from a message" : "No due date";
+}
+
+export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, onPreset, onTrackingDecision, onOpenTrackingChat, onOpenTodoReview, onTodoStatus }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
   useEffect(() => {
@@ -123,15 +139,26 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
   const needsReply = Math.max(visibleNeedsReply.length, data.drafts.length);
   const repliesToday = data.activities.filter((activity) => activity.kind === "text" && sameLocalDay(activity.timestamp, deviceTime)).length;
   const nextEvent = intelligenceSnapshot.upcomingEvents[0];
-  const openPromises = intelligence?.commitments.filter((item) => item.status === "open" && isKnownIntelligenceContactName(item.contactName)) || [];
   const planSuggestions = intelligence?.events.filter((item) => item.status === "inferred" && isKnownIntelligenceContactName(item.contactName)) || [];
   const upcomingPlans = intelligenceSnapshot.upcomingEvents;
+  const trackedTodos = useMemo(() => (intelligence?.todos || [])
+    .filter((todo) => todo.status === "open" || todo.status === "done")
+    .sort((left, right) => {
+      const leftDone = left.status === "done" ? 1 : 0;
+      const rightDone = right.status === "done" ? 1 : 0;
+      if (leftDone !== rightDone) return leftDone - rightDone;
+      if (leftDone) return toMilliseconds(right.completedAt || right.updatedAt) - toMilliseconds(left.completedAt || left.updatedAt);
+      const leftTime = typeof left.dueAt === "number" ? toMilliseconds(left.dueAt) : toMilliseconds(left.createdAt);
+      const rightTime = typeof right.dueAt === "number" ? toMilliseconds(right.dueAt) : toMilliseconds(right.createdAt);
+      return leftTime - rightTime;
+    }), [intelligence]);
+  const suggestedTodos = useMemo(() => (intelligence?.todos || [])
+    .filter((todo) => todo.status === "inferred"), [intelligence]);
   const newSignals = intelligence?.changes.filter((item) => item.status === "inferred" && isKnownIntelligenceContactName(item.contactName)) || [];
   const confirmedDetails = intelligenceSnapshot.details;
   const understoodRelationships = intelligenceSnapshot.relationships;
-  const confirmedKnowledgeHighlights = intelligenceSnapshot.confirmedKnowledge.slice(0, 5);
   const trackingRequests = data.knowledgeTrackingRequests.filter((item) => item.status === "pending").slice(0, 3);
-  const intelligenceAttention = visibleNeedsReply.length + openPromises.length + planSuggestions.length + newSignals.length;
+  const agendaItemCount = upcomingPlans.length + trackedTodos.length + suggestedTodos.length;
   const focus = visibleNeedsReply[0]
     ? {
         kind: "Needs reply",
@@ -142,12 +169,31 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
       }
     : planSuggestions[0]
       ? { kind: "Calendar suggestion", title: planSuggestions[0].title, detail: `From ${planSuggestions[0].contactName} · ${eventDateTime(planSuggestions[0].startAt)}`, chatId: planSuggestions[0].chatId, contactName: planSuggestions[0].contactName }
-      : openPromises[0]
-        ? { kind: "Open promise", title: openPromises[0].contactName, detail: openPromises[0].content, chatId: openPromises[0].chatId, contactName: openPromises[0].contactName }
-        : newSignals[0]
-          ? { kind: "New relationship detail", title: newSignals[0].contactName, detail: newSignals[0].content, chatId: newSignals[0].chatId, contactName: newSignals[0].contactName }
-          : undefined;
+      : suggestedTodos[0]
+        ? { kind: "To-do suggestion", title: suggestedTodos[0].title, detail: `From ${suggestedTodos[0].contactName} · ${todoTimingLabel(suggestedTodos[0])}`, chatId: suggestedTodos[0].chatId, contactName: suggestedTodos[0].contactName }
+        : trackedTodos.find((todo) => todo.status === "open")
+          ? (() => { const todo = trackedTodos.find((item) => item.status === "open")!; return { kind: "To-do", title: todo.title, detail: `From ${todo.contactName} · ${todoTimingLabel(todo)}`, chatId: todo.chatId, contactName: todo.contactName }; })()
+          : newSignals[0]
+            ? { kind: "New relationship detail", title: newSignals[0].contactName, detail: newSignals[0].content, chatId: newSignals[0].chatId, contactName: newSignals[0].contactName }
+            : undefined;
   const focusChat = focus ? chats.find((chat) => chat.id === focus.chatId) : undefined;
+  const [completingTodoIds, setCompletingTodoIds] = useState<Set<string>>(() => new Set());
+  const completeTodo = async (todo: TodoTask) => {
+    if (todo.status === "done") return;
+    setCompletingTodoIds((current) => new Set(current).add(todo.id));
+    try {
+      await Promise.all([
+        onTodoStatus(todo.chatId, todo.id, "done"),
+        new Promise<void>((resolve) => window.setTimeout(resolve, 330)),
+      ]);
+    } finally {
+      setCompletingTodoIds((current) => {
+        const next = new Set(current);
+        next.delete(todo.id);
+        return next;
+      });
+    }
+  };
 
   return (
     <main className="main-content overview-page">
@@ -224,7 +270,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
       <div className="overview-primary-grid">
         <section className="panel intelligence-snapshot-panel">
           <div className="panel-heading">
-            <h2><Brain size={19} /> Intelligence snapshot <span className="count-badge intelligence-count">{intelligenceAttention}</span></h2>
+            <h2><CalendarCheck size={19} /> Your agenda <span className="count-badge intelligence-count">{agendaItemCount}</span></h2>
             <button className="text-button" onClick={() => onNavigate("intelligence")}>Open Intelligence <ArrowRight size={16} /></button>
           </div>
           <div className="intelligence-snapshot-body">
@@ -234,12 +280,36 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
               <span><MessageCircle size={16} /><strong>{visibleNeedsReply.length}</strong><small>replies due</small></span>
               <span><CalendarCheck size={16} /><strong>{upcomingPlans.length}</strong><small>upcoming events</small></span>
             </div>
-            <div className="intelligence-knowledge-highlights">
-              {confirmedKnowledgeHighlights.map((detail, index) => <button className="intelligence-confirmed-detail" key={detail.id} onClick={() => onNavigate("intelligence")}>
-                <span className="intelligence-confirmed-icon"><Sparkles size={16} /></span>
-                <span><small>{index === 0 ? "Latest confirmed knowledge" : "Confirmed knowledge"}</small><strong dir="auto">{detail.contactName}</strong><p dir="auto">{detail.content}</p></span>
-                <ArrowRight size={14} />
-              </button>)}
+            <div className="overview-agenda-columns">
+              <section className="overview-agenda-column overview-agenda-events" aria-labelledby="overview-upcoming-events-title">
+                <header>
+                  <span><CalendarDays size={17} /><span><small>Calendar</small><h3 id="overview-upcoming-events-title">Upcoming events</h3></span></span>
+                  <button className="text-button" type="button" onClick={() => onNavigate("calendar")}>View calendar <ArrowRight size={14} /></button>
+                </header>
+                {upcomingPlans.length > 0 ? <div className="overview-agenda-list">
+                  {upcomingPlans.slice(0, 4).map((event) => <button className="overview-agenda-item" type="button" key={event.id} onClick={() => onNavigate("calendar")}>
+                    <span className="overview-agenda-item-icon"><CalendarCheck size={15} /></span>
+                    <span><strong dir="auto">{event.title}</strong><small>{eventDateTime(toMilliseconds(event.startAt))} · {event.contactName}</small></span>
+                    <ArrowRight size={14} />
+                  </button>)}
+                </div> : <div className="overview-agenda-empty"><CalendarDays size={19} /><span><strong>No upcoming events</strong><small>Confirmed plans will appear here.</small></span></div>}
+              </section>
+
+              <section className="overview-agenda-column overview-agenda-todos" aria-labelledby="overview-todo-list-title">
+                <header>
+                  <span><ListTodo size={17} /><span><small>Tasks</small><h3 id="overview-todo-list-title">To-do list</h3></span></span>
+                  <button className="text-button" type="button" onClick={onOpenTodoReview}>{suggestedTodos.length > 0 ? `Review ${suggestedTodos.length}` : "View tasks"} <ArrowRight size={14} /></button>
+                </header>
+                {trackedTodos.length > 0 ? <div className="overview-agenda-list">
+                  {trackedTodos.map((todo) => <div className={`overview-agenda-todo-row ${todo.status === "done" ? "is-completed" : ""} ${completingTodoIds.has(todo.id) ? "is-completing" : ""}`} key={todo.id}>
+                    <button className="overview-todo-check" type="button" aria-label={todo.status === "done" ? `${todo.title} is complete` : `Mark ${todo.title} as complete`} disabled={todo.status === "done"} onClick={() => void completeTodo(todo)}><Check size={16} /></button>
+                    <button className="overview-agenda-item" type="button" onClick={onOpenTodoReview}>
+                      <span><strong dir="auto">{todo.title}</strong><small>{todo.status === "done" ? `Completed ${eventDateTime(toMilliseconds(todo.completedAt || todo.updatedAt))}` : typeof todo.dueAt === "number" && Number.isFinite(todo.dueAt) ? todoTimingLabel(todo) : `Added ${eventDateTime(toMilliseconds(todo.createdAt))}`}</small></span>
+                      <ArrowRight size={14} />
+                    </button>
+                  </div>)}
+                </div> : suggestedTodos.length > 0 ? <div className="overview-agenda-empty"><ListTodo size={19} /><span><strong>{suggestedTodos.length} task {suggestedTodos.length === 1 ? "suggestion" : "suggestions"} waiting</strong><small>Review a message before it becomes a to-do.</small></span></div> : <div className="overview-agenda-empty"><ListTodo size={19} /><span><strong>No to-dos yet</strong><small>Actionable messages will appear here for review.</small></span></div>}
+              </section>
             </div>
           </div>
         </section>

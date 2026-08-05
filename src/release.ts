@@ -30,23 +30,27 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-05",
-  headline: "Updates that take care of themselves",
+  headline: "A clearer, more reliable daily assistant",
   notes: [
     {
-      title: "One-click updates for testers",
-      detail: "Double-click Update AmirOS to safely install the newest version. Your WhatsApp link, knowledge, calendar, settings, profile photos, and API key stay on your Mac.",
+      title: "A to-do list that remembers",
+      detail: "Checked-off tasks now stay in your list with a clear completion time. Active tasks remain at the top and completed tasks move below them, so you can always see what you got done.",
     },
     {
-      title: "A backup before every update",
-      detail: "AmirOS makes a private backup before an update, then restores your personal data automatically when it finishes.",
+      title: "Your day, in one place",
+      detail: "The Overview now brings upcoming plans and to-dos together in a cleaner agenda, with quick links to open the full calendar or task list.",
     },
     {
-      title: "Stronger recovery after an interruption",
-      detail: "If power or internet drops, AmirOS checks its WhatsApp connection, reconnects it when possible, and restarts the service if it stays stuck.",
+      title: "Smarter relationship knowledge",
+      detail: "AmirOS is better at keeping useful conversation knowledge organised, while making it easier to review new suggestions before they are saved.",
     },
     {
-      title: "Clearer help for new testers",
-      detail: "The setup guide now explains the one-click update process in simple terms, with no GitHub account required for public beta updates.",
+      title: "More dependable conversations",
+      detail: "Chats now handle long messages, mentions, and returning to a conversation more smoothly, helping you pick up where you left off.",
+    },
+    {
+      title: "Updates from inside AmirOS",
+      detail: "When a newer public version is available, AmirOS can let you know and start the private, backed-up update from the dashboard.",
     },
   ],
 };
@@ -57,6 +61,29 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.5.0",
+    releasedAt: "2026-08-05",
+    headline: "Updates that take care of themselves",
+    notes: [
+      {
+        title: "One-click updates for testers",
+        detail: "Double-click Update AmirOS to safely install the newest version. Your WhatsApp link, knowledge, calendar, settings, profile photos, and API key stay on your Mac.",
+      },
+      {
+        title: "A backup before every update",
+        detail: "AmirOS makes a private backup before an update, then restores your personal data automatically when it finishes.",
+      },
+      {
+        title: "Stronger recovery after an interruption",
+        detail: "If power or internet drops, AmirOS checks its WhatsApp connection, reconnects it when possible, and restarts the service if it stays stuck.",
+      },
+      {
+        title: "Clearer help for new testers",
+        detail: "The setup guide now explains the one-click update process in simple terms, with no GitHub account required for public beta updates.",
+      },
+    ],
+  },
   {
     version: "0.4.0",
     releasedAt: "2026-08-05",

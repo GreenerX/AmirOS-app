@@ -15,7 +15,7 @@ import {
   webSearchCostUsd,
 } from "./pricing.js";
 import { cleanSourceUrl, formatWhatsAppText } from "./whatsapp-format.js";
-import { hasCalendarPlanIntent } from "./amiros-state.js";
+import { hasCalendarPlanIntent, isOwnerTodoSource } from "./amiros-state.js";
 import type {
   ContactMemoryItem,
   ContactPreferences,
@@ -123,6 +123,12 @@ export type RelationshipAnalysis = {
     startAt: number;
     allDay: boolean;
     location?: string;
+    evidence: { messageId?: string; excerpt: string; senderName?: string; timestamp: number };
+  }>;
+  /** Owner-facing tasks that need a decision before entering the to-do list. */
+  todos?: Array<{
+    title: string;
+    dueAt?: number;
     evidence: { messageId?: string; excerpt: string; senderName?: string; timestamp: number };
   }>;
 };
@@ -315,6 +321,7 @@ export function buildPersonalizedInstructions(context: ReplyContext, prompt = ""
   const detectedLanguage = cleanInstructionValue(context.currentMessageLanguage, 80);
   const chatName = cleanInstructionValue(context.chatName, 120);
   const senderName = cleanInstructionValue(context.senderName, 120);
+  const pronouns = contact.pronouns;
   const customInstructions = cleanInstructionValue(contact.customInstructions, 2_000);
   const manualMemory = (context.manualMemory || [])
     .slice(-40)
@@ -355,6 +362,11 @@ export function buildPersonalizedInstructions(context: ReplyContext, prompt = ""
       : `- Language: reply in ${language} unless the sender explicitly requests another language.`,
   ];
   if (chatName) lines.push(`- Conversation: ${chatName}.`);
+  if (!context.isGroup && pronouns && pronouns !== "unspecified") {
+    lines.push(
+      `- ${chatName || senderName || "This contact"} uses ${pronouns} pronouns. Use these only when referring to this contact; never infer or apply them to anyone else.`,
+    );
+  }
   if (context.isGroup) {
     lines.push(
       senderName
@@ -529,6 +541,10 @@ function buildContextRecoveryInstructions(context: ReplyContext, prompt: string)
   const relationshipContext = (context.relationshipContext || [])
     .map((item) => cleanInstructionValue(item, 800))
     .filter(Boolean);
+  const contactName = cleanInstructionValue(context.chatName || context.senderName, 120) || "This contact";
+  const pronounInstruction = !context.isGroup && context.contact?.pronouns && context.contact.pronouns !== "unspecified"
+    ? `${contactName} uses ${context.contact.pronouns} pronouns. Use these only when referring to this contact; never infer or apply them to anyone else.`
+    : "";
   return [
     "You are AmirOS. Give a direct, natural WhatsApp answer to the current question.",
     buildRequesterPerspectiveInstructions(context),
@@ -539,6 +555,7 @@ function buildContextRecoveryInstructions(context: ReplyContext, prompt: string)
     relationshipContext.length
       ? `RELATIONSHIP RESOLUTION:\n${relationshipContext.join("\n")}`
       : "",
+    pronounInstruction,
     "Keep the answer concise and match the language of the question.",
   ].filter(Boolean).join("\n\n");
 }
@@ -792,29 +809,50 @@ export class AiService {
     contactName: string;
     isGroup: boolean;
     memory: ConversationMemoryEntry[];
+    /**
+     * The automatic learner supplies the just-arrived message IDs here. Older
+     * entries can still provide pronoun/context resolution, but they must not
+     * become fresh suggestions on a later scan.
+     */
+    candidateMessageIds?: string[];
+    candidateSince?: number;
     ownerName?: string;
     knownSubjectNames?: string[];
   }): Promise<RelationshipAnalysis> {
     this.assertAvailable();
     const ownerName = input.ownerName?.trim() || "Amir";
+    const candidateMessageIds = input.candidateMessageIds
+      ? new Set(input.candidateMessageIds.filter(Boolean))
+      : undefined;
     const source = input.memory
-      .filter((entry) => entry.author !== "assistant" && !(entry.role === "assistant" && !entry.author))
+      .filter((entry) =>
+        entry.author !== "assistant" &&
+        !(entry.role === "assistant" && !entry.author) &&
+        entry.excludeFromAutomaticLearning !== true,
+      )
       .slice(-160)
       .map((entry, index) => ({
         index,
         messageId: entry.messageId,
+        author: entry.author,
+        ownerMentioned: Boolean(entry.ownerMentioned),
         speaker: entry.author === "owner" ? ownerName : entry.senderName || input.contactName,
         content: entry.content,
         timestamp: entry.timestamp,
+        candidate: !candidateMessageIds
+          || candidateMessageIds.has(entry.messageId || "")
+          || (!entry.messageId && typeof input.candidateSince === "number" && entry.timestamp >= input.candidateSince),
       }));
     const result = await this.structuredResponse<{
       insights: Array<{ kind: RelationshipAnalysis["insights"][number]["kind"]; content: string; confidence: number; subjectNames: string[]; sourceIndex: number }>;
       commitments: Array<{ content: string; owner: RelationshipCommitment["owner"]; assigneeName: string; dueAt: number; sourceIndex: number }>;
       events: Array<{ title: string; startAt: number; allDay: boolean; location: string; sourceIndex: number }>;
+      todos: Array<{ title: string; dueAt: number; sourceIndex: number }>;
     }>({
       name: "relationship_intelligence",
       instructions: [
         "Extract only useful relationship intelligence explicitly supported by the supplied messages.",
+        "Messages marked candidate=false are context only. Never return an insight, commitment, event, or to-do whose sourceIndex points to a context-only message.",
         "Facts and preferences must describe the contact or relationship, not generic conversation topics.",
         `The owner is ${ownerName}. Treat first-person statements by ${ownerName} as facts supplied by the owner, not as information from another contact.`,
         "For every insight, return subjectNames containing every person or group that the knowledge directly describes. Use exact names from knownSubjectNames whenever a match is available.",
@@ -828,7 +866,9 @@ export class AiService {
         "Do not turn ordinary date mentions into events. Exclude news and article headlines, historical events, availability notices, deadlines or requests to send something, and vague statements that do not represent an activity Amir may attend or remember. A named birthday with a concrete date or relative weekday is an event Amir wants to remember even when the message states it as a fact; exclude birthdays only when no usable day or date is supplied.",
         "Never create an all-day event. Always set allDay=false and include a concrete local time. Honor broad time phrases with these defaults: morning 09:00, afternoon 15:00, evening or dinner 19:00, night 20:00. When no time is stated, use 12:00 local time so Amir can review it.",
         "Write each calendar title as a concise, natural 2-7 word label that names the actual occasion or activity. Include the person's name when useful (for example, 'Laura's house party'). Remove dates, times, invitation boilerplate, and vague titles such as 'Calendar event' or 'Meeting'.",
-        "Return at most 20 insights, 20 commitments, and 8 events. Every item must cite one sourceIndex.",
+        "A to-do is a concrete next action for the owner. Extract one only when the owner explicitly says they need to do it, or a human clearly asks the owner to do it. Write a short imperative title such as 'Call the dentist' or 'Buy coffee pods'. Do not create a to-do for someone else's task, generic advice, news, a pure calendar plan, or a vague need without an action. Use dueAt only for an explicit deadline or date/time; otherwise use 0.",
+        "In a group, only create a to-do when the message author is the owner or ownerMentioned=true. A group member saying 'I need to…', making a general request, or asking another member is never an owner to-do.",
+        "Return at most 20 insights, 20 commitments, 8 events, and 12 to-dos. Every item must cite one sourceIndex.",
       ].join(" "),
       input: JSON.stringify({
         ownerName,
@@ -853,7 +893,10 @@ export class AiService {
             title: { type: "string" }, startAt: { type: "number" }, allDay: { type: "boolean" },
             location: { type: "string" }, sourceIndex: { type: "integer" },
           }, required: ["title", "startAt", "allDay", "location", "sourceIndex"] } },
-        }, required: ["insights", "commitments", "events"],
+          todos: { type: "array", maxItems: 12, items: { type: "object", additionalProperties: false, properties: {
+            title: { type: "string" }, dueAt: { type: "number" }, sourceIndex: { type: "integer" },
+          }, required: ["title", "dueAt", "sourceIndex"] } },
+        }, required: ["insights", "commitments", "events", "todos"],
       },
     });
     const evidenceFor = (index: number) => {
@@ -865,27 +908,43 @@ export class AiService {
         timestamp: entry?.timestamp || Date.now(),
       };
     };
+    const hasCandidateEvidence = (index: number) => source[Math.max(0, Math.min(source.length - 1, index))]?.candidate !== false;
     return {
-      insights: result.insights.map((item) => ({
+      insights: result.insights.filter((item) => hasCandidateEvidence(item.sourceIndex)).map((item) => ({
         kind: item.kind,
         content: item.content,
         confidence: item.confidence,
         subjectNames: item.subjectNames.map((name) => name.replace(/\s+/g, " ").trim()).filter(Boolean),
         evidence: evidenceFor(item.sourceIndex),
       })),
-      commitments: result.commitments.map((item) => ({
+      commitments: result.commitments.filter((item) => hasCandidateEvidence(item.sourceIndex)).map((item) => ({
         content: item.content, owner: item.owner,
         assigneeName: item.assigneeName || undefined,
         dueAt: item.dueAt > 0 ? item.dueAt : undefined,
         evidence: evidenceFor(item.sourceIndex),
       })),
-      events: result.events.filter((item) => hasCalendarPlanIntent(evidenceFor(item.sourceIndex).excerpt)).map((item) => ({
+      events: result.events.filter((item) => hasCandidateEvidence(item.sourceIndex) && hasCalendarPlanIntent(evidenceFor(item.sourceIndex).excerpt)).map((item) => ({
         title: item.title,
         startAt: item.startAt,
         allDay: false,
         location: item.location || undefined,
         evidence: evidenceFor(item.sourceIndex),
       })),
+      todos: (result.todos || [])
+        .filter((item) => {
+          const sourceEntry = source[Math.max(0, Math.min(source.length - 1, item.sourceIndex))];
+          return hasCandidateEvidence(item.sourceIndex) && isOwnerTodoSource(sourceEntry?.content || "", {
+            isGroup: input.isGroup,
+            author: sourceEntry?.author,
+            ownerMentioned: sourceEntry?.ownerMentioned,
+            ownerName,
+          });
+        })
+        .map((item) => ({
+          title: item.title,
+          dueAt: item.dueAt > 0 ? item.dueAt : undefined,
+          evidence: evidenceFor(item.sourceIndex),
+        })),
     };
   }
 

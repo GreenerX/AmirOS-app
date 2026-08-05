@@ -20,6 +20,7 @@ const contact: ContactPreferences = {
   relationship: "Friend",
   tone: "Friendly",
   language: "Automatic",
+  pronouns: "unspecified",
   memoryEnabled: true,
   knowledgeTracking: "enabled",
   customInstructions: "",

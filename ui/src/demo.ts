@@ -75,8 +75,9 @@ export const demoContact: ContactPreferences = {
   mode: "suggest",
   relationship: "Client",
   tone: "Warm & concise",
-    language: "Automatic",
-    memoryEnabled: true,
+  language: "Automatic",
+  pronouns: "unspecified",
+  memoryEnabled: true,
     knowledgeTracking: "enabled",
   customInstructions: "Prioritize concise pricing info and attach relevant documents.",
   ownerTriggerAccess: ["knowledge", "calendar"],
@@ -155,16 +156,29 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.5.0",
+    version: "0.6.0",
     releasedAt: "2026-08-05",
-    headline: "Updates that take care of themselves",
+    headline: "A clearer, more reliable daily assistant",
     notes: [
-      { title: "One-click updates for testers", detail: "Double-click Update AmirOS to safely install the newest version while keeping all personal data on this Mac." },
-      { title: "A backup before every update", detail: "A private backup is made first, then your knowledge, calendar, settings, photos, API key, and WhatsApp link are restored." },
-      { title: "Stronger recovery after an interruption", detail: "AmirOS checks its WhatsApp connection after power or internet interruptions and restarts safely if recovery gets stuck." },
-      { title: "Clearer help for new testers", detail: "The setup guide now explains simple public-beta updates without needing a GitHub account." },
+      { title: "A to-do list that remembers", detail: "Checked-off tasks stay in your list with their completion time, while active tasks stay at the top." },
+      { title: "Your day, in one place", detail: "Upcoming plans and to-dos now live together in a cleaner agenda." },
+      { title: "Smarter relationship knowledge", detail: "Useful conversation knowledge is easier to organise and review before it is saved." },
+      { title: "More dependable conversations", detail: "Long messages, mentions, and returning to a conversation work more smoothly." },
+      { title: "Updates from inside AmirOS", detail: "AmirOS can let you know when a newer public version is ready and start the private, backed-up update from the dashboard." },
     ],
     history: [
+      {
+        version: "0.6.0",
+        releasedAt: "2026-08-05",
+        headline: "A clearer, more reliable daily assistant",
+        notes: [
+          { title: "A to-do list that remembers", detail: "Checked-off tasks stay in your list with their completion time, while active tasks stay at the top." },
+          { title: "Your day, in one place", detail: "Upcoming plans and to-dos now live together in a cleaner agenda." },
+          { title: "Smarter relationship knowledge", detail: "Useful conversation knowledge is easier to organise and review before it is saved." },
+          { title: "More dependable conversations", detail: "Long messages, mentions, and returning to a conversation work more smoothly." },
+          { title: "Updates from inside AmirOS", detail: "AmirOS can let you know when a newer public version is ready and start the private, backed-up update from the dashboard." },
+        ],
+      },
       {
         version: "0.5.0",
         releasedAt: "2026-08-05",

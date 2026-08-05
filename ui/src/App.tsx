@@ -23,7 +23,7 @@ import {
   setPaused,
   setPreset,
   updateContact,
-  updateContactCommitment,
+  updateTodoTask,
   updateContactInsight,
   updateCalendarEvent,
   regenerateCalendarTitle,
@@ -36,6 +36,8 @@ import {
   sendMedia,
   generateImageForChat,
   saveOpenAiApiKey,
+  getUpdateStatus,
+  startAmirosUpdate,
 } from "./api";
 import { InboxView } from "./components/InboxView";
 import { IntelligenceView } from "./components/IntelligenceView";
@@ -45,6 +47,7 @@ import { TerminalView } from "./components/TerminalView";
 import { CalendarView } from "./components/CalendarView";
 import { FloatingAssistant } from "./components/FloatingAssistant";
 import { ReleaseExperience } from "./components/ReleaseExperience";
+import { UpdatePrompt } from "./components/UpdatePrompt";
 import {
   AutomationsView,
   ContactsView,
@@ -69,11 +72,12 @@ import type {
   ModelPreset,
   IntelligenceData,
   IntelligenceSearchResult,
-  RelationshipCommitment,
+  TodoTask,
   ReplyMode,
   KnowledgeTrackingDefault,
   KnowledgeTrackingStatus,
   ThemeName,
+  AmirOSUpdateStatus,
   ViewName,
   WritingStyleProfile,
 } from "./types";
@@ -123,7 +127,6 @@ export function App() {
   const [manualMemory, setManualMemory] = useState<ContactMemoryItem[]>([]);
   const [profile, setProfile] = useState<ContactProfile>();
   const [insights, setInsights] = useState<ContactInsight[]>([]);
-  const [commitments, setCommitments] = useState<RelationshipCommitment[]>([]);
   const [styleProfile, setStyleProfile] = useState<WritingStyleProfile>();
   const [groupSummary, setGroupSummary] = useState<GroupConversationSummary>();
   const [groupDescription, setGroupDescription] = useState<string>();
@@ -137,9 +140,15 @@ export function App() {
   const [error, setError] = useState<string>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("amiros-sidebar") === "collapsed");
   const [inboxInitialFilter, setInboxInitialFilter] = useState<"all" | "unread">("all");
-  const [inboxContactSettingsTab, setInboxContactSettingsTab] = useState<"configure" | "knowledge" | "commitments">("configure");
+  const [inboxContactSettingsTab, setInboxContactSettingsTab] = useState<"configure" | "knowledge">("configure");
   const [highlightedMessageId, setHighlightedMessageId] = useState<string>();
+  const [intelligenceNavigationRequest, setIntelligenceNavigationRequest] = useState<{
+    id: number;
+    tab: "briefing";
+    queueFilter: "todo";
+  }>();
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<AmirOSUpdateStatus>();
   const mutationVersion = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -171,6 +180,21 @@ export function App() {
     return () => window.clearInterval(interval);
   }, [refresh]);
 
+  const refreshUpdateStatus = useCallback(async (force = false) => {
+    try {
+      setUpdateStatus(await getUpdateStatus(force));
+    } catch {
+      // Update checks should never interrupt someone using their local dashboard.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshUpdateStatus();
+    if (demoMode) return;
+    const interval = window.setInterval(() => void refreshUpdateStatus(), 15 * 60_000);
+    return () => window.clearInterval(interval);
+  }, [refreshUpdateStatus]);
+
   useEffect(() => {
     document.documentElement.dataset.theme = dashboard?.settings.theme || "forest";
   }, [dashboard?.settings.theme]);
@@ -185,7 +209,6 @@ export function App() {
     setManualMemory([]);
     setProfile(undefined);
     setInsights([]);
-    setCommitments([]);
     setStyleProfile(undefined);
     setGroupSummary(undefined);
     setGroupDescription(undefined);
@@ -202,7 +225,6 @@ export function App() {
         setManualMemory(result.manualMemory);
         setProfile(result.profile);
         setInsights(result.insights);
-        setCommitments(result.commitments);
         setStyleProfile(result.styleProfile);
         setGroupSummary(result.groupSummary);
         setGroupDescription(result.groupDescription);
@@ -236,7 +258,6 @@ export function App() {
         setManualMemory(result.manualMemory);
         setProfile(result.profile);
         setInsights(result.insights);
-        setCommitments(result.commitments);
         setStyleProfile(result.styleProfile);
         setGroupSummary(result.groupSummary);
         setGroupDescription(result.groupDescription);
@@ -282,6 +303,7 @@ export function App() {
 
   const navigate = (nextView: ViewName) => {
     if (nextView === "inbox") { setInboxInitialFilter("all"); setInboxContactSettingsTab("configure"); setHighlightedMessageId(undefined); }
+    if (nextView === "intelligence") setIntelligenceNavigationRequest(undefined);
     if (nextView === "inbox" && window.matchMedia("(max-width: 720px)").matches) {
       setSelectedChatId(undefined);
     }
@@ -292,16 +314,14 @@ export function App() {
     if (window.matchMedia("(max-width: 720px)").matches) setSelectedChatId(undefined);
     setView("inbox");
   };
+  const openTodoReview = () => {
+    setIntelligenceNavigationRequest({ id: Date.now(), tab: "briefing", queueFilter: "todo" });
+    setView("intelligence");
+  };
   const openChat = (chatId: string, messageId?: string) => {
     setSelectedChatId(chatId);
     setInboxContactSettingsTab("configure");
     setHighlightedMessageId(messageId);
-    setView("inbox");
-  };
-  const openContactSettings = (chatId: string, tab: "knowledge" | "commitments") => {
-    setSelectedChatId(chatId);
-    setInboxContactSettingsTab(tab);
-    setHighlightedMessageId(undefined);
     setView("inbox");
   };
   const selectInboxChat = (chatId: string | undefined) => {
@@ -345,7 +365,6 @@ export function App() {
         setManualMemory([]);
         setProfile(undefined);
         setInsights([]);
-        setCommitments([]);
         setStyleProfile(undefined);
         setGroupSummary(undefined);
         setIncomingMessageCount(0);
@@ -400,7 +419,6 @@ export function App() {
       const result = await analyzeContactIntelligence(chatId);
       if (chatId === selectedChatId) {
         setInsights(result.insights);
-        setCommitments(result.commitments);
       }
       await refreshIntelligence();
     } catch (actionError) {
@@ -419,15 +437,15 @@ export function App() {
     await refreshIntelligence();
   };
 
-  const changeCommitment = async (
+  const changeTodoTask = async (
     chatId: string,
-    commitmentId: string,
-    status: RelationshipCommitment["status"],
+    todoId: string,
+    patch: { status?: TodoTask["status"]; dueAt?: number | null; priority?: TodoTask["priority"] },
   ) => {
-    const updated = await updateContactCommitment(chatId, commitmentId, status);
-    if (chatId === selectedChatId) setCommitments(updated);
-    await refreshIntelligence();
+    await updateTodoTask(chatId, todoId, patch);
+    await Promise.all([refreshIntelligence(), refresh()]);
   };
+  const changeTodoStatus = (chatId: string, todoId: string, status: TodoTask["status"]) => changeTodoTask(chatId, todoId, { status });
 
   const learnWritingStyle = async (chatId: string) => {
     try {
@@ -680,6 +698,10 @@ export function App() {
     }
   };
 
+  const startDashboardUpdate = async () => {
+    await startAmirosUpdate();
+  };
+
   if (!dashboard) {
     return (
       <div className="launch-state">
@@ -698,10 +720,10 @@ export function App() {
       <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} />
       <div className="app-body">
         {error ? <div className="error-banner"><AlertTriangle size={17} />{error}<button onClick={() => setError(undefined)}>Dismiss</button></div> : null}
-        {view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onOpenUnread={openUnreadInbox} onPreset={choosePreset} onTrackingDecision={decideKnowledgeTracking} onOpenTrackingChat={(chatId) => openChat(chatId)} /> : null}
-        {view === "intelligence" ? <IntelligenceView data={intelligence} chats={chats} contacts={dashboard.settings.contacts} loading={loadingIntelligence} onRefresh={refreshIntelligence} onOpenChat={openChat} onOpenContactSettings={openContactSettings} onOpenCalendar={() => setView("calendar")} onGenerateSummary={(chatId, isGroup) => isGroup ? summarizeSelectedGroup(chatId) : generateProfile(chatId)} onCommitmentStatus={changeCommitment} onCalendarStatus={changeCalendarStatus} onRegenerateCalendarTitle={regenerateEventTitle} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onDeleteQuestion={deleteQuestion} /> : null}
+        {view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onOpenUnread={openUnreadInbox} onPreset={choosePreset} onTrackingDecision={decideKnowledgeTracking} onOpenTrackingChat={(chatId) => openChat(chatId)} onOpenTodoReview={openTodoReview} onTodoStatus={changeTodoStatus} /> : null}
+        {view === "intelligence" ? <IntelligenceView data={intelligence} chats={chats} contacts={dashboard.settings.contacts} loading={loadingIntelligence} onRefresh={refreshIntelligence} onOpenChat={openChat} onOpenCalendar={() => setView("calendar")} onGenerateSummary={(chatId, isGroup) => isGroup ? summarizeSelectedGroup(chatId) : generateProfile(chatId)} onCalendarStatus={changeCalendarStatus} onRegenerateCalendarTitle={regenerateEventTitle} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onDeleteQuestion={deleteQuestion} navigationRequest={intelligenceNavigationRequest} /> : null}
         {view === "calendar" ? <CalendarView data={intelligence} onOpenChat={openChat} onStatus={changeCalendarStatus} onRegenerateTitle={regenerateEventTitle} /> : null}
-        {view === "inbox" ? <InboxView chats={chats} unreadCount={unreadCount} initialFilter={inboxInitialFilter} initialContactSettingsTab={inboxContactSettingsTab} selectedChatId={selectedChatId} highlightedMessageId={highlightedMessageId} messages={visibleMessages} memory={visibleMemory} manualMemory={visibleManualMemory} profile={visibleProfile} insights={insights} commitments={commitments} styleProfile={styleProfile} groupSummary={groupSummary} groupDescription={groupDescription} composerDraft={assistantComposerDraft?.chatId === selectedChatId ? assistantComposerDraft?.body : undefined} onComposerDraftConsumed={() => setAssistantComposerDraft(undefined)} incomingMessageCount={incomingMessageCount} contact={visibleContact} drafts={dashboard.drafts} loading={loadingChat} onSelectChat={selectInboxChat} onMarkRead={readChat} onModeChange={changeMode} onContactChange={changeContact} onAddMemory={addMemory} onRemoveMemory={removeMemory} onGenerateProfile={generateProfile} onAnalyzeIntelligence={analyzeIntelligence} onInsightChange={changeInsight} onCommitmentStatus={changeCommitment} onGenerateWritingStyle={learnWritingStyle} onGenerateGroupSummary={summarizeSelectedGroup} onApproveDraft={approve} onDismissDraft={dismiss} onSend={send} onSendMedia={sendChatMedia} onGenerateImage={generateChatImage} onReact={react} onReply={reply} onForward={forward} onScanHistory={scanHistory} /> : null}
+        {view === "inbox" ? <InboxView chats={chats} unreadCount={unreadCount} initialFilter={inboxInitialFilter} initialContactSettingsTab={inboxContactSettingsTab} selectedChatId={selectedChatId} highlightedMessageId={highlightedMessageId} messages={visibleMessages} memory={visibleMemory} manualMemory={visibleManualMemory} profile={visibleProfile} insights={insights} styleProfile={styleProfile} groupSummary={groupSummary} groupDescription={groupDescription} composerDraft={assistantComposerDraft?.chatId === selectedChatId ? assistantComposerDraft?.body : undefined} onComposerDraftConsumed={() => setAssistantComposerDraft(undefined)} incomingMessageCount={incomingMessageCount} contact={visibleContact} drafts={dashboard.drafts} loading={loadingChat} onSelectChat={selectInboxChat} onMarkRead={readChat} onModeChange={changeMode} onContactChange={changeContact} onAddMemory={addMemory} onRemoveMemory={removeMemory} onGenerateProfile={generateProfile} onAnalyzeIntelligence={analyzeIntelligence} onInsightChange={changeInsight} onGenerateWritingStyle={learnWritingStyle} onGenerateGroupSummary={summarizeSelectedGroup} onApproveDraft={approve} onDismissDraft={dismiss} onSend={send} onSendMedia={sendChatMedia} onGenerateImage={generateChatImage} onReact={react} onReply={reply} onForward={forward} onScanHistory={scanHistory} /> : null}
         {view === "contacts" ? <ContactsView chats={chats} onModeChange={changeMode} onOpenChat={openChat} /> : null}
         {view === "automations" ? <AutomationsView data={dashboard} onSave={saveQuietHours} /> : null}
         {view === "usage" ? <UsageView data={dashboard} onPreset={choosePreset} /> : null}
@@ -709,6 +731,7 @@ export function App() {
         {view === "settings" ? <SettingsView data={dashboard} onSave={saveSettings} onSaveApiKey={saveApiKey} onRelink={async () => { await relink(); }} onPause={togglePaused} /> : null}
         <FloatingAssistant data={intelligence} loading={loadingIntelligence} onRefresh={refreshIntelligence} onAsk={askRelationships} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onSaveKnowledge={addMemory} onInsertReply={(chatId, body) => { setAssistantComposerDraft({ chatId, body }); openChat(chatId); }} />
         <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} theme={dashboard.settings.theme} ownerProfile={dashboard.settings.ownerProfile} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onFinishOnboarding={async (choice, theme) => saveSettings({ knowledgeTrackingDefault: choice, theme })} onSaveOwnerProfile={async (ownerProfile) => saveSettings({ ownerProfile })} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
+        <UpdatePrompt update={updateStatus} onStartUpdate={startDashboardUpdate} />
       </div>
     </div>
   );

@@ -21,11 +21,18 @@ export type ConnectionStatus =
   | "ready"
   | "disconnected";
 
+/**
+ * Deliberately explicit rather than inferred from a name, photo, or writing
+ * style. This belongs to one direct contact and is ignored for group chats.
+ */
+export type ContactPronouns = "unspecified" | "she/her" | "he/him" | "they/them";
+
 export type ContactPreferences = {
   mode: ReplyMode;
   relationship: string;
   tone: string;
   language: string;
+  pronouns: ContactPronouns;
   memoryEnabled: boolean;
   /** Controls automatic intelligence suggestions. Conversation context remains local. */
   knowledgeTracking: KnowledgeTrackingStatus;
@@ -39,6 +46,16 @@ export type ConversationMemoryEntry = {
   author?: "owner" | "contact" | "group_member" | "assistant";
   content: string;
   senderName?: string;
+  /** WhatsApp mention IDs captured with the message when available. */
+  mentionIds?: string[];
+  /** True when WhatsApp confirmed that the owner was mentioned in this message. */
+  ownerMentioned?: boolean;
+  /**
+   * Keeps a message available as private conversation context without letting
+   * the automatic intelligence pipeline turn it into a suggestion. This is
+   * used for explicit self-chat commands sent to AmirOS.
+   */
+  excludeFromAutomaticLearning?: boolean;
   timestamp: number;
   messageId?: string;
 };
@@ -86,6 +103,37 @@ export type RelationshipCommitment = {
   evidence: MemoryEvidence;
   createdAt: number;
   updatedAt: number;
+};
+
+/**
+ * A personal action for the owner. Unlike a commitment, this is deliberately
+ * owner-only: it is surfaced as a reviewable to-do and never represents a
+ * promise someone else made.
+ */
+export type TodoTask = {
+  id: string;
+  /** A short, owner-facing next action, for example "Call the dentist". */
+  title: string;
+  /**
+   * `inferred` tasks still need a decision, `open` tasks were accepted by the
+   * owner, and the remaining states are durable review decisions.
+   */
+  status: "inferred" | "open" | "done" | "dismissed";
+  /** The owner's preferred ordering for an accepted to-do. */
+  priority: "low" | "normal" | "high";
+  dueAt?: number;
+  /** Set when the owner checks the task off; completed tasks are never deleted. */
+  completedAt?: number;
+  evidence: MemoryEvidence;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type TodoTaskPatch = {
+  status?: TodoTask["status"];
+  title?: string;
+  dueAt?: number | null;
+  priority?: TodoTask["priority"];
 };
 
 export type CalendarEvent = {
@@ -154,6 +202,7 @@ type ConversationMemory = {
   insights: ContactInsight[];
   commitments: RelationshipCommitment[];
   events: CalendarEvent[];
+  todos: TodoTask[];
   styleProfile?: WritingStyleProfile;
   groupSummary?: GroupConversationSummary;
   /** Cursor for automatic relationship analysis, so old messages are never re-scanned. */
@@ -167,7 +216,7 @@ export type IntelligenceSearchRecord = {
   id: string;
   chatId: string;
   contactName?: string;
-  kind: "message" | "memory" | "insight" | "commitment" | "profile" | "calendar_event";
+  kind: "message" | "memory" | "insight" | "commitment" | "todo" | "profile" | "calendar_event";
   content: string;
   senderName?: string;
   sourceAuthor?: "owner" | "contact" | "group_member";
@@ -198,6 +247,7 @@ export type IntelligenceChatSnapshot = {
   insights: ContactInsight[];
   commitments: RelationshipCommitment[];
   events: CalendarEvent[];
+  todos: TodoTask[];
   profile?: ContactProfile;
   styleProfile?: WritingStyleProfile;
   groupSummary?: GroupConversationSummary;
@@ -291,6 +341,7 @@ const DEFAULT_CONTACT: ContactPreferences = {
   relationship: "Contact",
   tone: "Warm & concise",
   language: "Automatic",
+  pronouns: "unspecified",
   memoryEnabled: true,
   knowledgeTracking: "pending",
   customInstructions: "",
@@ -314,6 +365,12 @@ function normalizeKnowledgeTracking(value: unknown, fallback: KnowledgeTrackingS
 
 function normalizeKnowledgeTrackingDefault(value: unknown): KnowledgeTrackingDefault {
   return value === "private" || value === "off" ? value : "ask";
+}
+
+function normalizeContactPronouns(value: unknown): ContactPronouns {
+  return value === "she/her" || value === "he/him" || value === "they/them"
+    ? value
+    : "unspecified";
 }
 
 const DEFAULT_STATE: PersistedState = {
@@ -454,6 +511,72 @@ export function hasCalendarPlanIntent(content: string): boolean {
   const newsLike = /\b(?:breaking|top headlines?|news update|according to|reported|report says|published|killed|strikes?|election|markets?|gmt)\b|(?:חדשות|כותרות|דיווח|דווח|נהרג|תקיפה|בחירות)/iu.test(lower);
   const linkHeavy = /(?:https?:\/\/|www\.|t\.me\/)/iu.test(lower) && normalized.length > 120;
   return explicitCalendarCommand || (!newsLike && !linkHeavy);
+}
+
+/**
+ * Returns true only for a concrete next action that the owner can actually do.
+ * This is deliberately narrower than commitment detection: a plan, a date, or
+ * a statement that another person needs something is not automatically a to-do.
+ */
+export function hasTodoTaskIntent(content: string): boolean {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  const lower = normalized.toLocaleLowerCase();
+  if (!normalized) return false;
+
+  const newsLike = /\b(?:breaking|top headlines?|news update|according to|reported|report says|published|killed|strikes?|election|markets?)\b|(?:חדשות|כותרות|דיווח|דווח|נהרג|תקיפה|בחירות)/iu.test(lower);
+  const linkHeavy = /(?:https?:\/\/|www\.|t\.me\/)/iu.test(lower) && normalized.length > 120;
+  if (newsLike || linkHeavy) return false;
+
+  const action = /\b(?:call|text|message|email|reply|follow[ -]?up|check|buy|pick up|drop off|bring|book|pay|order|send|return|collect|prepare|write|read|review|contact|ask|confirm|cancel|reschedule|fix|make|take|leave|organize|arrange|remind)\b|(?:תתקשר|תתקשרי|להתקשר|תשלח|תשלחי|לשלוח|תענה|תעני|לענות|תקנה|תקני|לקנות|תאסוף|תאספי|לאסוף|תביא|תביאי|להביא|תקבע|תקבעי|לקבוע|תשלם|תשלמי|לשלם|תבדוק|תבדקי|לבדוק|תכתוב|תכתבי|לכתוב|תשאל|תשאלי|לשאול|תאשר|תאשרי|לאשר|תזכיר|תזכירי|לזכור)/iu.test(lower);
+  if (!action) return false;
+
+  const ownerDirected = /\b(?:can|could|would|will)\s+you\b.{0,90}\b(?:call|text|message|email|reply|follow[ -]?up|check|buy|pick up|drop off|bring|book|pay|order|send|return|collect|prepare|write|read|review|contact|ask|confirm|cancel|reschedule|fix|make|take|leave|organize|arrange)\b|\b(?:please|don't forget|do not forget|remember to|remind me to|i need you to|you need to|make sure to)\b.{0,100}|(?:תוכל|תוכלי|אפשר|בבקשה|אל תשכח|אל תשכחי|תזכיר|תזכירי|צריך שת|צריכה שת).{0,100}/iu.test(lower);
+  const ownerStated = /\b(?:i need to|i have to|i should|i must|todo|to-do)\b.{0,100}\b(?:call|text|message|email|reply|follow[ -]?up|check|buy|pick up|drop off|bring|book|pay|order|send|return|collect|prepare|write|read|review|contact|ask|confirm|cancel|reschedule|fix|make|take|leave|organize|arrange)\b|(?:אני צריך|אני צריכה|אני חייב|אני חייבת|אני צריך לעשות|תזכיר לי).{0,100}/iu.test(lower);
+  return ownerDirected || ownerStated;
+}
+
+/**
+ * An action phrase alone is not enough to make a personal to-do. In group
+ * conversations we require positive evidence that it belongs to the owner:
+ * either the owner wrote it or a participant clearly addressed them. This
+ * guards against turning "I need to…" from another member into Amir's task.
+ */
+export function isOwnerTodoSource(
+  content: string,
+  context: {
+    isGroup: boolean;
+    author?: ConversationMemoryEntry["author"];
+    ownerMentioned?: boolean;
+    ownerName?: string;
+  },
+): boolean {
+  if (!hasTodoTaskIntent(content)) return false;
+  const normalized = content.replace(/\s+/g, " ").trim();
+  const lower = normalized.toLocaleLowerCase();
+  const ownerDirected = /\b(?:can|could|would|will)\s+you\b.{0,90}\b(?:call|text|message|email|reply|follow[ -]?up|check|buy|pick up|drop off|bring|book|pay|order|send|return|collect|prepare|write|read|review|contact|ask|confirm|cancel|reschedule|fix|make|take|leave|organize|arrange)\b|\b(?:please|don't forget|do not forget|remember to|remind me to|i need you to|you need to|make sure to)\b.{0,100}|(?:תוכל|תוכלי|אפשר|בבקשה|אל תשכח|אל תשכחי|תזכיר|תזכירי|צריך שת|צריכה שת).{0,100}/iu.test(lower);
+  const ownerStated = /\b(?:i need to|i have to|i should|i must|todo|to-do)\b.{0,100}\b(?:call|text|message|email|reply|follow[ -]?up|check|buy|pick up|drop off|bring|book|pay|order|send|return|collect|prepare|write|read|review|contact|ask|confirm|cancel|reschedule|fix|make|take|leave|organize|arrange)\b|(?:אני צריך|אני צריכה|אני חייב|אני חייבת|אני צריך לעשות|תזכיר לי).{0,100}/iu.test(lower);
+
+  if (context.author === "owner") return ownerDirected || ownerStated;
+  // A contact's first-person task is theirs, not the owner's. A direct request
+  // is still meaningful in a private conversation because it is addressed to
+  // the only other participant.
+  if (!context.isGroup) return ownerDirected;
+  if (!ownerDirected) return false;
+  if (context.ownerMentioned) return true;
+
+  const ownerTokens = (context.ownerName || "")
+    .toLocaleLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .split(/\s+/u)
+    .filter((token) => token.length >= 2);
+  const sourceTokens = lower
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .split(/\s+/u);
+  // Matching any meaningful owner-name token covers natural group phrasing
+  // like "Amir, could you…" even when WhatsApp did not encode an @mention.
+  return ownerTokens.some((token) => sourceTokens.includes(token));
 }
 
 function hasExplicitCalendarCommand(content: string): boolean {
@@ -641,7 +764,7 @@ export class AmirosState {
       // in the pending state.
       if (
         !this.persisted.contacts[chatId] &&
-        (memory.insights.length > 0 || memory.commitments.length > 0 || memory.events.length > 0 || memory.manualItems.length > 0 || memory.profile)
+        (memory.insights.length > 0 || memory.commitments.length > 0 || memory.events.length > 0 || memory.todos.length > 0 || memory.manualItems.length > 0 || memory.profile)
       ) {
         this.persisted.contacts[chatId] = { ...DEFAULT_CONTACT, knowledgeTracking: "enabled" };
         migratedKnowledgeTracking = true;
@@ -649,8 +772,9 @@ export class AmirosState {
     }
     const dedupedKnowledge = this.dedupeKnowledgeInsightsAcrossMemories();
     const dedupedCommitments = this.dedupeCommitmentsAcrossMemories();
+    const dedupedTodos = this.dedupeTodoTasksAcrossMemories();
     const clusteredKnowledge = this.clusterKnowledgeInsightsAcrossMemories();
-    if (migratedKnowledgeTracking || dedupedKnowledge || dedupedCommitments || clusteredKnowledge) this.save();
+    if (migratedKnowledgeTracking || dedupedKnowledge || dedupedCommitments || dedupedTodos || clusteredKnowledge) this.save();
     this.backfillCalendarEvents();
   }
 
@@ -695,6 +819,9 @@ export class AmirosState {
               contactTriggerAccess: normalizeContactTriggerAccess(
                 (contact as Partial<ContactPreferences>).contactTriggerAccess,
               ),
+              pronouns: normalizeContactPronouns(
+                (contact as Partial<ContactPreferences>).pronouns,
+              ),
             } satisfies ContactPreferences];
           }),
         ),
@@ -719,6 +846,14 @@ export class AmirosState {
                       : undefined,
                 content: entry.content.trim().slice(0, 2_000),
                 senderName: entry.senderName?.trim().slice(0, 120) || undefined,
+                mentionIds: Array.isArray(entry.mentionIds)
+                  ? [...new Set(entry.mentionIds
+                    .filter((value): value is string => typeof value === "string")
+                    .map((value) => value.trim().slice(0, 240))
+                    .filter(Boolean))].slice(0, 30)
+                  : undefined,
+                ownerMentioned: entry.ownerMentioned === true || undefined,
+                excludeFromAutomaticLearning: entry.excludeFromAutomaticLearning === true || undefined,
                 timestamp: Number.isFinite(entry.timestamp) ? entry.timestamp : Date.now(),
                 messageId: entry.messageId?.trim().slice(0, 240) || undefined,
               }))
@@ -813,6 +948,56 @@ export class AmirosState {
                 updatedAt: Number.isFinite(item.updatedAt) ? item.updatedAt : Date.now(),
               }))
               .filter((item) => item.title.length > 0 && (item.status !== "inferred" || hasCalendarPlanIntent(item.evidence.excerpt)));
+            type LegacyTodoTask = Omit<TodoTask, "title" | "status"> & {
+              title?: string;
+              content?: string;
+              status?: string;
+            };
+            const todos = ((Array.isArray(memory.todos) ? memory.todos : []) as unknown[])
+              // Accept the short-lived pre-release `content` field during
+              // migration, but persist the public `title` contract from here on.
+              .filter((item): item is LegacyTodoTask =>
+                Boolean(item) && (
+                  typeof (item as LegacyTodoTask).title === "string" ||
+                  typeof (item as LegacyTodoTask).content === "string"
+                ),
+              )
+              .slice(-400)
+              .map((item): TodoTask => {
+                const legacy = item as LegacyTodoTask;
+                return {
+                  id: typeof legacy.id === "string" ? legacy.id.slice(0, 120) : randomUUID(),
+                  title: (legacy.title || legacy.content || "").replace(/\s+/g, " ").trim().slice(0, 1_000),
+                  status: legacy.status === "open" || legacy.status === "done" || legacy.status === "dismissed"
+                    ? legacy.status
+                    : legacy.status === "confirmed"
+                      ? "open"
+                      : legacy.status === "completed"
+                        ? "done"
+                        : "inferred",
+                  priority: legacy.priority === "low" || legacy.priority === "high" ? legacy.priority : "normal",
+                  dueAt: Number.isFinite(legacy.dueAt) ? legacy.dueAt : undefined,
+                  // Older releases did not record a dedicated completion
+                  // timestamp. Their latest update is the best truthful
+                  // completion time we have, so preserve it for the history.
+                  completedAt: legacy.status === "done" || legacy.status === "completed"
+                    ? Number.isFinite(legacy.completedAt)
+                      ? legacy.completedAt
+                      : Number.isFinite(legacy.updatedAt)
+                        ? legacy.updatedAt
+                        : Date.now()
+                    : undefined,
+                  evidence: {
+                    messageId: legacy.evidence?.messageId?.slice(0, 240),
+                    excerpt: (legacy.evidence?.excerpt || legacy.title || legacy.content || "").replace(/\s+/g, " ").trim().slice(0, 600),
+                    senderName: legacy.evidence?.senderName?.replace(/\s+/g, " ").trim().slice(0, 120),
+                    timestamp: Number.isFinite(legacy.evidence?.timestamp) ? legacy.evidence.timestamp : Date.now(),
+                  },
+                  createdAt: Number.isFinite(legacy.createdAt) ? legacy.createdAt : Date.now(),
+                  updatedAt: Number.isFinite(legacy.updatedAt) ? legacy.updatedAt : Date.now(),
+                };
+              })
+              .filter((item) => item.title.length > 0);
             const styleProfile = memory.styleProfile && typeof memory.styleProfile.summary === "string"
               ? {
                   summary: memory.styleProfile.summary.trim().slice(0, 4_000),
@@ -838,7 +1023,7 @@ export class AmirosState {
                   sourceMessageCount: Number.isFinite(memory.groupSummary.sourceMessageCount) ? memory.groupSummary.sourceMessageCount : 0,
                 }
               : undefined;
-            return entries.length > 0 || manualItems.length > 0 || profile || insights.length > 0 || commitments.length > 0 || events.length > 0 || styleProfile || groupSummary
+            return entries.length > 0 || manualItems.length > 0 || profile || insights.length > 0 || commitments.length > 0 || events.length > 0 || todos.length > 0 || styleProfile || groupSummary
               ? [[chatId, {
                   chatName: memory.chatName?.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
                   entries,
@@ -847,6 +1032,7 @@ export class AmirosState {
                   insights,
                   commitments,
                   events,
+                  todos,
                   styleProfile,
                   groupSummary,
                   // Legacy histories have already been reviewed. Starting the
@@ -980,6 +1166,7 @@ export class AmirosState {
       contactTriggerAccess: normalizeContactTriggerAccess(
         stored?.contactTriggerAccess ?? DEFAULT_CONTACT.contactTriggerAccess,
       ),
+      pronouns: normalizeContactPronouns(stored?.pronouns),
     };
   }
 
@@ -1039,6 +1226,9 @@ export class AmirosState {
       knowledgeTracking: patch.knowledgeTracking === undefined
         ? current.knowledgeTracking
         : normalizeKnowledgeTracking(patch.knowledgeTracking),
+      pronouns: patch.pronouns === undefined
+        ? current.pronouns
+        : normalizeContactPronouns(patch.pronouns),
     };
     this.persisted.contacts[chatId] = updated;
     if (patch.memoryEnabled === false) delete this.persisted.memories[chatId];
@@ -1064,7 +1254,11 @@ export class AmirosState {
         : memory.entries;
     return structuredClone(
       afterCursor
-        .filter((entry) => entry.author !== "assistant" && Boolean(entry.content.trim()))
+        .filter((entry) =>
+          entry.author !== "assistant" &&
+          entry.excludeFromAutomaticLearning !== true &&
+          Boolean(entry.content.trim()),
+        )
         .slice(0, Math.max(1, Math.min(60, Math.floor(limit)))),
     );
   }
@@ -1083,6 +1277,23 @@ export class AmirosState {
     if (!this.getContact(chatId).memoryEnabled) return [];
     const safeLimit = Math.max(1, Math.min(400, Math.floor(limit)));
     return structuredClone(this.persisted.memories[chatId]?.entries.slice(-safeLimit) || []);
+  }
+
+  /**
+   * Detect a reply AmirOS already recorded as its own. The linked-device
+   * callback can arrive after a process restart, when the in-memory output
+   * suppression map is no longer available. Matching this persisted record
+   * keeps bot text from being re-imported as a human owner message.
+   */
+  isKnownAssistantOutput(chatId: string, content: string): boolean {
+    const normalized = content.replace(/\s+/g, " ").trim();
+    if (!normalized) return false;
+    return (this.persisted.memories[chatId]?.entries || [])
+      .slice(-120)
+      .some((entry) =>
+        entry.author === "assistant" &&
+        entry.content.replace(/\s+/g, " ").trim() === normalized,
+      );
   }
 
   getManualMemory(chatId: string): ContactMemoryItem[] {
@@ -1113,6 +1324,27 @@ export class AmirosState {
   getCalendarEvents(chatId: string): CalendarEvent[] {
     if (!this.getContact(chatId).memoryEnabled) return [];
     return structuredClone(this.persisted.memories[chatId]?.events || []);
+  }
+
+  getTodoTasks(chatId: string): TodoTask[] {
+    if (!this.getContact(chatId).memoryEnabled) return [];
+    return structuredClone(this.persisted.memories[chatId]?.todos || []);
+  }
+
+  listTodoTasks(): Array<TodoTask & { chatId: string; contactName?: string }> {
+    const statusPriority = (status: TodoTask["status"]) =>
+      status === "inferred" ? 0 : status === "open" ? 1 : status === "done" ? 2 : 3;
+    return Object.entries(this.persisted.memories)
+      .flatMap(([chatId, memory]) => (memory.todos || [])
+        .map((task) => ({
+          ...structuredClone(task),
+          chatId,
+          contactName: memory.chatName || this.persisted.chatNames[chatId],
+        })))
+      .sort((left, right) =>
+        statusPriority(left.status) - statusPriority(right.status)
+        || (left.dueAt || Number.MAX_SAFE_INTEGER) - (right.dueAt || Number.MAX_SAFE_INTEGER)
+        || right.updatedAt - left.updatedAt);
   }
 
   listCalendarEvents(): Array<CalendarEvent & { chatId: string }> {
@@ -1330,7 +1562,11 @@ export class AmirosState {
     if (!this.getContact(chatId).memoryEnabled) return [];
     const safeLimit = Math.max(1, Math.min(400, Math.floor(limit)));
     return (this.persisted.memories[chatId]?.entries || [])
-      .filter((entry) => entry.author === "owner" && entry.content.trim().length > 0)
+      .filter((entry) =>
+        entry.author === "owner" &&
+        entry.excludeFromAutomaticLearning !== true &&
+        entry.content.trim().length > 0,
+      )
       .slice(-safeLimit)
       .map((entry) => entry.content);
   }
@@ -1377,9 +1613,18 @@ export class AmirosState {
         let lastIncomingIndex = -1;
         let lastOutgoingIndex = -1;
         for (let index = memory.entries.length - 1; index >= 0; index -= 1) {
-          const role = memory.entries[index]?.role;
-          if (lastIncomingIndex < 0 && role === "user") lastIncomingIndex = index;
-          if (lastOutgoingIndex < 0 && role === "assistant") lastOutgoingIndex = index;
+          const entry = memory.entries[index];
+          if (!entry) continue;
+
+          // A WhatsApp message authored by the owner is stored with role
+          // "user" so it can inform the assistant, but it is still an
+          // outgoing message in the conversation. Treat it as such here so a
+          // message Amir sends cannot be surfaced as a false "Needs reply"
+          // action for the other person.
+          const isOutgoing = entry.role === "assistant" || entry.author === "owner";
+          const isIncoming = entry.role === "user" && !isOutgoing;
+          if (lastIncomingIndex < 0 && isIncoming) lastIncomingIndex = index;
+          if (lastOutgoingIndex < 0 && isOutgoing) lastOutgoingIndex = index;
           if (lastIncomingIndex >= 0 && lastOutgoingIndex >= 0) break;
         }
         return {
@@ -1387,6 +1632,7 @@ export class AmirosState {
           insights: structuredClone(memory.insights || []),
           commitments: structuredClone(memory.commitments || []),
           events: structuredClone(memory.events || []),
+          todos: structuredClone(memory.todos || []),
           profile: memory.profile ? structuredClone(memory.profile) : undefined,
           styleProfile: memory.styleProfile ? structuredClone(memory.styleProfile) : undefined,
           groupSummary: memory.groupSummary ? structuredClone(memory.groupSummary) : undefined,
@@ -1412,9 +1658,10 @@ export class AmirosState {
       insights: Array<Pick<ContactInsight, "kind" | "content" | "confidence" | "evidence"> & { subjectNames?: string[] }>;
       commitments: Array<Pick<RelationshipCommitment, "content" | "owner" | "assigneeName" | "dueAt" | "evidence">>;
       events?: Array<Pick<CalendarEvent, "title" | "startAt" | "allDay" | "location" | "evidence">>;
+      todos?: Array<Pick<TodoTask, "title" | "dueAt" | "evidence">>;
     },
   ): {
-    source: { insights: ContactInsight[]; commitments: RelationshipCommitment[]; events: CalendarEvent[] };
+    source: { insights: ContactInsight[]; commitments: RelationshipCommitment[]; events: CalendarEvent[]; todos: TodoTask[] };
     targetChatIds: string[];
   } {
     type RoutedInsight = (typeof input.insights)[number] & Pick<ContactInsight, "clusterId" | "subjectChatIds" | "subjectNames">;
@@ -1448,10 +1695,11 @@ export class AmirosState {
       insights: routedInsights.get(sourceChatId) || [],
       commitments: input.commitments,
       events: input.events,
+      todos: input.todos,
     });
     for (const [targetChatId, insights] of routedInsights) {
       if (targetChatId === sourceChatId) continue;
-      this.mergeAnalyzedIntelligence(targetChatId, { insights, commitments: [], events: [] });
+      this.mergeAnalyzedIntelligence(targetChatId, { insights, commitments: [], events: [], todos: [] });
     }
     if (this.clusterKnowledgeInsightsAcrossMemories()) this.save();
     return { source, targetChatIds: [...routedInsights.keys()] };
@@ -1503,16 +1751,53 @@ export class AmirosState {
     return structuredClone(commitment);
   }
 
+  updateTodoTask(
+    chatId: string,
+    todoId: string,
+    patch: TodoTaskPatch,
+  ): TodoTask | undefined {
+    const memory = this.persisted.memories[chatId];
+    const task = memory?.todos.find((item) => item.id === todoId);
+    if (!memory || !task) return undefined;
+    if (patch.status) {
+      task.status = patch.status;
+      if (patch.status === "done") task.completedAt ||= Date.now();
+      else if (patch.status === "open" || patch.status === "inferred") task.completedAt = undefined;
+    }
+    if (patch.title !== undefined) {
+      const title = patch.title.replace(/\s+/g, " ").trim().slice(0, 1_000);
+      if (title) task.title = title;
+    }
+    if (patch.dueAt !== undefined) {
+      task.dueAt = Number.isFinite(patch.dueAt) && patch.dueAt! > 0 ? patch.dueAt! : undefined;
+    }
+    if (patch.priority) task.priority = patch.priority;
+    task.updatedAt = Date.now();
+    memory.updatedAt = task.updatedAt;
+    memory.todos = this.dedupeTodoTasks(memory.todos);
+    this.save();
+    return structuredClone(task);
+  }
+
+  /**
+   * Marks a task complete without removing its evidence or review history.
+   * This is intentionally a status transition rather than a delete operation.
+   */
+  completeTodoTask(chatId: string, todoId: string): TodoTask | undefined {
+    return this.updateTodoTask(chatId, todoId, { status: "done" });
+  }
+
   mergeAnalyzedIntelligence(
     chatId: string,
     input: {
       insights: Array<Pick<ContactInsight, "kind" | "content" | "confidence" | "evidence"> & Pick<ContactInsight, "clusterId" | "subjectChatIds" | "subjectNames">>;
       commitments: Array<Pick<RelationshipCommitment, "content" | "owner" | "assigneeName" | "dueAt" | "evidence">>;
       events?: Array<Pick<CalendarEvent, "title" | "startAt" | "allDay" | "location" | "evidence">>;
+      todos?: Array<Pick<TodoTask, "title" | "dueAt" | "evidence">>;
     },
-  ): { insights: ContactInsight[]; commitments: RelationshipCommitment[]; events: CalendarEvent[] } {
+  ): { insights: ContactInsight[]; commitments: RelationshipCommitment[]; events: CalendarEvent[]; todos: TodoTask[] } {
     const memory = this.persisted.memories[chatId] || {
-      entries: [], manualItems: [], insights: [], commitments: [], events: [], incomingMessageCount: 0, updatedAt: 0,
+      entries: [], manualItems: [], insights: [], commitments: [], events: [], todos: [], incomingMessageCount: 0, updatedAt: 0,
     };
     const now = Date.now();
     for (const candidate of input.insights.slice(0, 40)) {
@@ -1549,12 +1834,51 @@ export class AmirosState {
     }
     for (const candidate of input.commitments.slice(0, 40)) {
       const content = candidate.content.replace(/\s+/g, " ").trim().slice(0, 1_000);
+      const sourceEntry = candidate.evidence.messageId
+        ? memory.entries.find((entry) => entry.messageId === candidate.evidence.messageId)
+        : undefined;
+      if (sourceEntry?.excludeFromAutomaticLearning) continue;
       if (!content || memory.commitments.some((item) => this.isDuplicateCommitment(item, candidate))) continue;
       memory.commitments.push({
         id: randomUUID(), content, owner: candidate.owner,
         assigneeName: candidate.assigneeName?.replace(/\s+/g, " ").trim().slice(0, 120),
         status: "open", dueAt: candidate.dueAt,
         evidence: this.cleanEvidence(candidate.evidence), createdAt: now, updatedAt: now,
+      });
+    }
+    for (const candidate of (input.todos || []).slice(0, 40)) {
+      const title = candidate.title.replace(/\s+/g, " ").trim().slice(0, 1_000);
+      const sourceEntry = candidate.evidence.messageId
+        ? memory.entries.find((entry) => entry.messageId === candidate.evidence.messageId)
+        : undefined;
+      if (sourceEntry?.excludeFromAutomaticLearning) continue;
+      if (!title || !isOwnerTodoSource(sourceEntry?.content || candidate.evidence.excerpt, {
+        isGroup: chatId.endsWith("@g.us"),
+        author: sourceEntry?.author,
+        ownerMentioned: sourceEntry?.ownerMentioned,
+        ownerName: this.persisted.ownerProfile.displayName,
+      })) continue;
+      const existing = memory.todos.find((item) => this.isDuplicateTodoTask(item, candidate));
+      if (existing) {
+        // Any reviewed decision is a durable tombstone. A repeat message may
+        // refresh an unreviewed suggestion, but must never reopen an approved,
+        // completed, or dismissed to-do.
+        if (existing.status !== "inferred") continue;
+        existing.title = title;
+        existing.dueAt = Number.isFinite(candidate.dueAt) && candidate.dueAt! > 0 ? candidate.dueAt : undefined;
+        existing.evidence = this.cleanEvidence(candidate.evidence);
+        existing.updatedAt = now;
+        continue;
+      }
+      memory.todos.push({
+        id: randomUUID(),
+        title,
+        status: "inferred",
+        priority: "normal",
+        dueAt: Number.isFinite(candidate.dueAt) && candidate.dueAt! > 0 ? candidate.dueAt : undefined,
+        evidence: this.cleanEvidence(candidate.evidence),
+        createdAt: now,
+        updatedAt: now,
       });
     }
     for (const candidate of (input.events || []).slice(0, 40)) {
@@ -1591,16 +1915,22 @@ export class AmirosState {
     memory.insights = this.dedupeKnowledgeInsights(memory.insights).slice(-200);
     memory.commitments = this.dedupeCommitments(memory.commitments).slice(-200);
     memory.events = memory.events.slice(-2_200);
+    memory.todos = this.dedupeTodoTasks(memory.todos).slice(-400);
     memory.updatedAt = now;
     this.persisted.memories[chatId] = memory;
     this.dedupeCalendarEventsAcrossChats();
     this.save();
-    return { insights: structuredClone(memory.insights), commitments: structuredClone(memory.commitments), events: structuredClone(memory.events) };
+    return {
+      insights: structuredClone(memory.insights),
+      commitments: structuredClone(memory.commitments),
+      events: structuredClone(memory.events),
+      todos: structuredClone(memory.todos),
+    };
   }
 
   setWritingStyleProfile(chatId: string, profile: Omit<WritingStyleProfile, "updatedAt">): WritingStyleProfile {
     const memory = this.persisted.memories[chatId] || {
-      entries: [], manualItems: [], insights: [], commitments: [], events: [], incomingMessageCount: 0, updatedAt: 0,
+      entries: [], manualItems: [], insights: [], commitments: [], events: [], todos: [], incomingMessageCount: 0, updatedAt: 0,
     };
     const value = { ...profile, updatedAt: Date.now() };
     memory.styleProfile = value;
@@ -1612,7 +1942,7 @@ export class AmirosState {
 
   setGroupSummary(chatId: string, summary: Omit<GroupConversationSummary, "updatedAt">): GroupConversationSummary {
     const memory = this.persisted.memories[chatId] || {
-      entries: [], manualItems: [], insights: [], commitments: [], events: [], incomingMessageCount: 0, updatedAt: 0,
+      entries: [], manualItems: [], insights: [], commitments: [], events: [], todos: [], incomingMessageCount: 0, updatedAt: 0,
     };
     const value = { ...summary, updatedAt: Date.now() };
     memory.groupSummary = value;
@@ -1671,6 +2001,17 @@ export class AmirosState {
         timestamp: item.updatedAt,
       }, item.status === "confirmed" ? 20 : 3));
       memory.commitments.filter((item) => item.status === "open").forEach((item) => push({ id: item.id, chatId, kind: "commitment", content: item.content, senderName: item.assigneeName, status: item.status, timestamp: item.updatedAt }));
+      memory.todos
+        .filter((item) => item.status === "inferred" || item.status === "open")
+        .forEach((item) => push({
+          id: item.id,
+          chatId,
+          kind: "todo",
+          content: `${item.title}${item.dueAt ? ` — due ${new Date(item.dueAt).toLocaleString()}` : ""}`,
+          senderName: item.evidence.senderName,
+          status: item.status,
+          timestamp: item.dueAt || item.updatedAt,
+        }, 12));
       memory.events
         .filter((item) => item.status !== "dismissed" && item.startAt >= Date.now() - 86_400_000)
         .forEach((item) => push({
@@ -1965,6 +2306,7 @@ export class AmirosState {
       insights: [],
       commitments: [],
       events: [],
+      todos: [],
       incomingMessageCount: 0,
       updatedAt: 0,
     };
@@ -1982,6 +2324,14 @@ export class AmirosState {
         author: entry.author,
         content,
         senderName: entry.senderName?.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
+        mentionIds: Array.isArray(entry.mentionIds)
+          ? [...new Set(entry.mentionIds
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim().slice(0, 240))
+            .filter(Boolean))].slice(0, 30)
+          : undefined,
+        ownerMentioned: entry.ownerMentioned === true || undefined,
+        excludeFromAutomaticLearning: entry.excludeFromAutomaticLearning === true || undefined,
         timestamp,
         messageId,
       });
@@ -1990,7 +2340,15 @@ export class AmirosState {
         this.getContact(chatId).knowledgeTracking === "enabled" &&
         (entry.countAsIncoming !== false || entry.extractSignals === true)
       ) {
-        this.extractLocalSignals(memory, { content, senderName: entry.senderName, timestamp, messageId });
+        this.extractLocalSignals(chatId, memory, {
+          content,
+          author: entry.author,
+          senderName: entry.senderName,
+          ownerMentioned: entry.ownerMentioned,
+          excludeFromAutomaticLearning: entry.excludeFromAutomaticLearning,
+          timestamp,
+          messageId,
+        });
       }
       if (entry.role === "user" && entry.countAsIncoming !== false) {
         memory.incomingMessageCount += 1;
@@ -2010,9 +2368,19 @@ export class AmirosState {
   }
 
   private extractLocalSignals(
+    chatId: string,
     memory: ConversationMemory,
-    entry: { content: string; senderName?: string; timestamp: number; messageId?: string },
+    entry: {
+      content: string;
+      author?: ConversationMemoryEntry["author"];
+      senderName?: string;
+      ownerMentioned?: boolean;
+      excludeFromAutomaticLearning?: boolean;
+      timestamp: number;
+      messageId?: string;
+    },
   ): void {
+    if (entry.excludeFromAutomaticLearning) return;
     const text = entry.content;
     const lower = text.toLocaleLowerCase();
     const evidence = this.cleanEvidence({
@@ -2049,9 +2417,66 @@ export class AmirosState {
       });
     }
     this.addCalendarSignal(memory, entry);
+    this.addTodoSignal(chatId, memory, entry);
     memory.insights = memory.insights.slice(-200);
     memory.commitments = memory.commitments.slice(-200);
     memory.events = memory.events.slice(-200);
+    memory.todos = this.dedupeTodoTasks(memory.todos).slice(-400);
+  }
+
+  /**
+   * Provide a lightweight immediate suggestion while the richer automatic
+   * analysis is in flight. The analysis result updates this same task using
+   * shared evidence rather than creating a second one.
+   */
+  private addTodoSignal(
+    chatId: string,
+    memory: ConversationMemory,
+    entry: {
+      content: string;
+      author?: ConversationMemoryEntry["author"];
+      senderName?: string;
+      ownerMentioned?: boolean;
+      timestamp: number;
+      messageId?: string;
+    },
+  ): boolean {
+    if (!isOwnerTodoSource(entry.content, {
+      isGroup: chatId.endsWith("@g.us"),
+      author: entry.author,
+      ownerMentioned: entry.ownerMentioned,
+      ownerName: this.persisted.ownerProfile.displayName,
+    })) return false;
+    const title = entry.content
+      .replace(/^\s*(?:can|could|would|will)\s+you\s+/iu, "")
+      .replace(/^\s*(?:please\s+|don't forget to\s+|do not forget to\s+|remember to\s+|remind me to\s+|i need to\s+|i have to\s+|i should\s+|i must\s+|you need to\s+|make sure to\s+)/iu, "")
+      .replace(/^\s*(?:תוכל(?:י)?\s+|בבקשה\s+|אל תשכח(?:י)?\s+|תזכיר(?:י)?\s+לי\s+|אני צרי[כךה]?\s+|אני חייב(?:ת)?\s+)/iu, "")
+      .replace(/[.?!]+$/u, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 1_000);
+    if (!title) return false;
+    const now = Date.now();
+    const candidate: Pick<TodoTask, "title" | "dueAt" | "evidence"> = {
+      title: title.charAt(0).toLocaleUpperCase() + title.slice(1),
+      evidence: this.cleanEvidence({
+        messageId: entry.messageId,
+        excerpt: entry.content,
+        senderName: entry.senderName,
+        timestamp: entry.timestamp,
+      }),
+    };
+    if (memory.todos.some((item) => this.isDuplicateTodoTask(item, candidate))) return false;
+    memory.todos.push({
+      id: randomUUID(),
+      title: candidate.title,
+      status: "inferred",
+      priority: "normal",
+      evidence: candidate.evidence,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return true;
   }
 
   private addCalendarSignal(
@@ -2441,6 +2866,72 @@ export class AmirosState {
     return changed;
   }
 
+  private isDuplicateTodoTask(
+    existing: TodoTask,
+    candidate: Pick<TodoTask, "title" | "dueAt" | "evidence">,
+  ): boolean {
+    const sameEvidence =
+      (Boolean(candidate.evidence.messageId) && existing.evidence.messageId === candidate.evidence.messageId) ||
+      (existing.evidence.timestamp === candidate.evidence.timestamp &&
+        this.similarText(existing.evidence.excerpt, candidate.evidence.excerpt));
+    if (sameEvidence) return true;
+    if (existing.dueAt && candidate.dueAt && Math.abs(existing.dueAt - candidate.dueAt) > 24 * 3_600_000) return false;
+    if (this.similarText(existing.title, candidate.title) || this.hasMeaningfulKnowledgeOverlap(existing.title, candidate.title)) return true;
+
+    // Action words themselves are not enough to make two tasks equivalent.
+    // “Call the dentist” and “call David” should coexist, while “follow up
+    // with Shelly” and “follow-up Shelly” should collapse.
+    const ignored = new Set([
+      "call", "text", "message", "email", "reply", "follow", "followup", "up", "check", "buy", "pick", "drop", "bring",
+      "book", "pay", "order", "send", "return", "collect", "prepare", "write", "read", "review", "contact", "ask", "confirm",
+      "cancel", "reschedule", "fix", "make", "take", "leave", "organize", "arrange", "remind", "the", "a", "an", "to", "with",
+      "for", "and", "on", "at", "my", "your", "me", "please", "today", "tomorrow", "monday", "tuesday", "wednesday", "thursday",
+      "friday", "saturday", "sunday",
+    ]);
+    const tokens = (value: string) => new Set(value
+      .normalize("NFKD")
+      .toLocaleLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .split(/\s+/u)
+      .map((token) => token.replace(/(?:ing|ed|s)$/u, ""))
+      .filter((token) => token.length >= 3 && !ignored.has(token) && !/^\d+$/u.test(token)));
+    const left = tokens(existing.title);
+    const right = tokens(candidate.title);
+    if (left.size === 0 || right.size === 0) return false;
+    const shared = [...left].filter((token) => right.has(token)).length;
+    return shared >= 1 && shared / Math.min(left.size, right.size) >= 0.8;
+  }
+
+  private dedupeTodoTasks(tasks: TodoTask[]): TodoTask[] {
+    const kept: TodoTask[] = [];
+    const priority = (status: TodoTask["status"]) =>
+      status === "done" ? 4 : status === "dismissed" ? 3 : status === "open" ? 2 : 1;
+    for (const task of tasks) {
+      const index = kept.findIndex((existing) => this.isDuplicateTodoTask(existing, task));
+      if (index < 0) {
+        kept.push(task);
+        continue;
+      }
+      const current = kept[index]!;
+      const replacement = priority(task.status) > priority(current.status) ? task : current;
+      replacement.createdAt = Math.min(current.createdAt, task.createdAt);
+      replacement.updatedAt = Math.max(current.updatedAt, task.updatedAt);
+      kept[index] = replacement;
+    }
+    return kept;
+  }
+
+  private dedupeTodoTasksAcrossMemories(): boolean {
+    let changed = false;
+    for (const memory of Object.values(this.persisted.memories)) {
+      const deduped = this.dedupeTodoTasks(memory.todos || []);
+      if (deduped.length === (memory.todos || []).length) continue;
+      memory.todos = deduped;
+      changed = true;
+    }
+    return changed;
+  }
+
   private isSameCalendarEvent(
     existing: CalendarEvent,
     candidate: { title: string; startAt: number; evidence: MemoryEvidence },
@@ -2519,6 +3010,7 @@ export class AmirosState {
       insights: [],
       commitments: [],
       events: [],
+      todos: [],
       incomingMessageCount: 0,
       updatedAt: 0,
     };
@@ -2551,6 +3043,7 @@ export class AmirosState {
       insights: [],
       commitments: [],
       events: [],
+      todos: [],
       incomingMessageCount: 0,
       updatedAt: 0,
     };
@@ -2573,6 +3066,7 @@ export class AmirosState {
     senderName?: string,
     countAsIncoming = true,
     author: ConversationMemoryEntry["author"] = countAsIncoming ? "contact" : "owner",
+    excludeFromAutomaticLearning = false,
   ): void {
     if (!this.getContact(chatId).memoryEnabled) return;
     const now = Date.now();
@@ -2583,6 +3077,7 @@ export class AmirosState {
       author,
       timestamp: now,
       countAsIncoming,
+      excludeFromAutomaticLearning,
     });
     this.rememberMessage(chatId, {
       role: "assistant",

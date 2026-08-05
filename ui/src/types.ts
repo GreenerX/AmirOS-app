@@ -27,6 +27,14 @@ export type AmirOSRelease = {
   notes: ReleaseNote[];
   history?: AmirOSRelease[];
 };
+
+export type AmirOSUpdateStatus = {
+  status: "available" | "current" | "unavailable";
+  currentVersion: string;
+  latestVersion?: string;
+  checkedAt: number;
+  detail?: string;
+};
 export type ThemeName =
   | "forest"
   | "ocean"
@@ -36,11 +44,15 @@ export type ThemeName =
   | "rose"
   | "graphite";
 
+/** An explicit, per-contact preference. AmirOS never infers this from a name or photo. */
+export type ContactPronouns = "unspecified" | "she/her" | "he/him" | "they/them";
+
 export type ContactPreferences = {
   mode: ReplyMode;
   relationship: string;
   tone: string;
   language: string;
+  pronouns: ContactPronouns;
   memoryEnabled: boolean;
   knowledgeTracking: KnowledgeTrackingStatus;
   customInstructions: string;
@@ -256,11 +268,31 @@ export type IntelligenceChat = {
   insights: ContactInsight[];
   commitments: RelationshipCommitment[];
   events: CalendarEvent[];
+  /**
+   * Older local dashboard data may not have the task pipeline yet. Keep this
+   * optional at the boundary so an upgraded interface can render safely while
+   * the server catches up; consumers default to an empty list.
+   */
+  todos?: TodoTask[];
   profile?: ContactProfile;
   styleProfile?: WritingStyleProfile;
   groupSummary?: GroupConversationSummary;
   needsReply: boolean;
   lastIncoming?: ChatMemoryEntry;
+  updatedAt: number;
+};
+
+export type TodoTask = {
+  id: string;
+  chatId: string;
+  contactName: string;
+  title: string;
+  status: "inferred" | "open" | "done" | "dismissed";
+  priority: "low" | "normal" | "high";
+  dueAt?: number;
+  completedAt?: number;
+  evidence: MemoryEvidence;
+  createdAt: number;
   updatedAt: number;
 };
 
@@ -270,6 +302,8 @@ export type IntelligenceData = {
   commitments: Array<RelationshipCommitment & { chatId: string; contactName: string }>;
   changes: Array<ContactInsight & { chatId: string; contactName: string }>;
   events: Array<CalendarEvent & { chatId: string; contactName: string }>;
+  /** Optional while an existing local installation has not yet received the to-do pipeline. */
+  todos?: TodoTask[];
   chats: IntelligenceChat[];
   questionHistory: Array<{
     id: string;
