@@ -19,6 +19,14 @@ pause() {
 
 cd "$PROJECT_DIR" || exit 1
 
+# The first approval is intentionally made for this installer. Once it is
+# running, clear the download quarantine marker from the rest of this trusted
+# AmirOS folder so macOS does not ask the tester to approve Open/Stop AmirOS
+# one file at a time.
+if command -v xattr >/dev/null 2>&1; then
+  xattr -dr com.apple.quarantine "$PROJECT_DIR" 2>/dev/null || true
+fi
+
 if ! command -v node >/dev/null 2>&1 || ! command -v npx >/dev/null 2>&1; then
   echo
   echo "AmirOS needs Node.js before it can be installed."

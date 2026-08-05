@@ -30,23 +30,23 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-05",
-  headline: "A simpler, smarter first start",
+  headline: "A smoother, more personal AmirOS",
   notes: [
     {
-      title: "Set up everything in one place",
-      detail: "New users can add their own OpenAI API key and link WhatsApp with a QR code without leaving the welcome guide.",
+      title: "Settings now save themselves",
+      detail: "Changes are saved automatically as you make them. A small confirmation appears and fades away once AmirOS has safely stored the update.",
     },
     {
-      title: "You choose what AmirOS learns",
-      detail: "Pick whether new chats need approval, private chats are tracked automatically, or knowledge tracking stays off. AmirOS asks before it learns when you choose that option.",
+      title: "A more personal first setup",
+      detail: "New users can add their name, choose an illustrated avatar and color theme, connect OpenAI, link WhatsApp, and choose what AmirOS may learn before opening the dashboard.",
     },
     {
-      title: "Every update stays easy to follow",
-      detail: "The What’s new window now keeps a simple history of past versions, so you can see what changed whenever you need to.",
+      title: "Cleaner chats and profile photos",
+      detail: "Chats keep their time order and return to your previous position. Profile photos can be cropped, repositioned, saved as a collection, and removed individually.",
     },
     {
-      title: "A more dependable launch",
-      detail: "AmirOS can clear an outdated background-service record before starting, helping it recover cleanly after an interrupted session.",
+      title: "More reliable calendar suggestions",
+      detail: "AmirOS now respects the exact time written in a message, handles same-day weekday references more accurately, and gives clearer Apple Calendar subscription guidance.",
     },
   ],
 };
@@ -57,6 +57,25 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.3.0",
+    releasedAt: "2026-08-05",
+    headline: "A simpler, smarter first start",
+    notes: [
+      {
+        title: "Set up everything in one place",
+        detail: "New users can add their own OpenAI API key and link WhatsApp with a QR code without leaving the welcome guide.",
+      },
+      {
+        title: "You choose what AmirOS learns",
+        detail: "Choose approval-first, private-chat tracking, or no tracking for new chats.",
+      },
+      {
+        title: "Every update stays easy to follow",
+        detail: "Browse a simple history of What’s new notes directly in AmirOS.",
+      },
+    ],
+  },
   {
     version: "0.2.2",
     releasedAt: "2026-08-04",

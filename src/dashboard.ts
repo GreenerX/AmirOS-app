@@ -4,9 +4,11 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   readSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -1135,6 +1137,50 @@ function ownerAvatarContentType(path: string): string {
   }
 }
 
+type OwnerAvatarRecord = {
+  id: string;
+  url: string;
+  label: string;
+};
+
+const OWNER_AVATAR_DIRECTORY = resolve("work/profile-avatars");
+const LEGACY_OWNER_AVATAR_PATH = resolve("work/owner-avatar");
+const OWNER_AVATAR_ID = /^[a-f0-9]{24}$/;
+
+function ownerAvatarPath(id: string): string | undefined {
+  if (!OWNER_AVATAR_ID.test(id)) return undefined;
+  return join(OWNER_AVATAR_DIRECTORY, `${id}.png`);
+}
+
+function listOwnerAvatars(): OwnerAvatarRecord[] {
+  const avatars: Array<OwnerAvatarRecord & { updatedAt: number }> = [];
+  if (existsSync(LEGACY_OWNER_AVATAR_PATH)) {
+    avatars.push({
+      id: "legacy",
+      url: `/api/profile/avatar?library=${statSync(LEGACY_OWNER_AVATAR_PATH).mtimeMs}`,
+      label: "Uploaded photo",
+      updatedAt: statSync(LEGACY_OWNER_AVATAR_PATH).mtimeMs,
+    });
+  }
+  if (existsSync(OWNER_AVATAR_DIRECTORY)) {
+    for (const filename of readdirSync(OWNER_AVATAR_DIRECTORY)) {
+      const id = filename.replace(/\.png$/i, "");
+      const path = ownerAvatarPath(id);
+      if (!path || filename !== `${id}.png` || !existsSync(path)) continue;
+      const updatedAt = statSync(path).mtimeMs;
+      avatars.push({
+        id,
+        url: `/api/profile/avatars/${id}?library=${updatedAt}`,
+        label: "Uploaded photo",
+        updatedAt,
+      });
+    }
+  }
+  return avatars
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .map(({ updatedAt: _updatedAt, ...avatar }) => avatar);
+}
+
 function updatePreset(
   presetName: ModelPresetName,
   config: AppConfig,
@@ -1218,7 +1264,10 @@ export function startAmirosDashboard(options: DashboardOptions) {
         const feedUrl = `${baseUrl}/api/calendar/feed.ics?token=${encodeURIComponent(calendarFeedToken)}`;
         sendJson(response, 200, {
           httpUrl: feedUrl,
-          webcalUrl: feedUrl.replace(/^https?:/i, "webcal:"),
+          // Calendar.app does not reliably subscribe to a webcal URL that
+          // points at 127.0.0.1. Keep the direct Apple Calendar action for a
+          // real public URL; local users can safely copy the HTTP feed instead.
+          webcalUrl: config.amirosPublicUrl ? feedUrl.replace(/^https?:/i, "webcal:") : undefined,
           publicUrlConfigured: Boolean(config.amirosPublicUrl),
           confirmedEvents: state.listCalendarEvents().filter((event) => event.status === "confirmed").length,
         });
@@ -1278,10 +1327,16 @@ export function startAmirosDashboard(options: DashboardOptions) {
         return;
       }
 
-      if (request.method === "GET" && pathname === "/api/profile/avatar") {
-        const avatarPath = resolve("work/owner-avatar");
-        if (!existsSync(avatarPath)) {
-          sendJson(response, 404, { error: "No custom profile image has been uploaded" });
+      if (request.method === "GET" && pathname === "/api/profile/avatars") {
+        sendJson(response, 200, { avatars: listOwnerAvatars() });
+        return;
+      }
+
+      const uploadedAvatarMatch = pathname.match(/^\/api\/profile\/avatars\/([a-f0-9]{24})$/);
+      if (request.method === "GET" && uploadedAvatarMatch) {
+        const avatarPath = ownerAvatarPath(uploadedAvatarMatch[1]!);
+        if (!avatarPath || !existsSync(avatarPath)) {
+          sendJson(response, 404, { error: "Profile image not found" });
           return;
         }
         response.writeHead(200, {
@@ -1289,6 +1344,38 @@ export function startAmirosDashboard(options: DashboardOptions) {
           "cache-control": "private, max-age=300",
         });
         createReadStream(avatarPath).pipe(response);
+        return;
+      }
+
+      if (request.method === "DELETE" && (uploadedAvatarMatch || pathname === "/api/profile/avatars/legacy")) {
+        const avatarId = uploadedAvatarMatch?.[1] || "legacy";
+        const avatarPath = avatarId === "legacy" ? LEGACY_OWNER_AVATAR_PATH : ownerAvatarPath(avatarId);
+        if (!avatarPath || !existsSync(avatarPath)) {
+          sendJson(response, 404, { error: "Profile image not found" });
+          return;
+        }
+        const selectedPath = state.getSettings().ownerProfile.avatarUrl.split("?")[0];
+        const deletingSelectedAvatar = avatarId === "legacy"
+          ? selectedPath === "/api/profile/avatar"
+          : selectedPath === `/api/profile/avatars/${avatarId}`;
+        unlinkSync(avatarPath);
+        const profile = deletingSelectedAvatar
+          ? state.updateOwnerProfile({ avatarUrl: "/profile-avatars/avatar-01.png?v=2" })
+          : state.getSettings().ownerProfile;
+        sendJson(response, 200, { profile, avatars: listOwnerAvatars() });
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/profile/avatar") {
+        if (!existsSync(LEGACY_OWNER_AVATAR_PATH)) {
+          sendJson(response, 404, { error: "No custom profile image has been uploaded" });
+          return;
+        }
+        response.writeHead(200, {
+          "content-type": ownerAvatarContentType(LEGACY_OWNER_AVATAR_PATH),
+          "cache-control": "private, max-age=300",
+        });
+        createReadStream(LEGACY_OWNER_AVATAR_PATH).pipe(response);
         return;
       }
 
@@ -1320,9 +1407,11 @@ export function startAmirosDashboard(options: DashboardOptions) {
           sendJson(response, 413, { error: "Profile image must be under 6 MB" });
           return;
         }
-        const avatarPath = resolve("work/owner-avatar");
+        mkdirSync(OWNER_AVATAR_DIRECTORY, { recursive: true, mode: 0o700 });
+        const avatarId = randomBytes(12).toString("hex");
+        const avatarPath = ownerAvatarPath(avatarId)!;
         writeFileSync(avatarPath, bytes, { mode: 0o600 });
-        const avatarUrl = `/api/profile/avatar?updated=${Date.now()}`;
+        const avatarUrl = `/api/profile/avatars/${avatarId}?updated=${Date.now()}`;
         sendJson(response, 200, { profile: state.updateOwnerProfile({ avatarUrl }) });
         return;
       }

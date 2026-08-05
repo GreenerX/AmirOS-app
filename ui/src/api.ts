@@ -170,7 +170,7 @@ export async function regenerateCalendarTitle(chatId: string, eventId: string): 
 
 export type CalendarSubscriptionInfo = {
   httpUrl: string;
-  webcalUrl: string;
+  webcalUrl?: string;
   publicUrlConfigured: boolean;
   confirmedEvents: number;
 };
@@ -178,7 +178,7 @@ export type CalendarSubscriptionInfo = {
 export async function getCalendarSubscription(): Promise<CalendarSubscriptionInfo> {
   if (isDemo) return {
     httpUrl: "http://127.0.0.1:3789/api/calendar/feed.ics?token=demo",
-    webcalUrl: "webcal://127.0.0.1:3789/api/calendar/feed.ics?token=demo",
+    webcalUrl: undefined,
     publicUrlConfigured: false,
     confirmedEvents: 0,
   };
@@ -480,6 +480,25 @@ export async function uploadOwnerAvatar(dataUrl: string): Promise<DashboardData[
     method: "POST",
     body: JSON.stringify({ dataUrl }),
   })).profile;
+}
+
+export type OwnerAvatar = {
+  id: string;
+  url: string;
+  label: string;
+};
+
+export async function getOwnerAvatars(): Promise<OwnerAvatar[]> {
+  if (isDemo) return [];
+  return (await request<{ avatars: OwnerAvatar[] }>("/api/profile/avatars")).avatars;
+}
+
+export async function deleteOwnerAvatar(id: string): Promise<{
+  profile: DashboardData["settings"]["ownerProfile"];
+  avatars: OwnerAvatar[];
+}> {
+  if (isDemo) return { profile: structuredClone(demoDashboard.settings.ownerProfile), avatars: [] };
+  return request(`/api/profile/avatars/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export async function approveDraft(id: string, body: string): Promise<void> {

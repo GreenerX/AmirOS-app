@@ -205,6 +205,7 @@ describe("AI reply context privacy routing", () => {
     const directory = mkdtempSync(join(tmpdir(), "amiros-contact-trigger-selection-"));
     directories.push(directory);
     const state = new AmirosState(join(directory, "state.json"));
+    state.updateOwnerProfile({ displayName: "Amir Friedman" });
     state.updateContact("dani@c.us", {
       mode: "auto",
       contactTriggerAccess: ["calendar"],

@@ -14,9 +14,9 @@ const navigation: Array<{
 }> = [
   { id: "overview", label: "Overview", icon: OverviewIcon },
   { id: "inbox", label: "Inbox", icon: InboxIcon },
-  { id: "contacts", label: "Contacts", icon: ContactsIcon },
   { id: "intelligence", label: "Intelligence", icon: IntelligenceIcon },
   { id: "calendar", label: "Calendar", icon: CalendarIcon },
+  { id: "contacts", label: "Contacts", icon: ContactsIcon },
 ];
 
 const profileNavigation: Array<{

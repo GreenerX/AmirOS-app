@@ -337,7 +337,9 @@ const DEFAULT_STATE: PersistedState = {
     modelsTriggerPrefix: "!models",
   },
   ownerProfile: {
-    displayName: "Amir Friedman",
+    // This is only used for a fresh install. Existing local profiles are
+    // preserved, while onboarding asks every new person for their own name.
+    displayName: "You",
     avatarUrl: "/profile-avatars/avatar-01.png",
   },
   activities: [],
@@ -411,8 +413,27 @@ function impliedEventHour(content: string): number | undefined {
   return undefined;
 }
 
+function explicitCalendarTime(content: string): { hour: number; minute: number } | undefined {
+  const match = content.toLocaleLowerCase().match(/\b(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\b(?:at\s*)?(\d{1,2}):(\d{2})\b/iu);
+  if (!match) return undefined;
+  let hour = Number(match[1] || match[4]);
+  const minute = Number(match[2] || match[5] || 0);
+  const period = match[3]?.toLocaleLowerCase();
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour > 23 || minute > 59) return undefined;
+  if (period === "pm" && hour < 12) hour += 12;
+  if (period === "am" && hour === 12) hour = 0;
+  return { hour, minute };
+}
+
 function normalizeTimedEventStart(timestamp: number, evidence: string, legacyAllDay = false): number {
   const date = new Date(timestamp);
+  const explicitTime = explicitCalendarTime(evidence);
+  // WhatsApp message text is the source of truth for a time the sender wrote.
+  // This corrects occasional model timezone shifts such as "12pm" becoming 1pm.
+  if (explicitTime) {
+    date.setHours(explicitTime.hour, explicitTime.minute, 0, 0);
+    return date.getTime();
+  }
   const hintedHour = impliedEventHour(evidence);
   if (hintedHour !== undefined && (legacyAllDay || (date.getHours() === 12 && date.getMinutes() === 0))) {
     date.setHours(hintedHour, 0, 0, 0);
@@ -458,7 +479,11 @@ export function inferCalendarEventFromMessage(
   const normalized = content.replace(/\s+/g, " ").trim();
   const lower = normalized.toLocaleLowerCase();
   if (!normalized || !hasCalendarPlanIntent(normalized)) return undefined;
-  const base = new Date(timestamp);
+  // WhatsApp transports timestamps in seconds in some events, while the
+  // dashboard/API use milliseconds. Normalize once before resolving weekday
+  // references so “Saturday” is always anchored to the actual message day.
+  const normalizedTimestamp = timestamp > 0 && timestamp < 10_000_000_000 ? timestamp * 1_000 : timestamp;
+  const base = new Date(normalizedTimestamp);
   let date: Date | undefined;
   let inferredFromTimeOnly = false;
   const isoDateMatch = lower.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/u);
@@ -525,7 +550,9 @@ export function inferCalendarEventFromMessage(
         if (candidate && candidate.getDay() === target) date = candidate;
       }
       if (!date) {
-        let daysAhead = (target - base.getDay() + 7) % 7 || 7;
+        // A plain “Saturday” in a message sent on Saturday means today. Only
+        // “next Saturday” explicitly rolls it forward a full week.
+        let daysAhead = (target - base.getDay() + 7) % 7;
         if (weekdayName && new RegExp(`\\bnext\\s+${weekdayName}\\b`, "iu").test(lower) && daysAhead < 7) {
           daysAhead += 7;
         }
@@ -542,14 +569,9 @@ export function inferCalendarEventFromMessage(
     inferredFromTimeOnly = true;
   }
   if (!date) return undefined;
-  const timeMatch = lower.match(/\b(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\b(?:at\s*)?(\d{1,2}):(\d{2})\b/iu);
-  if (timeMatch) {
-    let hour = Number(timeMatch[1] || timeMatch[4]);
-    const minute = Number(timeMatch[2] || timeMatch[5] || 0);
-    const period = timeMatch[3]?.toLocaleLowerCase();
-    if (period === "pm" && hour < 12) hour += 12;
-    if (period === "am" && hour === 12) hour = 0;
-    date.setHours(hour, minute, 0, 0);
+  const time = explicitCalendarTime(lower);
+  if (time) {
+    date.setHours(time.hour, time.minute, 0, 0);
     if (inferredFromTimeOnly && date.getTime() < base.getTime() - 5 * 60_000) {
       date.setDate(date.getDate() + 1);
     }
@@ -1538,7 +1560,13 @@ export class AmirosState {
     for (const candidate of (input.events || []).slice(0, 40)) {
       const title = candidate.title.replace(/\s+/g, " ").trim().slice(0, 240);
       if (!title || !Number.isFinite(candidate.startAt) || !hasCalendarPlanIntent(candidate.evidence.excerpt)) continue;
-      const startAt = normalizeTimedEventStart(candidate.startAt, candidate.evidence.excerpt, candidate.allDay);
+      // Prefer deterministic parsing of the actual source message whenever it
+      // contains a calendar date or time. The model still supplies a useful
+      // title, but it must not shift “Saturday” or “12pm” while serializing.
+      const sourceEvent = inferCalendarEventFromMessage(candidate.evidence.excerpt, candidate.evidence.timestamp);
+      const startAt = sourceEvent
+        ? sourceEvent.startAt
+        : normalizeTimedEventStart(candidate.startAt, candidate.evidence.excerpt, candidate.allDay);
       const existing = memory.events.find((item) => this.isSameCalendarEvent(item, {
         title,
         startAt,
@@ -2672,6 +2700,10 @@ export class AmirosState {
     this.persisted = {
       ...this.persisted,
       ...patch,
+      // A settings request that only changes a profile does not include a
+      // theme. Keep the current theme instead of allowing an `undefined`
+      // optional field to replace it and fall back to Forest on next load.
+      theme: patch.theme ?? this.persisted.theme,
       quietHours: patch.quietHours
         ? { ...this.persisted.quietHours, ...patch.quietHours }
         : this.persisted.quietHours,

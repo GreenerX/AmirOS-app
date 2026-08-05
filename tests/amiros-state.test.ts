@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AmirosState } from "../src/amiros-state.js";
+import { AmirosState, inferCalendarEventFromMessage } from "../src/amiros-state.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -174,6 +174,14 @@ describe("AmirosState", () => {
     state.updateSettings({ theme: "rose" });
 
     expect(new AmirosState(filePath).getSettings().theme).toBe("rose");
+  });
+
+  it("keeps the selected theme when only the owner profile changes", () => {
+    const { state, filePath } = createState();
+    state.updateSettings({ theme: "indigo" });
+    state.updateSettings({ ownerProfile: { avatarUrl: "/api/profile/avatar?updated=1" } });
+
+    expect(new AmirosState(filePath).getSettings().theme).toBe("indigo");
   });
 
   it("keeps bounded conversation memory isolated and persistent per chat", () => {
@@ -971,6 +979,7 @@ describe("AmirosState", () => {
 
   it("preserves Amir as the author of self-chat and outgoing relationship facts", () => {
     const { state, filePath } = createState();
+    state.updateOwnerProfile({ displayName: "Amir Friedman" });
     state.rememberMessage("owner@c.us", {
       role: "user",
       content: "Michal is like my little sister",
@@ -1042,6 +1051,20 @@ describe("AmirosState", () => {
     const puppies = events.find((event) => event.evidence.messageId === "puppies")!;
     expect(puppies.title).toContain("Tomer");
     expect(new Date(puppies.startAt).getHours()).toBe(15);
+  });
+
+  it("uses the message timestamp and explicit source time for calendar suggestions", () => {
+    const messageTime = new Date(2026, 7, 4, 9, 30).getTime();
+    const therapy = inferCalendarEventFromMessage("We have therapy at 12pm", Math.floor(messageTime / 1_000));
+    expect(therapy).toBeDefined();
+    expect(new Date(therapy!.startAt).getDate()).toBe(4);
+    expect(new Date(therapy!.startAt).getHours()).toBe(12);
+
+    const saturdayMessage = new Date(2026, 7, 1, 10, 0).getTime();
+    const birthday = inferCalendarEventFromMessage("Andrew's birthday is on Saturday", saturdayMessage);
+    expect(birthday).toBeDefined();
+    expect(new Date(birthday!.startAt).getDay()).toBe(6);
+    expect(new Date(birthday!.startAt).getDate()).toBe(1);
   });
 
   it("does not repeat calendar events after they are rejected or approved", () => {

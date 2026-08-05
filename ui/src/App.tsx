@@ -706,9 +706,9 @@ export function App() {
         {view === "automations" ? <AutomationsView data={dashboard} onSave={saveQuietHours} /> : null}
         {view === "usage" ? <UsageView data={dashboard} onPreset={choosePreset} /> : null}
         {view === "terminal" ? <TerminalView connection={dashboard.connection} loadLog={getTerminalLog} subscribeLog={subscribeTerminalLog} /> : null}
-        {view === "settings" ? <SettingsView data={dashboard} onSave={saveSettings} onSaveApiKey={saveApiKey} onRelink={relink} onPause={togglePaused} /> : null}
+        {view === "settings" ? <SettingsView data={dashboard} onSave={saveSettings} onSaveApiKey={saveApiKey} onRelink={async () => { await relink(); }} onPause={togglePaused} /> : null}
         <FloatingAssistant data={intelligence} loading={loadingIntelligence} onRefresh={refreshIntelligence} onAsk={askRelationships} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onSaveKnowledge={addMemory} onInsertReply={(chatId, body) => { setAssistantComposerDraft({ chatId, body }); openChat(chatId); }} />
-        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onChooseKnowledgeTracking={async (choice) => saveSettings({ knowledgeTrackingDefault: choice })} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
+        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} theme={dashboard.settings.theme} ownerProfile={dashboard.settings.ownerProfile} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onFinishOnboarding={async (choice, theme) => saveSettings({ knowledgeTrackingDefault: choice, theme })} onSaveOwnerProfile={async (ownerProfile) => saveSettings({ ownerProfile })} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
       </div>
     </div>
   );

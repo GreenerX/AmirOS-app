@@ -155,15 +155,27 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.3.0",
+    version: "0.4.0",
     releasedAt: "2026-08-05",
-    headline: "A simpler, smarter first start",
+    headline: "A smoother, more personal AmirOS",
     notes: [
-      { title: "Set up everything in one place", detail: "Add an OpenAI API key and link WhatsApp with a QR code from the welcome guide." },
-      { title: "You choose what AmirOS learns", detail: "Choose approval-first, private-chat tracking, or no tracking for new chats." },
-      { title: "Every update stays easy to follow", detail: "Browse a simple history of What’s new notes directly in AmirOS." },
+      { title: "Settings now save themselves", detail: "Changes save automatically and a small confirmation fades away after each successful update." },
+      { title: "A more personal first setup", detail: "Choose your name, avatar, theme, learning preferences, OpenAI connection, and WhatsApp connection before opening AmirOS." },
+      { title: "Cleaner chats and profile photos", detail: "Chats keep their order and position, while uploaded profile photos can be cropped and managed as a collection." },
+      { title: "More reliable calendar suggestions", detail: "Written times and same-day weekday references are handled more accurately." },
     ],
     history: [
+      {
+        version: "0.4.0",
+        releasedAt: "2026-08-05",
+        headline: "A smoother, more personal AmirOS",
+        notes: [
+          { title: "Settings now save themselves", detail: "Changes save automatically and a small confirmation fades away after each successful update." },
+          { title: "A more personal first setup", detail: "Choose your name, avatar, theme, learning preferences, OpenAI connection, and WhatsApp connection before opening AmirOS." },
+          { title: "Cleaner chats and profile photos", detail: "Chats keep their order and position, while uploaded profile photos can be cropped and managed as a collection." },
+          { title: "More reliable calendar suggestions", detail: "Written times and same-day weekday references are handled more accurately." },
+        ],
+      },
       {
         version: "0.3.0",
         releasedAt: "2026-08-05",

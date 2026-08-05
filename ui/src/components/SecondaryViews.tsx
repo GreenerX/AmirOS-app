@@ -22,14 +22,15 @@ import {
   ShieldCheck,
   Sparkles,
   Search,
+  Trash2,
   Upload,
   UserRound,
   UsersRound,
 } from "lucide-react";
 import { SiApple } from "react-icons/si";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { compactNumber } from "../format";
-import { getCalendarSubscription, uploadOwnerAvatar, whatsappQrUrl, type CalendarSubscriptionInfo } from "../api";
+import { deleteOwnerAvatar, getCalendarSubscription, getOwnerAvatars, uploadOwnerAvatar, whatsappQrUrl, type CalendarSubscriptionInfo, type OwnerAvatar } from "../api";
 import { calendarSubscriptionBannerHidden, setCalendarSubscriptionBannerHidden } from "../calendar-preferences";
 import { WhatsAppIcon } from "./BrandIcons";
 import { ContactAvatar } from "./ContactAvatar";
@@ -181,16 +182,19 @@ type SettingsViewProps = {
   }) => Promise<void>;
 };
 
-const profileAvatars = [1, 2, 3, 4].map((number) => `/profile-avatars/avatar-0${number}.png`);
+const profileAvatars = [1, 2, 3, 4].map((number) => `/profile-avatars/avatar-0${number}.png?v=2`);
 
-async function profileDataUrl(file: File): Promise<string> {
+async function readProfileImage(file: File): Promise<string> {
   if (!file.type.startsWith("image/")) throw new Error("Choose an image file");
-  const source = await new Promise<string>((resolve, reject) => {
+  return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
     reader.onerror = () => reject(new Error("Could not read image"));
     reader.readAsDataURL(file);
   });
+}
+
+async function cropProfileDataUrl(source: string, zoom: number, horizontalOffset: number, verticalOffset: number): Promise<string> {
   const image = await new Promise<HTMLImageElement>((resolve, reject) => {
     const element = new Image();
     element.onload = () => resolve(element);
@@ -202,8 +206,14 @@ async function profileDataUrl(file: File): Promise<string> {
   canvas.height = 512;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Could not prepare image");
-  const side = Math.min(image.naturalWidth, image.naturalHeight);
-  context.drawImage(image, (image.naturalWidth - side) / 2, (image.naturalHeight - side) / 2, side, side, 0, 0, 512, 512);
+  const baseScale = Math.max(512 / image.naturalWidth, 512 / image.naturalHeight);
+  const scale = baseScale * zoom;
+  const width = image.naturalWidth * scale;
+  const height = image.naturalHeight * scale;
+  const offsetScale = 512 / 220;
+  const x = (512 - width) / 2 + horizontalOffset * offsetScale;
+  const y = (512 - height) / 2 + verticalOffset * offsetScale;
+  context.drawImage(image, x, y, width, height);
   return canvas.toDataURL("image/png", 0.9);
 }
 
@@ -223,7 +233,6 @@ const themes: Array<{
 ];
 
 export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: SettingsViewProps) {
-  const [assistant, setAssistant] = useState(data.settings.assistant);
   const [budget, setBudget] = useState(data.settings.monthlyBudgetUsd);
   const [apiKey, setApiKey] = useState("");
   const [apiKeyState, setApiKeyState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -233,15 +242,90 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
   const [knowledgeTrackingDefault, setKnowledgeTrackingDefault] = useState(data.settings.knowledgeTrackingDefault);
   const [ownerProfile, setOwnerProfile] = useState(data.settings.ownerProfile);
   const [uploadingProfile, setUploadingProfile] = useState(false);
+  const [pendingProfileImage, setPendingProfileImage] = useState<string>();
+  const [profileZoom, setProfileZoom] = useState(1);
+  const [profileHorizontalOffset, setProfileHorizontalOffset] = useState(0);
+  const [profileVerticalOffset, setProfileVerticalOffset] = useState(0);
+  const [profileUploadError, setProfileUploadError] = useState("");
+  const [customAvatars, setCustomAvatars] = useState<OwnerAvatar[]>([]);
   const profileFileRef = useRef<HTMLInputElement>(null);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const cropDragRef = useRef<{ pointerId: number; x: number; y: number; horizontal: number; vertical: number } | undefined>(undefined);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [relinkState, setRelinkState] = useState<"idle" | "confirm" | "working">("idle");
   const [calendarSubscription, setCalendarSubscription] = useState<CalendarSubscriptionInfo>();
   const [calendarSubscriptionError, setCalendarSubscriptionError] = useState("");
   const [calendarSubscriptionCopied, setCalendarSubscriptionCopied] = useState(false);
   const [calendarBannerHidden, setCalendarBannerHidden] = useState(calendarSubscriptionBannerHidden);
 
-  useEffect(() => setKnowledgeTrackingDefault(data.settings.knowledgeTrackingDefault), [data.settings.knowledgeTrackingDefault]);
+  useEffect(() => {
+    let cancelled = false;
+    void getOwnerAvatars()
+      .then((avatars) => { if (!cancelled) setCustomAvatars(avatars); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+
+  const autoSavePayload = useMemo(() => ({
+    monthlyBudgetUsd: budget,
+    theme: selectedTheme,
+    models,
+    ownerProfile,
+    knowledgeTrackingDefault,
+  }), [budget, knowledgeTrackingDefault, models, ownerProfile, selectedTheme]);
+  const serializedAutoSavePayload = useMemo(() => JSON.stringify(autoSavePayload), [autoSavePayload]);
+  const lastSavedSettingsRef = useRef(serializedAutoSavePayload);
+  const autoSaveTimerRef = useRef<number | undefined>(undefined);
+  const saveNoticeTimerRef = useRef<number | undefined>(undefined);
+  const saveSequenceRef = useRef(0);
+  const saveInFlightRef = useRef(0);
+  const pendingAutoSaveRef = useRef<{ payload: typeof autoSavePayload; serialized: string } | undefined>(undefined);
+  const onSaveRef = useRef(onSave);
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
+
+  useEffect(() => {
+    pendingAutoSaveRef.current = { payload: autoSavePayload, serialized: serializedAutoSavePayload };
+    if (serializedAutoSavePayload === lastSavedSettingsRef.current && saveInFlightRef.current === 0) {
+      setSaveState("idle");
+      return;
+    }
+
+    window.clearTimeout(autoSaveTimerRef.current);
+    window.clearTimeout(saveNoticeTimerRef.current);
+    setSaveState("saving");
+    const sequence = ++saveSequenceRef.current;
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      saveInFlightRef.current += 1;
+      void onSaveRef.current(autoSavePayload)
+        .then(() => {
+          if (sequence !== saveSequenceRef.current) return;
+          lastSavedSettingsRef.current = serializedAutoSavePayload;
+          setSaveState("saved");
+          saveNoticeTimerRef.current = window.setTimeout(() => setSaveState("idle"), 2_400);
+        })
+        .catch(() => {
+          if (sequence !== saveSequenceRef.current) return;
+          setSaveState("error");
+          saveNoticeTimerRef.current = window.setTimeout(() => setSaveState("idle"), 3_600);
+        })
+        .finally(() => {
+          saveInFlightRef.current = Math.max(0, saveInFlightRef.current - 1);
+        });
+    }, 650);
+
+    return () => window.clearTimeout(autoSaveTimerRef.current);
+  }, [autoSavePayload, serializedAutoSavePayload]);
+
+  useEffect(() => () => {
+    window.clearTimeout(autoSaveTimerRef.current);
+    window.clearTimeout(saveNoticeTimerRef.current);
+    const pending = pendingAutoSaveRef.current;
+    if (pending && pending.serialized !== lastSavedSettingsRef.current) {
+      void onSaveRef.current(pending.payload);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -252,19 +336,6 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
     });
     return () => { cancelled = true; };
   }, []);
-
-  const save = async () => {
-    setSaveState("saving");
-    try {
-      await onSave({ assistant, monthlyBudgetUsd: budget, theme: selectedTheme, models, ownerProfile, knowledgeTrackingDefault });
-      setSaveState("saved");
-      window.setTimeout(() => setSaveState("idle"), 1_800);
-    } catch {
-      setSelectedTheme(data.settings.theme);
-      document.documentElement.dataset.theme = data.settings.theme;
-      setSaveState("idle");
-    }
-  };
 
   const saveApiKey = async () => {
     if (!apiKey.trim()) {
@@ -284,9 +355,6 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
       setApiKeyState("error");
     }
   };
-
-  const toggle = (key: keyof Pick<typeof assistant, "autoReplySelfChat" | "allowOutgoingTriggerCommands" | "allowGroups" | "webSearchEnabled">) =>
-    setAssistant((current) => ({ ...current, [key]: !current[key] }));
 
   const startRelink = async () => {
     setRelinkState("working");
@@ -314,86 +382,162 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
   const qrAvailable = data.connection.status === "qr";
   const connectionBusy = data.connection.status === "starting" || data.connection.status === "authenticated" || relinkState === "working";
 
-  const uploadProfile = async (file?: File) => {
+  const chooseProfileUpload = async (file?: File) => {
     if (!file) return;
-    setUploadingProfile(true);
     try {
-      const profile = await uploadOwnerAvatar(await profileDataUrl(file));
-      setOwnerProfile(profile);
-      await onSave({ ownerProfile: profile });
+      setPendingProfileImage(await readProfileImage(file));
+      setProfileZoom(1);
+      setProfileHorizontalOffset(0);
+      setProfileVerticalOffset(0);
+      setProfileUploadError("");
+    } catch (error) {
+      setProfileUploadError(error instanceof Error ? error.message : "Could not open this image.");
     } finally {
-      setUploadingProfile(false);
       if (profileFileRef.current) profileFileRef.current.value = "";
     }
   };
 
+  const saveProfileCrop = async () => {
+    if (!pendingProfileImage) return;
+    setUploadingProfile(true);
+    setProfileUploadError("");
+    try {
+      const profile = await uploadOwnerAvatar(await cropProfileDataUrl(pendingProfileImage, profileZoom, profileHorizontalOffset, profileVerticalOffset));
+      const avatars = await getOwnerAvatars();
+      setCustomAvatars(avatars);
+      setOwnerProfile(profile);
+      setPendingProfileImage(undefined);
+    } catch (error) {
+      setProfileUploadError(error instanceof Error ? error.message : "Could not save this profile image.");
+    } finally {
+      setUploadingProfile(false);
+    }
+  };
+
+  const sameAvatar = (left: string, right: string) => left.split("?")[0] === right.split("?")[0];
+  const removeCustomAvatar = async (avatar: OwnerAvatar) => {
+    if (!window.confirm("Delete this uploaded profile photo? This cannot be undone.")) return;
+    try {
+      const result = await deleteOwnerAvatar(avatar.id);
+      setCustomAvatars(result.avatars);
+      setOwnerProfile(result.profile);
+    } catch (error) {
+      setProfileUploadError(error instanceof Error ? error.message : "Could not delete this profile image.");
+    }
+  };
+
+  const beginProfilePan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    cropDragRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      horizontal: profileHorizontalOffset,
+      vertical: profileVerticalOffset,
+    };
+  };
+
+  const panProfileImage = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = cropDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setProfileHorizontalOffset(Math.max(-110, Math.min(110, drag.horizontal + event.clientX - drag.x)));
+    setProfileVerticalOffset(Math.max(-110, Math.min(110, drag.vertical + event.clientY - drag.y)));
+  };
+
+  const endProfilePan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (cropDragRef.current?.pointerId !== event.pointerId) return;
+    cropDragRef.current = undefined;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
   return (
     <main className="main-content secondary-page">
-      <header className="page-header compact-header"><div><h1>Settings</h1><p>Configure when AmirOS responds and which commands it listens for.</p></div><button className="button primary" disabled={saveState === "saving"} onClick={() => void save()}>{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved ✓" : "Save settings"}</button></header>
+      <header className="page-header compact-header"><div><h1>Settings</h1><p>Configure when AmirOS responds and which commands it listens for.</p></div></header>
+      {saveState === "saved" || saveState === "error" ? (
+        <div className={`settings-save-notice ${saveState}`} role="status" aria-live="polite">
+          {saveState === "saved" ? <Check size={17} /> : <RefreshCw size={17} />}
+          <span>{saveState === "saved" ? "Settings saved" : "Settings couldn’t be saved"}</span>
+        </div>
+      ) : null}
       <div className="settings-grid settings-config-grid">
         <section className="panel settings-summary profile-settings-card">
           <span className="setting-hero-icon"><UserRound size={25} /></span>
           <div className="profile-settings-content"><div><h2>Your profile</h2><p>Used throughout AmirOS. Choose an example or upload your own photo.</p></div>
             <div className="owner-profile-editor"><img src={ownerProfile.avatarUrl} alt="Your selected profile" /><label>Display name<input value={ownerProfile.displayName} onChange={(event) => setOwnerProfile({ ...ownerProfile, displayName: event.target.value })} /></label></div>
-            <div className="profile-avatar-options">{profileAvatars.map((avatar) => <button type="button" key={avatar} className={ownerProfile.avatarUrl === avatar ? "selected" : ""} onClick={() => setOwnerProfile({ ...ownerProfile, avatarUrl: avatar })}><img src={avatar} alt="Example profile" />{ownerProfile.avatarUrl === avatar ? <Check size={15} /> : null}</button>)}</div>
-            <input ref={profileFileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => void uploadProfile(event.target.files?.[0])} />
+            <div className="profile-avatar-options" aria-label="Profile photo choices">
+              {profileAvatars.map((avatar) => <button type="button" key={avatar} className={sameAvatar(ownerProfile.avatarUrl, avatar) ? "selected" : ""} onClick={() => setOwnerProfile({ ...ownerProfile, avatarUrl: avatar })}><img src={avatar} alt="Illustrated profile avatar" />{sameAvatar(ownerProfile.avatarUrl, avatar) ? <Check size={15} /> : null}</button>)}
+              {customAvatars.map((avatar) => <div className="profile-avatar-option" key={avatar.id}><button type="button" className={sameAvatar(ownerProfile.avatarUrl, avatar.url) ? "selected" : ""} onClick={() => setOwnerProfile({ ...ownerProfile, avatarUrl: avatar.url })}><img src={avatar.url} alt={avatar.label} />{sameAvatar(ownerProfile.avatarUrl, avatar.url) ? <Check size={15} /> : null}</button><button className="profile-avatar-delete" type="button" aria-label={`Delete ${avatar.label}`} title={`Delete ${avatar.label}`} onClick={() => void removeCustomAvatar(avatar)}><Trash2 size={13} /></button></div>)}
+            </div>
+            <input ref={profileFileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => void chooseProfileUpload(event.target.files?.[0])} />
             <button className="button" type="button" disabled={uploadingProfile} onClick={() => profileFileRef.current?.click()}><Upload size={16} />{uploadingProfile ? "Uploading…" : "Upload photo"}</button>
           </div>
         </section>
-        <section className="panel settings-summary whatsapp-link-settings">
-          <span className="setting-hero-icon whatsapp-setting-icon"><WhatsAppIcon size={27} /></span>
-          <div className="whatsapp-link-copy">
-            <div className="connection-title-row"><div><h2>WhatsApp linked device</h2><p>{data.connection.detail}</p></div><span className={`connection-badge ${data.connection.status}`}><span />{connectionReady ? "Connected" : qrAvailable ? "QR ready" : connectionBusy ? "Connecting" : "Disconnected"}</span></div>
-            {qrAvailable ? (
-              <div className="qr-link-layout">
-                <img src={whatsappQrUrl()} alt="WhatsApp linked-device QR code" />
-                <div><h3>Scan with your phone</h3><ol><li>Open WhatsApp Settings.</li><li>Tap <strong>Linked Devices</strong>.</li><li>Tap <strong>Link a Device</strong> and scan this code.</li></ol><p>The code refreshes automatically if WhatsApp replaces it.</p></div>
-              </div>
-            ) : relinkState === "confirm" ? (
-              <div className="relink-confirmation"><strong>Replace the current linked-device session?</strong><p>This signs AmirOS out of WhatsApp on this Mac and generates a fresh QR. Your AmirOS settings, contact memory, and profiles stay intact.</p><div><button className="button" onClick={() => setRelinkState("idle")}>Cancel</button><button className="button primary" onClick={() => void startRelink()}><RefreshCw size={16} />Generate new QR</button></div></div>
-            ) : (
-              <div className="relink-action"><p>{connectionReady ? "Use this if the linked device is removed from your phone, expires, or stops receiving messages." : "Create a new QR code to reconnect AmirOS to WhatsApp."}</p><button className="button" disabled={connectionBusy} onClick={() => setRelinkState("confirm")}><RefreshCw className={connectionBusy ? "spin" : ""} size={16} />{connectionBusy ? "Preparing connection…" : connectionReady ? "Re-link WhatsApp" : "Generate new QR"}</button></div>
-            )}
+        <section className="panel settings-summary settings-connection-card">
+          <div className="settings-connection-device whatsapp-link-settings">
+            <span className="setting-hero-icon whatsapp-setting-icon"><WhatsAppIcon size={27} /></span>
+            <div className="whatsapp-link-copy">
+              <div className="connection-title-row"><div><h2>WhatsApp linked device</h2><p>{data.connection.detail}</p></div><span className={`connection-badge ${data.connection.status}`}><span />{connectionReady ? "Connected" : qrAvailable ? "QR ready" : connectionBusy ? "Connecting" : "Disconnected"}</span></div>
+              {qrAvailable ? (
+                <div className="qr-link-layout">
+                  <img src={whatsappQrUrl()} alt="WhatsApp linked-device QR code" />
+                  <div><h3>Scan with your phone</h3><ol><li>Open WhatsApp Settings.</li><li>Tap <strong>Linked Devices</strong>.</li><li>Tap <strong>Link a Device</strong> and scan this code.</li></ol><p>The code refreshes automatically if WhatsApp replaces it.</p></div>
+                </div>
+              ) : relinkState === "confirm" ? (
+                <div className="relink-confirmation"><strong>Replace the current linked-device session?</strong><p>This signs AmirOS out of WhatsApp on this Mac and generates a fresh QR. Your AmirOS settings, contact memory, and profiles stay intact.</p><div><button className="button" onClick={() => setRelinkState("idle")}>Cancel</button><button className="button primary" onClick={() => void startRelink()}><RefreshCw size={16} />Generate new QR</button></div></div>
+              ) : (
+                <div className="relink-action"><p>{connectionReady ? "Use this if the linked device is removed from your phone, expires, or stops receiving messages." : "Create a new QR code to reconnect AmirOS to WhatsApp."}</p><button className="button" disabled={connectionBusy} onClick={() => setRelinkState("confirm")}><RefreshCw className={connectionBusy ? "spin" : ""} size={16} />{connectionBusy ? "Preparing connection…" : connectionReady ? "Re-link WhatsApp" : "Generate new QR"}</button></div>
+              )}
+            </div>
+          </div>
+          <div className="settings-connection-availability bot-availability-settings">
+            <span className="setting-hero-icon"><Bot size={25} /></span>
+            <div className="bot-availability-copy"><h2>Assistant availability</h2><p>{data.paused ? "AmirOS is paused. It will not listen for or answer WhatsApp messages until you resume it." : "AmirOS is listening for WhatsApp messages and can reply according to each chat’s settings."}</p></div>
+            <div className="bot-availability-action">
+              <span className={data.paused ? "assistant-status paused" : "assistant-status running"}><i />{data.paused ? "Paused" : "Running"}</span>
+              <button className={data.paused ? "button primary" : "button secondary"} type="button" onClick={() => void onPause()}>
+                {data.paused ? <Play size={16} /> : <Pause size={16} />}{data.paused ? "Resume bot" : "Pause bot"}
+              </button>
+            </div>
           </div>
         </section>
-        <section className="panel settings-summary calendar-subscription-settings">
-          <span className="calendar-subscription-icon"><Cloud size={23} /><SiApple size={15} /></span>
-          <div className="calendar-subscription-copy">
-            <span className="subscription-heading"><h2>iCloud calendar subscription</h2><small className={calendarSubscription?.publicUrlConfigured ? "public" : "local"}>{calendarSubscription?.publicUrlConfigured ? "iCloud-ready URL" : "Local Mac feed"}</small></span>
-            <p>Subscribe once to keep confirmed AmirOS events in a read-only Apple calendar.</p>
-            <small>This setting always stays here, even when its shortcut is hidden from the Calendar page.</small>
-          </div>
-          <div className="calendar-subscription-actions">
-            {calendarSubscription ? <a className="button primary compact" href={calendarSubscription.webcalUrl}><SiApple className="brand-icon apple" size={16} />Subscribe in Apple Calendar</a> : <button className="button compact" disabled>Preparing link…</button>}
-            <button className="button compact" disabled={!calendarSubscription} onClick={() => void copyCalendarSubscription()}><Copy size={15} />{calendarSubscriptionCopied ? "Copied ✓" : "Copy link"}</button>
-            <button className="button compact" onClick={() => { const hidden = !calendarBannerHidden; setCalendarSubscriptionBannerHidden(hidden); setCalendarBannerHidden(hidden); }}>{calendarBannerHidden ? <Eye size={15} /> : <EyeOff size={15} />}{calendarBannerHidden ? "Show on Calendar" : "Hide from Calendar"}</button>
-          </div>
-          {calendarSubscriptionError ? <small className="subscription-error">{calendarSubscriptionError}</small> : null}
-        </section>
-        <section className="panel settings-summary model-selection-settings"><span className="setting-hero-icon"><Sparkles size={25} /></span><div><h2>Assistant models</h2><p>Choose each capability directly. Presets remain available on Overview and Usage.</p>
-          <div className="model-select-grid"><label>Text model<select value={models.text} onChange={(event) => setModels({ ...models, text: event.target.value })}>{data.modelOptions.text.map((model) => <option key={model} value={model}>{model}</option>)}</select></label><label>Image model<select value={models.image} onChange={(event) => setModels({ ...models, image: event.target.value })}>{data.modelOptions.image.map((model) => <option key={model} value={model}>{model}</option>)}</select></label><label>Transcription model<select value={models.voice} onChange={(event) => setModels({ ...models, voice: event.target.value })}>{data.modelOptions.voice.map((model) => <option key={model} value={model}>{model}</option>)}</select></label></div>
-        </div></section>
-        <section className="panel settings-summary knowledge-default-settings"><span className="setting-hero-icon"><Brain size={25} /></span><div><h2>New-chat knowledge tracking</h2><p>Choose what AmirOS does the first time it sees a new conversation. You can always override this per chat.</p>
-          <label>Default for new chats<select aria-label="Default knowledge tracking" value={knowledgeTrackingDefault} onChange={(event) => setKnowledgeTrackingDefault(event.target.value as KnowledgeTrackingDefault)}><option value="ask">Ask me for each chat</option><option value="private">Track private chats; ask for groups</option><option value="off">Keep tracking off</option></select></label>
-        </div></section>
+        <div className="settings-core-grid">
         <section className="panel settings-summary api-key-settings">
           <span className="setting-hero-icon"><KeyRound size={25} /></span>
           <div className="api-key-copy"><h2>OpenAI connection</h2><p>{data.settings.apiKeyConfigured ? "An OpenAI API key is connected locally on this Mac. Paste a different key only to replace it." : "Connect your own OpenAI account to enable AmirOS."}</p>
             <div className="api-key-row"><input aria-label="OpenAI API key" type="password" autoComplete="off" spellCheck={false} value={apiKey} placeholder={data.settings.apiKeyConfigured ? "••••••••••••••••" : "sk-…"} onChange={(event) => setApiKey(event.target.value)} /><button className="button primary compact" type="button" disabled={apiKeyState === "saving"} onClick={() => void saveApiKey()}>{apiKeyState === "saving" ? "Saving…" : apiKeyState === "saved" ? "Connected ✓" : "Save API key"}</button></div>
             <small>Your key stays in this Mac’s private <code>.env.local</code> file and is never shown in AmirOS.</small>{apiKeyError ? <small className="subscription-error">{apiKeyError}</small> : null}
           </div>
-          <label className="budget-field spend-guard-field">Monthly AmirOS spend limit (USD)<input aria-label="Monthly AmirOS spend limit" type="number" min="1" step="1" value={budget} onChange={(event) => setBudget(Math.max(1, Number(event.target.value) || 1))} /><small>AmirOS stops new AI requests after its locally estimated monthly use reaches this amount. Other apps using this key are not included.</small></label>
+          <label className="budget-field spend-guard-field">Monthly spend limit (USD)<input aria-label="Monthly AmirOS spend limit" type="number" min="1" step="1" value={budget} onChange={(event) => setBudget(Math.max(1, Number(event.target.value) || 1))} /><small>Stops AmirOS AI requests at this monthly estimate. Usage from other apps is not included.</small></label>
         </section>
-        <section className="panel settings-summary bot-availability-settings">
-          <span className="setting-hero-icon"><Bot size={25} /></span>
-          <div className="bot-availability-copy"><h2>Assistant availability</h2><p>{data.paused ? "AmirOS is paused. It will not listen for or answer WhatsApp messages until you resume it." : "AmirOS is listening for WhatsApp messages and can reply according to each chat’s settings."}</p></div>
-          <div className="bot-availability-action">
-            <span className={data.paused ? "assistant-status paused" : "assistant-status running"}><i />{data.paused ? "Paused" : "Running"}</span>
-            <button className={data.paused ? "button primary" : "button secondary"} type="button" onClick={() => void onPause()}>
-              {data.paused ? <Play size={16} /> : <Pause size={16} />}{data.paused ? "Resume bot" : "Pause bot"}
-            </button>
+        <section className="panel settings-summary assistant-configuration-card">
+          <div className="assistant-config-models">
+            <span className="setting-hero-icon"><Sparkles size={25} /></span>
+            <div className="assistant-config-copy"><div><h2>Assistant models</h2><p>Choose each capability directly. Presets remain available on Overview and Usage.</p></div>
+              <div className="model-select-grid"><label>Text model<select value={models.text} onChange={(event) => setModels({ ...models, text: event.target.value })}>{data.modelOptions.text.map((model) => <option key={model} value={model}>{model}</option>)}</select></label><label>Image model<select value={models.image} onChange={(event) => setModels({ ...models, image: event.target.value })}>{data.modelOptions.image.map((model) => <option key={model} value={model}>{model}</option>)}</select></label><label>Transcription model<select value={models.voice} onChange={(event) => setModels({ ...models, voice: event.target.value })}>{data.modelOptions.voice.map((model) => <option key={model} value={model}>{model}</option>)}</select></label></div>
+            </div>
+          </div>
+          <div className="assistant-config-knowledge">
+            <span className="setting-hero-icon"><Brain size={25} /></span>
+            <div className="assistant-config-copy"><div><h2>New-chat knowledge tracking</h2><p>Choose what AmirOS does when it first sees a conversation.</p></div>
+              <label>Default for new chats<select aria-label="Default knowledge tracking" value={knowledgeTrackingDefault} onChange={(event) => setKnowledgeTrackingDefault(event.target.value as KnowledgeTrackingDefault)}><option value="ask">Ask me for each chat</option><option value="private">Track private chats; ask for groups</option><option value="off">Keep tracking off</option></select></label>
+            </div>
           </div>
         </section>
+        <section className="panel settings-summary calendar-subscription-settings">
+          <span className="setting-hero-icon calendar-subscription-icon"><Cloud size={23} /><SiApple size={13} /></span>
+          <div className="calendar-subscription-copy">
+            <span className="subscription-heading"><h2>iCloud calendar subscription</h2><small className={calendarSubscription?.publicUrlConfigured ? "public" : "local"}>{calendarSubscription?.publicUrlConfigured ? "iCloud-ready URL" : "Local Mac feed"}</small></span>
+            <p>Subscribe once to keep confirmed AmirOS events in a read-only Apple calendar.</p>
+            <small>This setting always stays here, even when its shortcut is hidden from the Calendar page.</small>
+          </div>
+          <div className="calendar-subscription-actions">
+            {calendarSubscription?.webcalUrl ? <a className="button primary compact" href={calendarSubscription.webcalUrl}><SiApple className="brand-icon apple" size={16} />Subscribe in Apple Calendar</a> : <button className="button primary compact" disabled={!calendarSubscription} onClick={() => void copyCalendarSubscription()}><SiApple className="brand-icon apple" size={16} />{calendarSubscriptionCopied ? "Link copied ✓" : "Copy link for Apple Calendar"}</button>}
+            {calendarSubscription?.webcalUrl ? <button className="button compact" disabled={!calendarSubscription} onClick={() => void copyCalendarSubscription()}><Copy size={15} />{calendarSubscriptionCopied ? "Copied ✓" : "Copy link"}</button> : null}
+            <button className="button compact" onClick={() => { const hidden = !calendarBannerHidden; setCalendarSubscriptionBannerHidden(hidden); setCalendarBannerHidden(hidden); }}>{calendarBannerHidden ? <Eye size={15} /> : <EyeOff size={15} />}{calendarBannerHidden ? "Show on Calendar" : "Hide from Calendar"}</button>
+          </div>
+          {calendarSubscriptionError ? <small className="subscription-error">{calendarSubscriptionError}</small> : null}
+        </section>
+        </div>
         <section className="panel settings-summary appearance-settings">
           <span className="setting-hero-icon"><Palette size={25} /></span>
           <div className="appearance-heading"><h2>Color theme</h2><p>Choose the palette that feels best. Changes apply immediately and stay selected.</p></div>
@@ -418,29 +562,9 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
             ))}
           </div>
         </section>
-        <section className="panel settings-summary behavior-settings">
-          <h2>Assistant behavior</h2>
-          <p>These changes apply immediately and remain after AmirOS restarts.</p>
-          <label className="settings-toggle"><span><strong>Self-chat automatic replies</strong><small>Plain messages in “Message yourself” become prompts.</small></span><input type="checkbox" checked={assistant.autoReplySelfChat} onChange={() => toggle("autoReplySelfChat")} /></label>
-          <label className="settings-toggle"><span><strong>Outgoing trigger commands</strong><small>Allow !bot commands you send in contact chats.</small></span><input type="checkbox" checked={assistant.allowOutgoingTriggerCommands} onChange={() => toggle("allowOutgoingTriggerCommands")} /></label>
-          <label className="settings-toggle"><span><strong>Group conversations</strong><small>Allow triggers plus each group’s Auto or Suggest reply mode.</small></span><input type="checkbox" checked={assistant.allowGroups} onChange={() => toggle("allowGroups")} /></label>
-          <label className="settings-toggle"><span><strong>Live web search</strong><small>Allow current answers and recent news searches.</small></span><input type="checkbox" checked={assistant.webSearchEnabled} onChange={() => toggle("webSearchEnabled")} /></label>
-        </section>
-        <section className="panel settings-summary command-settings">
-          <h2>Command triggers</h2>
-          <p>Choose short, distinct commands that are easy to type in WhatsApp.</p>
-          <div className="command-grid">
-            <label>Assistant<input aria-label="Assistant trigger" value={assistant.botTriggerPrefix} onChange={(event) => setAssistant({ ...assistant, botTriggerPrefix: event.target.value })} /></label>
-            <label>Web search<input aria-label="Web search trigger" value={assistant.webTriggerPrefix} onChange={(event) => setAssistant({ ...assistant, webTriggerPrefix: event.target.value })} /></label>
-            <label>Images<input aria-label="Image trigger" value={assistant.imageTriggerPrefix} onChange={(event) => setAssistant({ ...assistant, imageTriggerPrefix: event.target.value })} /></label>
-            <label>Models<input aria-label="Models trigger" value={assistant.modelsTriggerPrefix} onChange={(event) => setAssistant({ ...assistant, modelsTriggerPrefix: event.target.value })} /></label>
-          </div>
-        </section>
-        <section className="panel settings-summary">
-          <span className="setting-hero-icon"><ShieldCheck size={25} /></span><div><h2>Local-first privacy</h2><p>AmirOS binds only to your Mac at 127.0.0.1. Selected memories, intelligence, settings, and activity are stored locally so the assistant can retain useful context.</p></div>
-          <div className="privacy-points"><span><LockKeyhole size={18} />Local control API</span><span><KeyRound size={18} />API key stays in .env.local</span></div>
-        </section>
+        <footer className="settings-privacy-footer"><ShieldCheck size={16} /><span>Private by design — AmirOS runs on this Mac and keeps your conversations, saved knowledge, and API key local.</span></footer>
       </div>
+      {pendingProfileImage ? <div className="profile-crop-backdrop" role="presentation"><section className="profile-crop-dialog" role="dialog" aria-modal="true" aria-labelledby="profile-crop-title"><header><div><small>YOUR PROFILE</small><h2 id="profile-crop-title">Crop your profile photo</h2><p>Zoom, then drag your photo to position it.</p></div><button className="icon-button" type="button" aria-label="Close photo crop" onClick={() => setPendingProfileImage(undefined)}>×</button></header><div className="profile-crop-content"><div className="profile-crop-preview" role="application" aria-label="Profile image crop area. Drag to position the photo." onPointerDown={beginProfilePan} onPointerMove={panProfileImage} onPointerUp={endProfilePan} onPointerCancel={endProfilePan}><img draggable={false} src={pendingProfileImage} alt="Profile crop preview" style={{ transform: `translate(${profileHorizontalOffset}px, ${profileVerticalOffset}px) scale(${profileZoom})` }} /></div><small className="profile-crop-hint">Drag the photo to move it within the circle.</small><label>Zoom<input type="range" min="1" max="3" step="0.01" value={profileZoom} onChange={(event) => setProfileZoom(Number(event.target.value))} /></label>{profileUploadError ? <p className="profile-crop-error" role="alert">{profileUploadError}</p> : null}</div><footer><button className="button" type="button" disabled={uploadingProfile} onClick={() => setPendingProfileImage(undefined)}>Cancel</button><button className="button primary" type="button" disabled={uploadingProfile} onClick={() => void saveProfileCrop()}>{uploadingProfile ? "Saving…" : "Save profile photo"}</button></footer></section></div> : null}
     </main>
   );
 }

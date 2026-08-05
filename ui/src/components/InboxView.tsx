@@ -196,8 +196,7 @@ function sourceMessageMatches(messageId: string, sourceMessageId: string) {
 }
 
 function messageDateLabel(timestamp: number): string {
-  const value = timestamp < 10_000_000_000 ? timestamp * 1_000 : timestamp;
-  const date = new Date(value);
+  const date = new Date(messageTimestamp(timestamp));
   const today = new Date();
   const startOfDay = (input: Date) => new Date(input.getFullYear(), input.getMonth(), input.getDate()).getTime();
   const days = Math.round((startOfDay(today) - startOfDay(date)) / 86_400_000);
@@ -209,6 +208,10 @@ function messageDateLabel(timestamp: number): string {
     day: "numeric",
     year: date.getFullYear() === today.getFullYear() ? undefined : "numeric",
   }).format(date);
+}
+
+function messageTimestamp(timestamp: number): number {
+  return timestamp > 0 && timestamp < 10_000_000_000 ? timestamp * 1_000 : timestamp;
 }
 
 export function InboxView({
@@ -278,8 +281,12 @@ export function InboxView({
   const recordingChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<number | null>(null);
   const selectedChat = chats.find((chat) => chat.id === selectedChatId) || chats[0];
+  const chronologicalMessages = useMemo(
+    () => [...messages].sort((left, right) => messageTimestamp(left.timestamp) - messageTimestamp(right.timestamp) || left.id.localeCompare(right.id)),
+    [messages],
+  );
   const highlightedMessage = highlightedMessageId
-    ? messages.find((message) => sourceMessageMatches(message.id, highlightedMessageId))
+    ? chronologicalMessages.find((message) => sourceMessageMatches(message.id, highlightedMessageId))
     : undefined;
   const activeDraft = drafts.find((draft) => draft.chatId === selectedChat?.id);
 
@@ -303,7 +310,7 @@ export function InboxView({
   const [summarizingGroup, setSummarizingGroup] = useState(false);
   const [sending, setSending] = useState(false);
   const messageCanvasRef = useRef<HTMLDivElement>(null);
-  const lastScrolledMessageRef = useRef("");
+  const restoredChatRef = useRef("");
   const pendingInsights = insights.filter((item) => item.status === "inferred");
   const openCommitments = commitments.filter((item) => item.status === "open");
 
@@ -344,22 +351,26 @@ export function InboxView({
     [contact?.contactTriggerAccess, selectedChat?.id],
   );
   useEffect(() => {
-    if (loading || !selectedChat || messages.length === 0) return;
-    const scrollKey = `${selectedChat.id}:${messages.at(-1)?.id || messages.length}`;
-    if (lastScrolledMessageRef.current === scrollKey) return;
-    lastScrolledMessageRef.current = scrollKey;
+    if (loading || !selectedChat || chronologicalMessages.length === 0) return;
+    if (restoredChatRef.current === selectedChat.id) return;
+    restoredChatRef.current = selectedChat.id;
+    const storageKey = `amiros-chat-scroll:${selectedChat.id}`;
     const frame = window.requestAnimationFrame(() => {
       const canvas = messageCanvasRef.current;
       if (!canvas) return;
+      const savedPosition = Number(sessionStorage.getItem(storageKey));
+      const hasSavedPosition = Number.isFinite(savedPosition) && savedPosition >= 0;
+      canvas.scrollTop = hasSavedPosition ? Math.min(savedPosition, canvas.scrollHeight) : canvas.scrollHeight;
       const incoming = [...canvas.querySelectorAll<HTMLElement>('[data-from-me="false"]')];
-      const unread = Math.max(0, selectedChat.unreadCount);
-      const firstUnread = unread > 0 ? incoming[Math.max(0, incoming.length - unread)] : undefined;
-      if (firstUnread) firstUnread.scrollIntoView({ block: "start", behavior: "auto" });
-      else canvas.scrollTop = canvas.scrollHeight;
       if (incoming.length > 0) void onMarkRead(selectedChat.id);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [loading, messages, onMarkRead, selectedChat]);
+  }, [chronologicalMessages.length, loading, onMarkRead, selectedChat?.id]);
+
+  const rememberChatScroll = () => {
+    if (!selectedChat || !messageCanvasRef.current) return;
+    sessionStorage.setItem(`amiros-chat-scroll:${selectedChat.id}`, String(messageCanvasRef.current.scrollTop));
+  };
 
   useEffect(() => {
     if (loading || !highlightedMessage) return;
@@ -639,14 +650,14 @@ export function InboxView({
           <button className="icon-button contact-rail-toggle" aria-label={contactRailCollapsed ? "Show contact settings" : "Hide contact settings"} onClick={toggleContactRail}>{contactRailCollapsed ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}</button>
         </header>
 
-        <div ref={messageCanvasRef} className={loading ? "message-canvas loading" : "message-canvas"}>
+        <div ref={messageCanvasRef} onScroll={rememberChatScroll} className={loading ? "message-canvas loading" : "message-canvas"}>
           <div className="history-scan-row"><button onClick={() => void scanOlder()} disabled={scanState === "scanning"}><RefreshCw size={14} className={scanState === "scanning" ? "spin" : ""} />{scanState === "idle" ? "Fetch & scan older messages" : scanState === "scanning" ? "Scanning older messages…" : scanState}</button></div>
           {loading ? <div className="empty-chat"><RefreshCw className="loading-history-icon" size={18} />Loading this conversation…</div> : null}
-          {messages.map((message, index) => {
+          {chronologicalMessages.map((message, index) => {
             const groupIncoming = selectedChat.isGroup && !message.fromMe;
             const color = participantColor(message);
             const dateLabel = messageDateLabel(message.timestamp);
-            const previousDateLabel = index > 0 ? messageDateLabel(messages[index - 1]!.timestamp) : undefined;
+            const previousDateLabel = index > 0 ? messageDateLabel(chronologicalMessages[index - 1]!.timestamp) : undefined;
             return <Fragment key={message.id}>{dateLabel !== previousDateLabel ? <div className="day-divider sticky-day-divider"><span>{dateLabel}</span></div> : null}<div
               data-from-me={String(message.fromMe)}
               data-message-id={message.id}
@@ -685,7 +696,7 @@ export function InboxView({
               </div>
             </section>
           ) : null}
-          {!loading && messages.length === 0 ? <div className="empty-chat">No recent messages in this conversation.</div> : null}
+          {!loading && chronologicalMessages.length === 0 ? <div className="empty-chat">No recent messages in this conversation.</div> : null}
         </div>
 
         {forwarding ? <div className="forward-picker"><span><Forward size={16} /><strong>Forward message</strong><small>{forwarding.fullBody || forwarding.body}</small></span><select aria-label="Forward to conversation" defaultValue=""><option value="" disabled>Choose a chat…</option>{chats.filter((chat) => chat.id !== selectedChat.id).map((chat) => <option key={chat.id} value={chat.id}>{chat.name}</option>)}</select><button className="icon-button" aria-label="Cancel forwarding" onClick={() => setForwarding(undefined)}><X size={15} /></button><button className="button primary compact" onClick={(event) => { const select = event.currentTarget.parentElement?.querySelector("select") as HTMLSelectElement | null; if (select?.value) { void onForward(selectedChat.id, forwarding.id, select.value); setForwarding(undefined); } }}>Forward</button></div> : null}
