@@ -31,9 +31,10 @@ import {
 import { buildCalendarSubscriptionFeed } from "./calendar-feed.js";
 import type { WritingStyleLearner } from "./writing-style.js";
 import type { IntelligenceLearner } from "./intelligence-learner.js";
-import { CURRENT_RELEASE, RELEASE_HISTORY } from "./release.js";
+import { CURRENT_RELEASE } from "./release.js";
 import { checkForAmirosUpdate, type UpdateStatus } from "./update-check.js";
-import { handleSettingsApiRoute, MODEL_OPTIONS } from "./dashboard/settings-routes.js";
+import { handleAiUsageApiRoute } from "./dashboard/ai-usage-routes.js";
+import { handleSettingsApiRoute } from "./dashboard/settings-routes.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -1509,36 +1510,19 @@ export function startAmirosDashboard(options: DashboardOptions) {
         return;
       }
 
-      if (request.method === "GET" && pathname === "/api/dashboard") {
-        const usage = ai.usageSnapshot();
-        const todos = visibleTodoTasks(state.listTodoTasks())
-          .map((todo) => ({
-            ...todo,
-            contactName: chatNameCache.get(todo.chatId) || todo.contactName || todo.evidence.senderName || "WhatsApp contact",
-          }))
-          .filter((todo) => isKnownIntelligenceChat(todo.chatId, todo.contactName || "WhatsApp contact"));
-        sendJson(response, 200, {
-          connection: state.connection(),
-          paused: state.isPaused(),
-          preset: config.modelPresetName,
-          models: {
-            text: config.openaiTextModel,
-            image: config.openaiImageModel,
-            voice: config.openaiTranscribeModel,
-          },
-          modelOptions: MODEL_OPTIONS,
-          usage,
-          monthlySpendUsd: state.monthlySpendUsd(),
-          release: { ...CURRENT_RELEASE, history: RELEASE_HISTORY },
-          drafts: state.listDrafts(),
-          todos,
-          activities: await activitiesWithContactNames(client, state, chatNameCache),
-          knowledgeTrackingRequests: state.listKnowledgeTrackingRequests()
-            .filter((request) => isKnownIntelligenceChat(request.chatId, request.contactName)),
-          settings: { ...state.getSettings(), apiKeyConfigured: ai.isConfigured() },
-        });
-        return;
-      }
+      if (await handleAiUsageApiRoute({
+        request,
+        response,
+        pathname,
+        config,
+        ai,
+        state,
+        chatNameCache,
+        sendJson,
+        visibleTodoTasks,
+        isKnownIntelligenceChat,
+        activitiesWithContactNames: () => activitiesWithContactNames(client, state, chatNameCache),
+      })) return;
 
       if (request.method === "GET" && pathname === "/api/update") {
         sendJson(response, 200, await latestUpdateStatus(url.searchParams.get("refresh") === "1"));
