@@ -14,7 +14,7 @@ import {
 import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { extname, join, resolve, sep } from "node:path";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import whatsappWeb from "whatsapp-web.js";
 import type { Client as WhatsAppClient } from "whatsapp-web.js";
 import { cleanNetworkAnswerText, type AiService } from "./ai.js";
@@ -62,6 +62,8 @@ type DashboardOptions = {
   state: AmirosState;
   writingStyleLearner?: WritingStyleLearner;
   intelligenceLearner?: IntelligenceLearner;
+  /** Lets isolated checks keep their calendar token outside a user's data folder. */
+  calendarFeedTokenPath?: string;
   port: number;
 };
 
@@ -99,9 +101,8 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
   response.end(JSON.stringify(value));
 }
 
-function persistentCalendarFeedToken(): string {
-  const tokenPath = resolve("work/calendar-feed-token");
-  mkdirSync(resolve("work"), { recursive: true });
+function persistentCalendarFeedToken(tokenPath = resolve("work/calendar-feed-token")): string {
+  mkdirSync(dirname(tokenPath), { recursive: true });
   if (existsSync(tokenPath)) {
     const saved = readFileSync(tokenPath, "utf8").trim();
     if (/^[a-f0-9]{48}$/i.test(saved)) return saved;
@@ -1549,7 +1550,16 @@ function serveStatic(response: ServerResponse, pathname: string): void {
 }
 
 export function startAmirosDashboard(options: DashboardOptions) {
-  const { client, config, ai, state, writingStyleLearner, intelligenceLearner, port } = options;
+  const {
+    client,
+    config,
+    ai,
+    state,
+    writingStyleLearner,
+    intelligenceLearner,
+    calendarFeedTokenPath,
+    port,
+  } = options;
   const refreshWritingStyle = (chatId: string) => {
     void writingStyleLearner?.refreshIfDue(chatId).catch((error) => {
       console.warn("Automatic writing-style refresh failed", {
@@ -1561,7 +1571,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
   const avatarUrlCache = new Map<string, { url?: string; expiresAt: number }>();
   const chatNameCache = new Map<string, string>();
   const senderNameCache = new Map<string, string>();
-  const calendarFeedToken = persistentCalendarFeedToken();
+  const calendarFeedToken = persistentCalendarFeedToken(calendarFeedTokenPath);
   let updateCheck: UpdateStatus | undefined;
   let updateCheckExpiresAt = 0;
   const latestUpdateStatus = async (force = false): Promise<UpdateStatus> => {
