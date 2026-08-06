@@ -6,7 +6,11 @@ export type UpdateStatus = {
   detail?: string;
 };
 
-export const AMIROS_UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/GreenerX/AmirOS-app/main/package.json";
+/**
+ * GitHub's published-release endpoint deliberately ignores ordinary pushes to
+ * main. That means testers are only prompted after a release is published.
+ */
+export const AMIROS_LATEST_RELEASE_URL = "https://api.github.com/repos/GreenerX/AmirOS-app/releases/latest";
 
 type FetchLike = (input: string, init?: { signal?: AbortSignal }) => Promise<{
   ok: boolean;
@@ -28,7 +32,7 @@ export async function checkForAmirosUpdate(
   currentVersion: string,
   options: {
     fetcher?: FetchLike;
-    manifestUrl?: string;
+    releaseUrl?: string;
     timeoutMs?: number;
   } = {},
 ): Promise<UpdateStatus> {
@@ -36,14 +40,18 @@ export async function checkForAmirosUpdate(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 5_000);
   try {
-    const response = await (options.fetcher || fetch)(options.manifestUrl || AMIROS_UPDATE_MANIFEST_URL, {
+    const response = await (options.fetcher || fetch)(options.releaseUrl || AMIROS_LATEST_RELEASE_URL, {
       signal: controller.signal,
     });
     if (!response.ok) {
       return { status: "unavailable", currentVersion, checkedAt, detail: "AmirOS could not check for updates right now." };
     }
-    const manifest = await response.json() as { version?: unknown };
-    const latestVersion = typeof manifest.version === "string" ? manifest.version.trim() : "";
+    const release = await response.json() as { tag_name?: unknown; draft?: unknown; prerelease?: unknown };
+    const tagName = typeof release.tag_name === "string" ? release.tag_name.trim() : "";
+    const latestVersion = tagName.replace(/^v/i, "");
+    if (release.draft === true || release.prerelease === true) {
+      return { status: "unavailable", currentVersion, checkedAt, detail: "The latest AmirOS version could not be read." };
+    }
     if (!/^\d+\.\d+\.\d+$/.test(latestVersion)) {
       return { status: "unavailable", currentVersion, checkedAt, detail: "The latest AmirOS version could not be read." };
     }

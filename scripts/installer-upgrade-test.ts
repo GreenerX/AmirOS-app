@@ -150,8 +150,21 @@ function assertBuildAndRuntime(project: string): void {
   assert.ok(existsSync(resolve(project, "work/bot.log")), "Launcher should create a runtime log file.");
 }
 
+function assertPublishedReleaseUpdater(): void {
+  const updater = readFileSync(resolve(projectDirectory, "Update AmirOS.command"), "utf8");
+  assert.match(updater, /api\.github\.com\/repos\/GreenerX\/AmirOS-app\/releases\/latest/,
+    "The updater must discover the latest published GitHub release.");
+  assert.match(updater, /refs\/tags\/\$RELEASE_TAG/,
+    "The updater must fetch and install the selected release tag.");
+  assert.match(updater, /archive\/refs\/tags\/\$RELEASE_TAG\.zip/,
+    "ZIP installations must download the selected release tag.");
+  assert.doesNotMatch(updater, /archive\/refs\/heads\/main/,
+    "The updater must not install an ordinary main-branch snapshot.");
+}
+
 let installedProjects: string[] = [];
 try {
+  assertPublishedReleaseUpdater();
   const testBin = createSafeNpx(testDirectory);
 
   const cleanProject = resolve(testDirectory, "AmirOS clean install");

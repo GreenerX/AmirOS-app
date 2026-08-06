@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkForAmirosUpdate, compareVersions } from "../src/update-check.js";
+import { AMIROS_LATEST_RELEASE_URL, checkForAmirosUpdate, compareVersions } from "../src/update-check.js";
 
 describe("AmirOS update checks", () => {
   it("compares release versions by each numeric part", () => {
@@ -10,14 +10,25 @@ describe("AmirOS update checks", () => {
 
   it("reports when a newer public release is available", async () => {
     const result = await checkForAmirosUpdate("0.5.0", {
-      fetcher: async () => ({ ok: true, json: async () => ({ version: "0.5.1" }) }),
+      fetcher: async () => ({ ok: true, json: async () => ({ tag_name: "v0.5.1", draft: false, prerelease: false }) }),
     });
     expect(result).toMatchObject({ status: "available", currentVersion: "0.5.0", latestVersion: "0.5.1" });
   });
 
+  it("checks GitHub's published-release endpoint instead of main", () => {
+    expect(AMIROS_LATEST_RELEASE_URL).toBe("https://api.github.com/repos/GreenerX/AmirOS-app/releases/latest");
+  });
+
   it("does not offer an update when the manifest is invalid", async () => {
     const result = await checkForAmirosUpdate("0.5.0", {
-      fetcher: async () => ({ ok: true, json: async () => ({ version: "not-a-version" }) }),
+      fetcher: async () => ({ ok: true, json: async () => ({ tag_name: "not-a-version" }) }),
+    });
+    expect(result.status).toBe("unavailable");
+  });
+
+  it("does not offer an unpublished prerelease", async () => {
+    const result = await checkForAmirosUpdate("0.5.0", {
+      fetcher: async () => ({ ok: true, json: async () => ({ tag_name: "v0.5.1", prerelease: true }) }),
     });
     expect(result.status).toBe("unavailable");
   });

@@ -8,7 +8,7 @@ set -u
 PROJECT_DIR="${0:A:h}"
 BACKUP_ROOT="${PROJECT_DIR:h}/AmirOS Backups"
 UPDATE_REPOSITORY="https://github.com/GreenerX/AmirOS-app"
-BRANCH="main"
+GITHUB_RELEASE_API="https://api.github.com/repos/GreenerX/AmirOS-app/releases/latest"
 PID_FILE="$PROJECT_DIR/work/amiros.pid"
 
 pause() {
@@ -80,23 +80,38 @@ restore_private_data() {
   done
 }
 
+latest_release_tag() {
+  local temporary_directory="$1"
+  local release_metadata="$temporary_directory/latest-release.json"
+  /usr/bin/curl --fail --location --silent --show-error \
+    -H "Accept: application/vnd.github+json" \
+    "$GITHUB_RELEASE_API" \
+    --output "$release_metadata" || return 1
+  "$NODE_BIN" -e '
+    const fs = require("node:fs");
+    const release = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const tag = typeof release.tag_name === "string" ? release.tag_name.trim() : "";
+    if (!tag || release.draft === true || release.prerelease === true || !/^v?[0-9]+\.[0-9]+\.[0-9]+$/.test(tag)) process.exit(1);
+    process.stdout.write(tag);
+  ' "$release_metadata"
+}
+
 update_from_git() {
   # Do not silently overwrite any developer changes. Private runtime data is
   # ignored by Git and will not make this check fail.
   if [[ -n "$(/usr/bin/git -C "$PROJECT_DIR" status --porcelain --untracked-files=no)" ]]; then
     return 2
   fi
-  /usr/bin/git -C "$PROJECT_DIR" fetch origin "$BRANCH" || return 1
-  /usr/bin/git -C "$PROJECT_DIR" checkout "$BRANCH" || return 1
-  /usr/bin/git -C "$PROJECT_DIR" pull --ff-only origin "$BRANCH" || return 1
+  /usr/bin/git -C "$PROJECT_DIR" fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" || return 1
+  /usr/bin/git -C "$PROJECT_DIR" checkout --detach "$RELEASE_TAG" || return 1
 }
 
 prepare_release_zip() {
   local temporary_directory="$1"
   local archive_path="$temporary_directory/AmirOS.zip"
-  echo "Downloading the latest AmirOS release..."
+  echo "Downloading AmirOS $RELEASE_TAG..."
   /usr/bin/curl --fail --location --silent --show-error \
-    "$UPDATE_REPOSITORY/archive/refs/heads/$BRANCH.zip" \
+    "$UPDATE_REPOSITORY/archive/refs/tags/$RELEASE_TAG.zip" \
     --output "$archive_path" || return 1
   /usr/bin/unzip -q "$archive_path" -d "$temporary_directory" || return 1
   RELEASE_SOURCE_DIRECTORY="$(/usr/bin/find "$temporary_directory" -maxdepth 1 -type d -name 'AmirOS-app-*' -print -quit)"
@@ -139,12 +154,15 @@ echo
 
 TEMPORARY_DIRECTORY="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/amiros-update.XXXXXX")" || fail "AmirOS could not prepare the update."
 trap 'rm -rf "$TEMPORARY_DIRECTORY"' EXIT
+RELEASE_TAG="$(latest_release_tag "$TEMPORARY_DIRECTORY" || true)"
+[[ -n "$RELEASE_TAG" ]] || fail "AmirOS could not find a published update. Check your internet connection and try again."
+echo "Published release found: $RELEASE_TAG"
 
 if [[ -d "$PROJECT_DIR/.git" ]] && /usr/bin/git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if [[ -n "$(/usr/bin/git -C "$PROJECT_DIR" status --porcelain --untracked-files=no)" ]]; then
     fail "This copy has local app changes. AmirOS left them untouched; ask the app owner to release those changes before updating."
   fi
-  /usr/bin/git -C "$PROJECT_DIR" fetch origin "$BRANCH" || fail "AmirOS could not download the update. Check your internet connection and try again."
+  /usr/bin/git -C "$PROJECT_DIR" fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" || fail "AmirOS could not download the update. Check your internet connection and try again."
 else
   prepare_release_zip "$TEMPORARY_DIRECTORY" || fail "AmirOS could not download the update. Check your internet connection and try again."
 fi

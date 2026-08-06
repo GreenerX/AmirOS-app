@@ -30,19 +30,23 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-06",
-  headline: "Installer and recovery fixes",
+  headline: "Inbox polish, safer restarts, and release-based updates",
   notes: [
     {
-      title: "Clean installs now build everything they need",
-      detail: "Installing AmirOS from a ZIP now creates both the dashboard and the background service before it opens, so a fresh install no longer depends on files left behind by an older version.",
+      title: "Smoother, more faithful conversations",
+      detail: "Inbox now keeps reactions, calls, new-message navigation, and message details more dependable, so it is easier to follow a live WhatsApp conversation.",
     },
     {
-      title: "Older installations upgrade safely",
-      detail: "Updating from an older AmirOS folder now brings across your API key, WhatsApp link, settings, knowledge, calendar, tasks, profiles, and avatars while keeping your private data on your Mac.",
+      title: "A safer way to recover AmirOS",
+      detail: "Settings now includes a local backend restart control. AmirOS can reconnect the dashboard after a brief restart without touching your private data.",
     },
     {
-      title: "More dependable recovery",
-      detail: "AmirOS prepares its runtime folders before it starts and checks clean installs, upgrades, dashboard availability, and recovery automatically before a release is shared.",
+      title: "Updates now follow published releases",
+      detail: "AmirOS will only notify you when a finished GitHub release is published. Ordinary behind-the-scenes improvements are no longer shown as updates.",
+    },
+    {
+      title: "A more balanced home screen",
+      detail: "The Agenda stays visually consistent whether it has several plans and tasks or none yet, while Next best action opens the exact message that needs your attention.",
     },
   ],
 };
@@ -53,6 +57,25 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.6.3",
+    releasedAt: "2026-08-06",
+    headline: "Installer and recovery fixes",
+    notes: [
+      {
+        title: "Clean installs now build everything they need",
+        detail: "Installing AmirOS from a ZIP now creates both the dashboard and the background service before it opens, so a fresh install no longer depends on files left behind by an older version.",
+      },
+      {
+        title: "Older installations upgrade safely",
+        detail: "Updating from an older AmirOS folder now brings across your API key, WhatsApp link, settings, knowledge, calendar, tasks, profiles, and avatars while keeping your private data on your Mac.",
+      },
+      {
+        title: "More dependable recovery",
+        detail: "AmirOS prepares its runtime folders before it starts and checks clean installs, upgrades, dashboard availability, and recovery automatically before a release is shared.",
+      },
+    ],
+  },
   {
     version: "0.6.2",
     releasedAt: "2026-08-06",
