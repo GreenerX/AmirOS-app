@@ -102,7 +102,7 @@ update_from_git() {
   if [[ -n "$(/usr/bin/git -C "$PROJECT_DIR" status --porcelain --untracked-files=no)" ]]; then
     return 2
   fi
-  /usr/bin/git -C "$PROJECT_DIR" fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" || return 1
+  /usr/bin/git -C "$PROJECT_DIR" fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || return 1
   /usr/bin/git -C "$PROJECT_DIR" checkout --detach "$RELEASE_TAG" || return 1
 }
 
@@ -111,7 +111,7 @@ prepare_release_zip() {
   local archive_path="$temporary_directory/AmirOS.zip"
   echo "Downloading AmirOS $RELEASE_TAG..."
   /usr/bin/curl --fail --location --silent --show-error \
-    "$UPDATE_REPOSITORY/archive/refs/tags/$RELEASE_TAG.zip" \
+    "$UPDATE_REPOSITORY/archive/refs/tags/${RELEASE_TAG}.zip" \
     --output "$archive_path" || return 1
   /usr/bin/unzip -q "$archive_path" -d "$temporary_directory" || return 1
   RELEASE_SOURCE_DIRECTORY="$(/usr/bin/find "$temporary_directory" -maxdepth 1 -type d -name 'AmirOS-app-*' -print -quit)"
@@ -162,7 +162,7 @@ if [[ -d "$PROJECT_DIR/.git" ]] && /usr/bin/git -C "$PROJECT_DIR" rev-parse --is
   if [[ -n "$(/usr/bin/git -C "$PROJECT_DIR" status --porcelain --untracked-files=no)" ]]; then
     fail "This copy has local app changes. AmirOS left them untouched; ask the app owner to release those changes before updating."
   fi
-  /usr/bin/git -C "$PROJECT_DIR" fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" || fail "AmirOS could not download the update. Check your internet connection and try again."
+  /usr/bin/git -C "$PROJECT_DIR" fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || fail "AmirOS could not download the update. Check your internet connection and try again."
 else
   prepare_release_zip "$TEMPORARY_DIRECTORY" || fail "AmirOS could not download the update. Check your internet connection and try again."
 fi

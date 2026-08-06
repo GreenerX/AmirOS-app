@@ -154,10 +154,12 @@ function assertPublishedReleaseUpdater(): void {
   const updater = readFileSync(resolve(projectDirectory, "Update AmirOS.command"), "utf8");
   assert.match(updater, /api\.github\.com\/repos\/GreenerX\/AmirOS-app\/releases\/latest/,
     "The updater must discover the latest published GitHub release.");
-  assert.match(updater, /refs\/tags\/\$RELEASE_TAG/,
-    "The updater must fetch and install the selected release tag.");
-  assert.match(updater, /archive\/refs\/tags\/\$RELEASE_TAG\.zip/,
+  assert.match(updater, /refs\/tags\/\$\{RELEASE_TAG\}:refs\/tags\/\$\{RELEASE_TAG\}/,
+    "The updater must fetch the selected release tag without treating its version as a shell modifier.");
+  assert.match(updater, /archive\/refs\/tags\/\$\{RELEASE_TAG\}\.zip/,
     "ZIP installations must download the selected release tag.");
+  assert.doesNotMatch(updater, /refs\/tags\/\$RELEASE_TAG:refs/,
+    "The updater must delimit the release tag before the Git ref separator.");
   assert.doesNotMatch(updater, /archive\/refs\/heads\/main/,
     "The updater must not install an ordinary main-branch snapshot.");
 }

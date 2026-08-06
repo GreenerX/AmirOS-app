@@ -30,23 +30,11 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-06",
-  headline: "Inbox polish, safer restarts, and release-based updates",
+  headline: "A reliable published-release update",
   notes: [
     {
-      title: "Smoother, more faithful conversations",
-      detail: "Inbox now keeps reactions, calls, new-message navigation, and message details more dependable, so it is easier to follow a live WhatsApp conversation.",
-    },
-    {
-      title: "A safer way to recover AmirOS",
-      detail: "Settings now includes a local backend restart control. AmirOS can reconnect the dashboard after a brief restart without touching your private data.",
-    },
-    {
-      title: "Updates now follow published releases",
-      detail: "AmirOS will only notify you when a finished GitHub release is published. Ordinary behind-the-scenes improvements are no longer shown as updates.",
-    },
-    {
-      title: "A more balanced home screen",
-      detail: "The Agenda stays visually consistent whether it has several plans and tasks or none yet, while Next best action opens the exact message that needs your attention.",
+      title: "One-click updates can download the published version",
+      detail: "Fixed an issue that could stop an update before it began. AmirOS now fetches the exact published version correctly, while leaving your current app and private data untouched if an update cannot start.",
     },
   ],
 };
@@ -57,6 +45,29 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.6.4",
+    releasedAt: "2026-08-06",
+    headline: "Inbox polish, safer restarts, and release-based updates",
+    notes: [
+      {
+        title: "Smoother, more faithful conversations",
+        detail: "Inbox now keeps reactions, calls, new-message navigation, and message details more dependable, so it is easier to follow a live WhatsApp conversation.",
+      },
+      {
+        title: "A safer way to recover AmirOS",
+        detail: "Settings now includes a local backend restart control. AmirOS can reconnect the dashboard after a brief restart without touching your private data.",
+      },
+      {
+        title: "Updates now follow published releases",
+        detail: "AmirOS will only notify you when a finished GitHub release is published. Ordinary behind-the-scenes improvements are no longer shown as updates.",
+      },
+      {
+        title: "A more balanced home screen",
+        detail: "The Agenda stays visually consistent whether it has several plans and tasks or none yet, while Next best action opens the exact message that needs your attention.",
+      },
+    ],
+  },
   {
     version: "0.6.3",
     releasedAt: "2026-08-06",
