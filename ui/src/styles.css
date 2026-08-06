@@ -305,6 +305,13 @@ button.overview-action-cell:hover { background: var(--surface-subtle); }
 .overview-agenda-empty > span { display: grid; gap: 3px; color: var(--text); }
 .overview-agenda-empty strong { font-size: 11px; }
 .overview-agenda-empty small { color: var(--muted); font-size: 10px; line-height: 1.35; }
+@media (min-width: 981px) {
+  .overview-primary-grid { align-items: start; }
+  .intelligence-snapshot-panel { display: grid; min-height: 470px; grid-template-rows: auto minmax(0, 1fr); align-self: start; }
+  .intelligence-snapshot-body { grid-template-rows: auto minmax(0, 1fr); }
+  .overview-agenda-columns { min-height: 0; }
+  .overview-command-rail { align-self: start; grid-template-rows: auto auto; }
+}
 @container overview-agenda (max-width: 650px) {
   .overview-agenda-columns { grid-template-columns: 1fr; }
   .overview-agenda-empty { min-height: 84px; }
