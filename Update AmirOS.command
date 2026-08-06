@@ -119,6 +119,7 @@ install_release_zip() {
 }
 
 cd "$PROJECT_DIR" || exit 1
+mkdir -p "$PROJECT_DIR/work" || fail "AmirOS could not prepare its local runtime folder."
 NODE_BIN="$(find_node || true)"
 [[ -n "$NODE_BIN" ]] || fail "Node.js was not found. Install Node.js 20 or newer, then try again."
 NPX_BIN="${NODE_BIN:h}/npx"
@@ -164,6 +165,9 @@ restore_private_data || fail "The new AmirOS files are installed, but your priva
 echo "Installing the updated AmirOS files..."
 if ! "$NPX_BIN" --yes pnpm@10 install --frozen-lockfile; then
   fail "AmirOS could not install its updated components. Your private backup is safe at: $BACKUP_DIR"
+fi
+if ! "$NPX_BIN" --yes pnpm@10 build; then
+  fail "AmirOS could not rebuild its background service. Your private backup is safe at: $BACKUP_DIR"
 fi
 if ! "$NPX_BIN" --yes pnpm@10 ui:build; then
   fail "AmirOS could not rebuild its dashboard. Your private backup is safe at: $BACKUP_DIR"

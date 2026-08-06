@@ -3,7 +3,8 @@
 set -u
 
 PROJECT_DIR="${0:A:h}"
-DASHBOARD_URL="http://127.0.0.1:3789"
+AMIROS_PORT="${AMIROS_PORT:-3789}"
+DASHBOARD_URL="http://127.0.0.1:${AMIROS_PORT}"
 PID_FILE="$PROJECT_DIR/work/amiros.pid"
 
 cd "$PROJECT_DIR" || exit 1
