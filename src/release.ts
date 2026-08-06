@@ -30,11 +30,19 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-06",
-  headline: "A smoother, safer update experience",
+  headline: "Installer and recovery fixes",
   notes: [
     {
-      title: "Faster, safer updates",
-      detail: "AmirOS now keeps your WhatsApp link safely in place during an update instead of making a large extra copy of it. Updates finish much more reliably while your private data stays on your Mac.",
+      title: "Clean installs now build everything they need",
+      detail: "Installing AmirOS from a ZIP now creates both the dashboard and the background service before it opens, so a fresh install no longer depends on files left behind by an older version.",
+    },
+    {
+      title: "Older installations upgrade safely",
+      detail: "Updating from an older AmirOS folder now brings across your API key, WhatsApp link, settings, knowledge, calendar, tasks, profiles, and avatars while keeping your private data on your Mac.",
+    },
+    {
+      title: "More dependable recovery",
+      detail: "AmirOS prepares its runtime folders before it starts and checks clean installs, upgrades, dashboard availability, and recovery automatically before a release is shared.",
     },
   ],
 };
@@ -45,6 +53,17 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.6.2",
+    releasedAt: "2026-08-06",
+    headline: "A smoother, safer update experience",
+    notes: [
+      {
+        title: "Faster, safer updates",
+        detail: "AmirOS now keeps your WhatsApp link safely in place during an update instead of making a large extra copy of it. Updates finish much more reliably while your private data stays on your Mac.",
+      },
+    ],
+  },
   {
     version: "0.6.1",
     releasedAt: "2026-08-05",
