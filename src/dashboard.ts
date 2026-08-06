@@ -297,12 +297,28 @@ type CachedMessageModel = {
   mediaData?: { caption?: string };
   mediaObject?: { caption?: string };
   mentionedJidList?: Array<string | { _serialized?: string }>;
+  reactions?: unknown;
+  isVideoCall?: boolean;
+  isVoiceCall?: boolean;
+  isMissed?: boolean;
+  callDuration?: number;
+  duration?: number;
+  callType?: string;
+  subtype?: string;
   _data?: {
     body?: string;
     caption?: string;
     mediaData?: { caption?: string };
     mediaObject?: { caption?: string };
     mentionedJidList?: Array<string | { _serialized?: string }>;
+    reactions?: unknown;
+    isVideoCall?: boolean;
+    isVoiceCall?: boolean;
+    isMissed?: boolean;
+    callDuration?: number;
+    duration?: number;
+    callType?: string;
+    subtype?: string;
   };
   quotedMsg?: CachedMessageModel;
   msgContextInfo?: { quotedMsg?: CachedMessageModel };
@@ -329,7 +345,103 @@ export type DashboardMessage = {
   mentionIds?: string[];
   ownerMentioned?: boolean;
   quotedMessage?: QuotedDashboardMessage;
+  reactions?: Array<{
+    emoji: string;
+    hasReactionByMe?: boolean;
+    senders: Array<{ id: string; name?: string; timestamp?: number }>;
+  }>;
+  call?: {
+    direction: "incoming" | "outgoing";
+    kind?: "voice" | "video";
+    missed?: boolean;
+    durationSeconds?: number;
+  };
 };
+
+type MetadataRecord = Record<string, unknown>;
+
+function metadataRecord(value: unknown): MetadataRecord | undefined {
+  return value && typeof value === "object" ? value as MetadataRecord : undefined;
+}
+
+function metadataString(record: MetadataRecord | undefined, fields: string[]): string | undefined {
+  for (const field of fields) {
+    const value = record?.[field];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function metadataNumber(record: MetadataRecord | undefined, fields: string[]): number | undefined {
+  for (const field of fields) {
+    const value = record?.[field];
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+  }
+  return undefined;
+}
+
+function metadataBoolean(record: MetadataRecord | undefined, fields: string[]): boolean | undefined {
+  for (const field of fields) {
+    const value = record?.[field];
+    if (typeof value === "boolean") return value;
+  }
+  return undefined;
+}
+
+/** Converts WhatsApp's reaction collection into a small, stable dashboard shape. */
+export function dashboardReactionsFromWhatsApp(raw: unknown): DashboardMessage["reactions"] {
+  const root = metadataRecord(raw);
+  const entries = Array.isArray(raw)
+    ? raw
+    : Array.isArray(root?.reactions)
+      ? root.reactions
+      : [];
+  const byEmoji = new Map<string, NonNullable<DashboardMessage["reactions"]>[number]>();
+
+  for (const value of entries) {
+    const reaction = metadataRecord(value);
+    const emoji = metadataString(reaction, ["aggregateEmoji", "reaction", "emoji"]);
+    if (!emoji) continue;
+    const existing = byEmoji.get(emoji) || { emoji, hasReactionByMe: false, senders: [] };
+    existing.hasReactionByMe ||= metadataBoolean(reaction, ["hasReactionByMe", "isMe"]) === true;
+    const senders = Array.isArray(reaction?.senders) ? reaction.senders : [reaction];
+    for (const senderValue of senders) {
+      const sender = metadataRecord(senderValue);
+      const id = metadataString(sender, ["senderId", "id", "userId"]);
+      if (!id) continue;
+      const timestamp = metadataNumber(sender, ["timestamp", "t"]);
+      const name = metadataString(sender, ["name", "pushname", "shortName"]);
+      if (existing.senders.some((item) => item.id === id && item.timestamp === timestamp)) continue;
+      existing.senders.push({ id, name, timestamp });
+    }
+    byEmoji.set(emoji, existing);
+  }
+  return byEmoji.size > 0 ? [...byEmoji.values()] : undefined;
+}
+
+/** Call logs expose different fields in different WhatsApp Web versions. Keep only explicit metadata. */
+export function dashboardCallFromWhatsApp(
+  raw: unknown,
+  fromMe: boolean,
+  fallbackType?: string,
+): DashboardMessage["call"] {
+  const record = metadataRecord(raw);
+  const type = metadataString(record, ["type", "subtype"]) || fallbackType;
+  const callType = metadataString(record, ["callType", "type", "subtype"])?.toLowerCase();
+  const video = metadataBoolean(record, ["isVideoCall", "isVideo"]) === true || callType === "video" || callType === "video_call";
+  const voice = metadataBoolean(record, ["isVoiceCall", "isVoice"]) === true || callType === "voice" || callType === "voice_call" || callType === "audio";
+  const isCall = type === "call_log" || type === "call" || video || voice;
+  if (!isCall) return undefined;
+  const missed = metadataBoolean(record, ["isMissed", "missed"])
+    ?? ["missed", "missed_call"].includes(callType || "");
+  const durationSeconds = metadataNumber(record, ["callDuration", "duration", "durationSeconds"]);
+  return {
+    direction: fromMe ? "outgoing" : "incoming",
+    ...(video ? { kind: "video" as const } : voice ? { kind: "voice" as const } : {}),
+    ...(missed ? { missed } : {}),
+    ...(durationSeconds === undefined ? {} : { durationSeconds }),
+  };
+}
 
 type MentionLabel = { id: string; name: string };
 
@@ -1061,6 +1173,7 @@ async function withGroupSenderNames(
   const ids = messages.flatMap((message) => [
     ...(chatId.endsWith("@g.us") && !message.fromMe && message.senderId ? [message.senderId] : []),
     ...(message.mentionIds || []),
+    ...(message.reactions?.flatMap((reaction) => reaction.senders.map((sender) => sender.id)) || []),
   ]);
   await hydrateContactNames(client, ids, senderNameCache);
   return messages.map((message) => {
@@ -1088,6 +1201,13 @@ async function withGroupSenderNames(
             ? senderNameCache.get(message.quotedMessage.senderId) || "Group participant"
             : message.quotedMessage.senderName,
       } : undefined,
+      reactions: message.reactions?.map((reaction) => ({
+        ...reaction,
+        senders: reaction.senders.map((sender) => ({
+          ...sender,
+          name: sender.name || senderNameCache.get(sender.id),
+        })),
+      })),
     };
   });
 }
@@ -1172,6 +1292,13 @@ async function listMessages(
         messageWithCaption.mediaObject?.caption || messageWithCaption.mediaData?.caption ||
         messageWithCaption._data?.mediaObject?.caption || messageWithCaption._data?.mediaData?.caption || "";
       const preview = safeMessagePreview(rawBody);
+      let rawReactions: unknown;
+      try {
+        rawReactions = await message.getReactions();
+      } catch {
+        // Reactions are optional metadata. A transient WhatsApp lookup must not hide the message.
+      }
+      const callMetadata = { ...messageWithCaption._data, ...messageWithCaption, type: message.type };
       const mentionIds = new Set([...message.mentionedIds || [], ...mentionIdsInBody(rawBody)]);
       const mentionedContacts = await message.getMentions().catch(() => []);
       for (const mentionedContact of mentionedContacts) {
@@ -1213,6 +1340,8 @@ async function listMessages(
         mentionIds: [...mentionIds],
         ownerMentioned: Boolean(message.fromMe || mentionedContacts.some((contact) => contact.isMe)),
         quotedMessage,
+        reactions: dashboardReactionsFromWhatsApp(rawReactions),
+        call: dashboardCallFromWhatsApp(callMetadata, message.fromMe, message.type),
       };
     }));
     const resolvedMessages = resolveQuotedMessageReferences(dashboardMessages);
@@ -1349,6 +1478,17 @@ async function listMessages(
             senderId,
             mentionIds,
             ownerMentioned: Boolean(messageId?.fromMe),
+            rawReactions: normalized.reactions || normalized._data?.reactions || message.reactions || message._data?.reactions,
+            callData: {
+              type,
+              isVideoCall: normalized.isVideoCall ?? normalized._data?.isVideoCall ?? message.isVideoCall ?? message._data?.isVideoCall,
+              isVoiceCall: normalized.isVoiceCall ?? normalized._data?.isVoiceCall ?? message.isVoiceCall ?? message._data?.isVoiceCall,
+              isMissed: normalized.isMissed ?? normalized._data?.isMissed ?? message.isMissed ?? message._data?.isMissed,
+              callDuration: normalized.callDuration ?? normalized._data?.callDuration ?? message.callDuration ?? message._data?.callDuration,
+              duration: normalized.duration ?? normalized._data?.duration ?? message.duration ?? message._data?.duration,
+              callType: normalized.callType ?? normalized._data?.callType ?? message.callType ?? message._data?.callType,
+              subtype: normalized.subtype ?? normalized._data?.subtype ?? message.subtype ?? message._data?.subtype,
+            },
             quotedMessage: quoted ? {
               id: quotedId || `quoted-${normalized.t || message.t || index}`,
               body: quoted.body || quoted.caption || "Media message",
@@ -1362,17 +1502,25 @@ async function listMessages(
     if (result.chatId !== chatId) {
       throw new Error("WhatsApp returned a different cached conversation");
     }
-    const dashboardMessages = (result.messages as DashboardMessage[]).map((message) => {
+    type CachedDashboardMessage = DashboardMessage & {
+      downloadable?: boolean;
+      rawReactions?: unknown;
+      callData?: unknown;
+    };
+    const dashboardMessages = (result.messages as CachedDashboardMessage[]).map((message) => {
+      const { downloadable, rawReactions, callData, ...dashboardMessage } = message;
       const body = safeMessagePreview(message.body);
       const hasMedia = message.hasMedia || (body === "Media message" && Boolean(message.body));
       return {
-        ...message,
+        ...dashboardMessage,
         body,
         hasMedia,
         fullBody: hasMedia && body === "Media message" ? "" : message.body,
-        mediaUrl: hasMedia && "downloadable" in message && message.downloadable
+        mediaUrl: hasMedia && downloadable
           ? mediaUrlFor(chatId, message.id)
           : undefined,
+        reactions: dashboardReactionsFromWhatsApp(rawReactions),
+        call: dashboardCallFromWhatsApp(callData, message.fromMe, message.type),
       };
     });
     const resolvedMessages = resolveQuotedMessageReferences(dashboardMessages);

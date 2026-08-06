@@ -11,6 +11,8 @@ import {
   MemoryStick,
   MessageSquareText,
   Mic,
+  Phone,
+  PhoneMissed,
   Paperclip,
   PencilLine,
   Plus,
@@ -30,6 +32,7 @@ import {
   Reply,
   Smile,
   UploadCloud,
+  Video,
   X,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +42,8 @@ import { contactProfilePdfUrl } from "../api";
 import { WhatsAppIcon } from "./BrandIcons";
 import { ContactAvatar } from "./ContactAvatar";
 import { ChatMedia } from "./ChatMedia";
+import { callEventPresentation, mergedMessageReactions } from "../inbox-message-presentation";
+import { isNearChatBottom, shouldFollowNewMessages, shouldShowNewMessageJump } from "../inbox-scroll";
 import { textDirection } from "../text-direction";
 import type {
   ChatMessage,
@@ -315,6 +320,10 @@ export function InboxView({
   const restoredChatRef = useRef("");
   const restoringChatScrollRef = useRef(false);
   const restoreChatScrollRef = useRef<(() => void) | undefined>(undefined);
+  const knownMessageIdsRef = useRef<Set<string>>(new Set());
+  const latestMessageTimestampRef = useRef(0);
+  const nearChatBottomRef = useRef(true);
+  const [newMessageCount, setNewMessageCount] = useState(0);
   const pendingInsights = insights.filter((item) => item.status === "inferred");
 
   useEffect(() => setDraftBody(activeDraft?.body || ""), [activeDraft?.id, activeDraft?.body]);
@@ -354,10 +363,14 @@ export function InboxView({
     [contact?.contactTriggerAccess, selectedChat?.id],
   );
   useEffect(() => {
-    // A chat can keep its component mounted while its messages are refreshed. Reset the
-    // one-time positioning marker as soon as that refresh starts.
-    if (loading) restoredChatRef.current = "";
-  }, [loading, selectedChat?.id]);
+    // A message refresh must not reset a reader back to the first message. Only a newly
+    // selected conversation receives the one-time open-position restoration.
+    restoredChatRef.current = "";
+    knownMessageIdsRef.current = new Set();
+    latestMessageTimestampRef.current = 0;
+    nearChatBottomRef.current = true;
+    setNewMessageCount(0);
+  }, [selectedChat?.id]);
 
   useEffect(() => {
     if (loading || !selectedChat || chronologicalMessages.length === 0) return;
@@ -409,6 +422,11 @@ export function InboxView({
           restorePosition();
           restoringChatScrollRef.current = false;
           resizeObserver?.disconnect();
+          const canvas = messageCanvasRef.current;
+          knownMessageIdsRef.current = new Set(chronologicalMessages.map((message) => message.id));
+          latestMessageTimestampRef.current = Math.max(0, ...chronologicalMessages.map((message) => messageTimestamp(message.timestamp)));
+          nearChatBottomRef.current = canvas ? isNearChatBottom(canvas) : true;
+          setNewMessageCount(0);
           const incoming = [...(messageCanvasRef.current?.querySelectorAll<HTMLElement>('[data-from-me="false"]') ?? [])];
           if (incoming.length > 0) void onMarkRead(selectedChat.id);
         }, 450);
@@ -430,12 +448,50 @@ export function InboxView({
 
   const rememberChatScroll = () => {
     if (!selectedChat || !messageCanvasRef.current || restoringChatScrollRef.current) return;
-    sessionStorage.setItem(`amiros-chat-scroll:${selectedChat.id}`, String(messageCanvasRef.current.scrollTop));
+    const canvas = messageCanvasRef.current;
+    nearChatBottomRef.current = isNearChatBottom(canvas);
+    if (nearChatBottomRef.current) setNewMessageCount(0);
+    sessionStorage.setItem(`amiros-chat-scroll:${selectedChat.id}`, String(canvas.scrollTop));
+  };
+
+  const scrollToNewest = (behavior: ScrollBehavior = "smooth") => {
+    const canvas = messageCanvasRef.current;
+    if (!canvas) return;
+    canvas.scrollTo({ top: canvas.scrollHeight, behavior });
+    nearChatBottomRef.current = true;
+    setNewMessageCount(0);
   };
 
   const restoreAfterMediaLoad = () => {
     if (restoringChatScrollRef.current) restoreChatScrollRef.current?.();
   };
+
+  useEffect(() => {
+    if (loading || !selectedChat || restoredChatRef.current !== selectedChat.id) return;
+    const known = knownMessageIdsRef.current;
+    if (known.size === 0) {
+      knownMessageIdsRef.current = new Set(chronologicalMessages.map((message) => message.id));
+      latestMessageTimestampRef.current = Math.max(0, ...chronologicalMessages.map((message) => messageTimestamp(message.timestamp)));
+      return;
+    }
+    const newMessages = chronologicalMessages.filter((message) => !known.has(message.id));
+    if (newMessages.length === 0) return;
+    const previousLatestTimestamp = latestMessageTimestampRef.current;
+    newMessages.forEach((message) => known.add(message.id));
+    latestMessageTimestampRef.current = Math.max(
+      previousLatestTimestamp,
+      ...newMessages.map((message) => messageTimestamp(message.timestamp)),
+    );
+    // Loading older history should never interrupt a reader. Only messages that are newer
+    // than the conversation already on screen count as live arrivals.
+    const arriving = newMessages.filter((message) => messageTimestamp(message.timestamp) >= previousLatestTimestamp);
+    if (arriving.length === 0) return;
+    if (shouldFollowNewMessages(nearChatBottomRef.current, arriving)) {
+      window.requestAnimationFrame(() => scrollToNewest(arriving.some((message) => message.fromMe) ? "auto" : "smooth"));
+    } else {
+      setNewMessageCount((count) => count + arriving.length);
+    }
+  }, [chronologicalMessages, loading, selectedChat?.id]);
 
   useEffect(() => {
     if (loading || !highlightedMessage) return;
@@ -589,7 +645,10 @@ export function InboxView({
         const file = new File([blob], `voice-message.${extension}`, { type: blob.type });
         setSending(true);
         void onSendMedia(selectedChat.id, file, "", true)
-          .then(() => setScanState("Voice memo sent"))
+          .then(() => {
+            setScanState("Voice memo sent");
+            window.requestAnimationFrame(() => scrollToNewest("auto"));
+          })
           .catch(() => setScanState("Voice memo could not be sent"))
           .finally(() => setSending(false));
       };
@@ -624,6 +683,7 @@ export function InboxView({
         setInsertedDraftId(undefined);
       }
       setReplyingTo(undefined);
+      window.requestAnimationFrame(() => scrollToNewest("auto"));
     } catch {
       setScanState("Message was not sent — your text is still here");
     } finally {
@@ -723,6 +783,9 @@ export function InboxView({
             const color = participantColor(message);
             const dateLabel = messageDateLabel(message.timestamp);
             const previousDateLabel = index > 0 ? messageDateLabel(chronologicalMessages[index - 1]!.timestamp) : undefined;
+            const reactions = mergedMessageReactions(message);
+            const callPresentation = message.call ? callEventPresentation(message.call) : undefined;
+            const CallIcon = message.call?.missed ? PhoneMissed : message.call?.kind === "video" ? Video : Phone;
             return <Fragment key={message.id}>{dateLabel !== previousDateLabel ? <div className="day-divider sticky-day-divider"><span>{dateLabel}</span></div> : null}<div
               data-from-me={String(message.fromMe)}
               data-message-id={message.id}
@@ -730,13 +793,22 @@ export function InboxView({
               style={{ "--participant-color": color } as CSSProperties}
             >
               {groupIncoming ? <ContactAvatar name={message.senderName || "Group participant"} src={message.senderId ? `/api/chats/${encodeURIComponent(message.senderId)}/avatar` : undefined} tone={Math.abs(color.length)} /> : null}
-              <div className={`message-bubble ${message.fromMe ? "sent" : "received"}${message.hasMedia ? " media-bubble" : ""}`}>
+              <div className={`message-bubble ${message.fromMe ? "sent" : "received"}${message.hasMedia && !message.call ? " media-bubble" : ""}${reactions.length > 0 ? " has-reactions" : ""}`}>
                 {groupIncoming && message.senderName ? <strong className="group-sender-name" dir="auto">{message.senderName}</strong> : null}
                 {message.quotedMessage ? <button className="quoted-message" type="button" onClick={() => scrollToQuotedMessage(message.quotedMessage!.id)}><strong>{message.quotedMessage.fromMe ? "You" : message.quotedMessage.senderName || selectedChat.name}</strong><span dir={textDirection(message.quotedMessage.body)}>{message.quotedMessage.body}</span></button> : null}
-                {message.hasMedia ? <ChatMedia message={message} /> : null}
-                {message.fullBody || (message.body && message.body !== "Media message") ? <p dir={textDirection(message.fullBody || message.body)}>{message.fullBody || message.body}</p> : null}
+                {message.call && callPresentation ? <div className={`chat-call-event${message.call.missed ? " missed" : ""}`}><CallIcon size={17} /><span><strong>{callPresentation.title}</strong><small>{callPresentation.detail}</small></span></div> : null}
+                {message.hasMedia && !message.call ? <ChatMedia message={message} /> : null}
+                {!message.call && (message.fullBody || (message.body && message.body !== "Media message")) ? <p dir={textDirection(message.fullBody || message.body)}>{message.fullBody || message.body}</p> : null}
                 <time>{formatTime(message.timestamp)} {message.fromMe ? <Check size={13} /> : null}</time>
-                {message.localReaction ? <span className="message-reaction">{message.localReaction}</span> : null}
+                {reactions.length > 0 ? <div className="message-reactions" aria-label="Message reactions">{reactions.map((reaction) => {
+                  const names = [...new Set(reaction.senders.map((sender) => sender.name).filter((name): name is string => Boolean(name)))];
+                  const label = names.length > 0
+                    ? `${reaction.emoji} by ${names.join(", ")}`
+                    : reaction.senders.length > 1
+                      ? `${reaction.emoji} by ${reaction.senders.length} people`
+                      : reaction.emoji;
+                  return <span className="message-reaction" key={`${reaction.emoji}:${reaction.senders.map((sender) => sender.id).join(",")}`} title={label} aria-label={label}><span>{reaction.emoji}</span>{reaction.senders.length > 1 ? <b>{reaction.senders.length}</b> : null}{names.length > 0 ? <small>{names.join(", ")}</small> : null}</span>;
+                })}</div> : null}
                 <div className="message-actions" aria-label="Message actions">
                   <button aria-label="React" onClick={() => setReactionFor((current) => current === message.id ? undefined : message.id)}><Smile size={15} /></button>
                   <button aria-label="Reply" onClick={() => { setReplyingTo(message); setForwarding(undefined); }}><Reply size={15} /></button>
@@ -747,6 +819,8 @@ export function InboxView({
               </div>
             </div></Fragment>;
           })}
+
+          {shouldShowNewMessageJump(newMessageCount, nearChatBottomRef.current) ? <button className="new-messages-jump" type="button" onClick={() => scrollToNewest()}><ChevronDown size={16} /> <span>{newMessageCount === 1 ? "New message" : "New messages"}</span><b>{newMessageCount}</b></button> : null}
 
           {activeDraft && activeDraft.id !== insertedDraftId ? (
             <section className="ai-draft-card">

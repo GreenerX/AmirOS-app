@@ -1067,8 +1067,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .composer-emoji-picker { display: flex; flex-wrap: wrap; gap: 3px; margin: 8px 10px 0; padding: 7px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); }
 .composer-emoji-picker button { display: grid; place-items: center; width: 31px; height: 31px; border: 0; border-radius: 7px; background: transparent; font-size: 18px; }
 .composer-emoji-picker button:hover { background: var(--surface); box-shadow: var(--shadow-xs); }
-.message-reaction { position: absolute; right: 8px; bottom: -13px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); box-shadow: var(--shadow-sm); font-size: 13px; }
-.message-row.received .message-reaction { right: auto; left: 8px; }
+.message-bubble.has-reactions { margin-bottom: 10px; }
+.message-reactions { position: absolute; right: 8px; bottom: -16px; z-index: 2; display: flex; flex-wrap: wrap; gap: 4px; max-width: min(330px, calc(100% - 16px)); }
+.message-row.received .message-reactions { right: auto; left: 8px; }
+.message-reaction { display: inline-flex; align-items: center; gap: 3px; min-height: 22px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); box-shadow: var(--shadow-sm); font-size: 13px; }
+.message-reaction b { display: grid; place-items: center; min-width: 14px; height: 14px; border-radius: 999px; color: var(--emerald-dark); background: var(--emerald-soft); font-size: 8px; }
+.message-reaction small { max-width: 120px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; font-size: 8px; }
+.chat-call-event { display: flex; align-items: center; gap: 8px; min-width: 156px; padding: 3px 0 6px; }
+.chat-call-event > svg { flex: 0 0 auto; color: var(--emerald); }.chat-call-event.missed > svg { color: #b42318; }
+.chat-call-event > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }.chat-call-event strong { font-size: 11px; }.chat-call-event small { color: var(--muted); font-size: 9px; }
+.new-messages-jump { position: sticky; bottom: 10px; left: 50%; z-index: 6; display: inline-flex; align-items: center; gap: 5px; margin: 0 auto 8px; padding: 7px 10px; border: 1px solid var(--accent-border); border-radius: 999px; color: var(--emerald-dark); background: var(--surface); box-shadow: var(--shadow-md); font-size: 10px; font-weight: 760; transform: translateX(-50%); }
+.new-messages-jump b { display: grid; place-items: center; min-width: 16px; height: 16px; border-radius: 999px; color: var(--surface); background: var(--emerald); font-size: 8px; }
 .forward-picker { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 220px) auto auto; gap: 8px; align-items: center; margin: 9px 18px 0; padding: 9px 10px; border: 1px solid var(--accent-border); border-radius: 10px; background: var(--emerald-soft); }
 .forward-picker > span { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; min-width: 0; }
 .forward-picker > span svg { grid-row: span 2; }.forward-picker small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2047,6 +2056,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .intel-contact-knowledge-empty > svg { margin-bottom: 8px; color: var(--emerald); }
 .intel-contact-knowledge-empty strong { color: var(--text); font-size: 11px; }
 .intel-contact-knowledge-empty p { max-width: 270px; margin: 6px 0 0; font-size: 9px; line-height: 1.5; }
+
+/* On desktop these companion cards are one deliberate workspace. Keep their
+   outer edges aligned, while making only the content areas scroll when one
+   side has substantially more information than the other. */
+@media (min-width: 901px) {
+  .intel-knowledge-columns { align-items: stretch; grid-auto-rows: clamp(430px, 54vh, 610px); }
+  .intel-knowledge-columns > section { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+  .intel-knowledge-relationships, .intel-contact-knowledge { min-height: 0; }
+  .intel-knowledge-bubbles, .intel-contact-knowledge-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+  .intel-contact-knowledge-list { max-height: none; }
+  .intel-contact-knowledge > .intel-knowledge-selection-hint { flex: 1 1 auto; min-height: 0; }
+}
 .intel-confirmed-list, .intel-suggestion-list { max-height: 610px; overflow-y: auto; scrollbar-width: thin; }
 .intel-confirmed-list > article { border-bottom: 1px solid var(--border-soft); }
 .intel-confirmed-main { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; padding: 12px 13px; border: 0; text-align: left; background: transparent; }

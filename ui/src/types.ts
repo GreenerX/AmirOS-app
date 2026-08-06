@@ -172,6 +172,17 @@ export type ChatMessage = {
     senderName?: string;
   };
   localReaction?: string;
+  reactions?: Array<{
+    emoji: string;
+    hasReactionByMe?: boolean;
+    senders: Array<{ id: string; name?: string; timestamp?: number }>;
+  }>;
+  call?: {
+    direction: "incoming" | "outgoing";
+    kind?: "voice" | "video";
+    missed?: boolean;
+    durationSeconds?: number;
+  };
 };
 
 export type ChatMemoryEntry = {

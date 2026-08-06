@@ -113,7 +113,14 @@ function preserveLocalMessageState(current: ChatMessage[], incoming: ChatMessage
   const localById = new Map(current.map((message) => [message.id, message]));
   return incoming.map((message) => {
     const local = localById.get(message.id);
-    return local?.localReaction ? { ...message, localReaction: local.localReaction } : message;
+    const localReactionIsNowSynced = Boolean(
+      local?.localReaction && message.reactions?.some((reaction) =>
+        reaction.emoji === local.localReaction && reaction.hasReactionByMe,
+      ),
+    );
+    return local?.localReaction && !localReactionIsNowSynced
+      ? { ...message, localReaction: local.localReaction }
+      : message;
   });
 }
 
