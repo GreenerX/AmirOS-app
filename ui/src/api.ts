@@ -90,6 +90,22 @@ export async function startAmirosUpdate(): Promise<{ ok: true; latestVersion: st
   return request("/api/update", { method: "POST", body: "{}" });
 }
 
+export type BackendRestartStatus = {
+  status: "running" | "restarting" | "offline";
+  updatedAt: number;
+  requestedAt?: number;
+};
+
+export async function getBackendRestartStatus(): Promise<BackendRestartStatus> {
+  if (isDemo) return { status: "running", updatedAt: Date.now() };
+  return request("/api/system/backend-status");
+}
+
+export async function restartAmirosBackend(): Promise<{ accepted: true; status: BackendRestartStatus }> {
+  if (isDemo) return { accepted: true, status: { status: "restarting", updatedAt: Date.now(), requestedAt: Date.now() } };
+  return request("/api/system/backend-restart", { method: "POST", body: "{}" });
+}
+
 export async function getChats(): Promise<ChatSummary[]> {
   if (isDemo) return structuredClone(demoChats);
   return (await request<{ chats: ChatSummary[] }>("/api/chats")).chats;

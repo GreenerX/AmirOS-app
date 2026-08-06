@@ -1468,6 +1468,30 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .settings-privacy-footer svg { flex: 0 0 auto; color: var(--emerald); }
 
+/* A small, local-only recovery control near the release information. It shares
+   the compact settings rhythm without competing with everyday preferences. */
+.settings-config-grid .system-diagnostics-settings {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+}
+.system-diagnostics-copy { display: grid; min-width: 0; gap: 4px; }
+.system-diagnostics-heading { display: flex; align-items: center; gap: 12px; }
+.system-diagnostics-heading > div { min-width: 0; }
+.backend-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 780; }
+.backend-status i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.backend-status.running { color: var(--emerald); }
+.backend-status.restarting { color: var(--amber); }
+.backend-status.offline { color: var(--danger); }
+.backend-restart-notice { display: block; font-size: 11px; font-weight: 700; }
+.backend-restart-notice.success { color: var(--emerald); }
+.backend-restart-notice.error { color: var(--danger); }
+.system-diagnostics-actions { display: inline-flex; align-items: center; justify-self: end; gap: 12px; }
+.system-diagnostics-actions .button { min-height: 38px; white-space: nowrap; }
+
 .settings-save-notice {
   position: fixed;
   top: 24px;
@@ -1528,6 +1552,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .settings-config-grid .knowledge-default-settings label { grid-column: 1; grid-row: auto; margin-top: 6px; }
   .settings-config-grid .api-key-settings { grid-template-columns: 42px minmax(0, 1fr); }
   .settings-config-grid .spend-guard-field { grid-column: 2; padding: 10px 0 0; border-top: 1px solid var(--border-soft); border-left: 0; }
+  .settings-config-grid .system-diagnostics-settings { grid-template-columns: 42px minmax(0, 1fr); }
+  .system-diagnostics-actions { grid-column: 2; justify-self: start; }
   .settings-core-grid { grid-template-columns: 1fr; grid-template-rows: none; }
   .settings-core-grid .calendar-subscription-settings,
   .settings-core-grid .assistant-configuration-card,
@@ -1561,6 +1587,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
     grid-row: auto;
   }
   .settings-core-grid .spend-guard-field small { align-self: auto; }
+  .system-diagnostics-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
   .app-shell.sidebar-collapsed { grid-template-columns: 1fr; }
   .sidebar-collapse, .sidebar-rights { display: none; }
   .suggested-question-strip { padding-left: 0; }

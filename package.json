@@ -16,6 +16,7 @@
     "start": "node dist/src/server.js",
     "test": "vitest run",
     "test:dashboard-health": "npm run ui:build && tsx scripts/dashboard-health-check.ts",
+    "test:backend-restart": "tsx scripts/backend-restart-test.ts",
     "test:runtime-recovery": "tsx scripts/runtime-recovery-test.ts",
     "test:installer-upgrade": "tsx scripts/installer-upgrade-test.ts",
     "ui:dev": "vite --config ui/vite.config.ts",

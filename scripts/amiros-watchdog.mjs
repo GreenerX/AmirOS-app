@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,8 @@ const workDirectory = configuredWorkDirectory
   : resolve(projectDirectory, "work");
 const logPath = resolve(workDirectory, "bot.log");
 const pidPath = resolve(workDirectory, "amiros.pid");
+const restartCommandPath = resolve(workDirectory, "backend-restart-request.json");
+const restartStatusPath = resolve(workDirectory, "backend-restart-status.json");
 const serverPath = configuredServerPath
   ? resolve(configuredServerPath)
   : resolve(projectDirectory, "dist/src/server.js");
@@ -38,6 +40,7 @@ let restartTimer;
 let recoveryInProgress = false;
 let failures = 0;
 let whatsappUnhealthySince = 0;
+let availabilityTimer;
 
 function logLine(message) {
   const descriptor = openSync(logPath, "a", 0o600);
@@ -58,6 +61,10 @@ function formatDelay(delay) {
   return `${Math.max(1, Math.round(delay / 1_000))}s`;
 }
 
+function writeBackendStatus(status, extra = {}) {
+  writeFileSync(restartStatusPath, `${JSON.stringify({ status, updatedAt: Date.now(), ...extra })}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
 function scheduleRestart(reason, delay, alreadyAnnounced = false) {
   if (stopping) return;
   if (restartTimer || restartRequest) {
@@ -66,6 +73,7 @@ function scheduleRestart(reason, delay, alreadyAnnounced = false) {
   }
 
   recoveryInProgress = true;
+  writeBackendStatus("restarting");
   if (!alreadyAnnounced) {
     logLine(`Restart scheduled in ${formatDelay(delay)} (${reason}).`);
   }
@@ -97,6 +105,36 @@ function requestRestart(reason, delay) {
   child.kill("SIGTERM");
 }
 
+function readRestartCommand() {
+  if (!existsSync(restartCommandPath)) return undefined;
+  try {
+    const command = JSON.parse(readFileSync(restartCommandPath, "utf8"));
+    return typeof command === "object" && command ? command : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function processRestartCommand() {
+  if (stopping || !existsSync(restartCommandPath)) return;
+  const command = readRestartCommand();
+  try { unlinkSync(restartCommandPath); } catch {}
+  if (!command) {
+    logLine("Restart request ignored because it was not valid.");
+    return;
+  }
+  if (restartRequest || restartTimer) {
+    logLine("Restart already pending; ignoring duplicate dashboard restart request.");
+    return;
+  }
+  writeBackendStatus("restarting", {
+    requestedAt: typeof command.requestedAt === "number" ? command.requestedAt : Date.now(),
+    requestId: typeof command.requestId === "string" ? command.requestId : undefined,
+  });
+  logLine("Dashboard restart request received.");
+  requestRestart("dashboard restart request", healthRestartDelayMs);
+}
+
 function startServer(reason, isRecovery = false) {
   if (stopping || child) return;
   const log = openSync(logPath, "a", 0o600);
@@ -108,6 +146,7 @@ function startServer(reason, isRecovery = false) {
       stdio: ["ignore", log, log],
     });
     child = serverChild;
+    if (isRecovery) confirmRecoveryAvailability();
     serverChild.once("error", (error) => {
       if (!stopping && isRecovery) {
         logLine(`Restart failed: unable to start the backend (${error.message}).`);
@@ -183,7 +222,25 @@ async function dashboardHealth() {
   }
 }
 
-setInterval(() => {
+function confirmRecoveryAvailability() {
+  if (stopping || !recoveryInProgress || !child) return;
+  void dashboardHealth().then((health) => {
+    if (stopping || !recoveryInProgress) return;
+    if (health.healthy) {
+      recoveryInProgress = false;
+      failures = 0;
+      whatsappUnhealthySince = 0;
+      writeBackendStatus("running");
+      logLine("Restart succeeded: dashboard is available again.");
+      return;
+    }
+    availabilityTimer = setTimeout(confirmRecoveryAvailability, 300);
+  }).catch(() => {
+    availabilityTimer = setTimeout(confirmRecoveryAvailability, 300);
+  });
+}
+
+const healthTimer = setInterval(() => {
   void (async () => {
     if (stopping || restartRequest || restartTimer || !child) return;
     const health = await dashboardHealth();
@@ -215,7 +272,11 @@ setInterval(() => {
     logLine(`Recovery check is requesting a service restart after 2 minutes: ${health.reason}.`);
     requestRestart("health check recovery", healthRestartDelayMs);
   })();
-}, healthCheckIntervalMs).unref();
+}, healthCheckIntervalMs);
+healthTimer.unref();
+
+const restartCommandTimer = setInterval(processRestartCommand, 300);
+restartCommandTimer.unref();
 
 function shutdown() {
   if (stopping) return;
@@ -223,6 +284,16 @@ function shutdown() {
   logLine("Watchdog stopped by user.");
   restartRequest = undefined;
   recoveryInProgress = false;
+  // An intentional stop always wins over a queued dashboard restart. Leaving
+  // this command behind would restart the next manual launch unnecessarily.
+  try { unlinkSync(restartCommandPath); } catch {}
+  writeBackendStatus("offline");
+  if (availabilityTimer) {
+    clearTimeout(availabilityTimer);
+    availabilityTimer = undefined;
+  }
+  clearInterval(restartCommandTimer);
+  clearInterval(healthTimer);
   if (restartTimer) {
     clearTimeout(restartTimer);
     restartTimer = undefined;

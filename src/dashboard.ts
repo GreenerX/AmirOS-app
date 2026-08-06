@@ -35,6 +35,7 @@ import { CURRENT_RELEASE } from "./release.js";
 import { checkForAmirosUpdate, type UpdateStatus } from "./update-check.js";
 import { handleAiUsageApiRoute } from "./dashboard/ai-usage-routes.js";
 import { handleSettingsApiRoute } from "./dashboard/settings-routes.js";
+import { handleSystemApiRoute } from "./dashboard/system-routes.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -1591,6 +1592,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
     calendarFeedTokenPath,
     port,
   } = options;
+  const dashboardStartedAt = Date.now();
   const refreshWritingStyle = (chatId: string) => {
     void writingStyleLearner?.refreshIfDue(chatId).catch((error) => {
       console.warn("Automatic writing-style refresh failed", {
@@ -1670,6 +1672,14 @@ export function startAmirosDashboard(options: DashboardOptions) {
         visibleTodoTasks,
         isKnownIntelligenceChat,
         activitiesWithContactNames: () => activitiesWithContactNames(client, state, chatNameCache),
+      })) return;
+
+      if (await handleSystemApiRoute({
+        request,
+        response,
+        pathname,
+        sendJson,
+        dashboardStartedAt,
       })) return;
 
       if (request.method === "GET" && pathname === "/api/update") {

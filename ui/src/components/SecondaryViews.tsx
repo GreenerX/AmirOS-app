@@ -30,7 +30,7 @@ import {
 import { SiApple } from "react-icons/si";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { compactNumber } from "../format";
-import { deleteOwnerAvatar, getCalendarSubscription, getOwnerAvatars, uploadOwnerAvatar, whatsappQrUrl, type CalendarSubscriptionInfo, type OwnerAvatar } from "../api";
+import { deleteOwnerAvatar, getBackendRestartStatus, getCalendarSubscription, getOwnerAvatars, restartAmirosBackend, uploadOwnerAvatar, whatsappQrUrl, type BackendRestartStatus, type CalendarSubscriptionInfo, type OwnerAvatar } from "../api";
 import { calendarSubscriptionBannerHidden, setCalendarSubscriptionBannerHidden } from "../calendar-preferences";
 import { WhatsAppIcon } from "./BrandIcons";
 import { ContactAvatar } from "./ContactAvatar";
@@ -256,6 +256,10 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
   const [calendarSubscriptionError, setCalendarSubscriptionError] = useState("");
   const [calendarSubscriptionCopied, setCalendarSubscriptionCopied] = useState(false);
   const [calendarBannerHidden, setCalendarBannerHidden] = useState(calendarSubscriptionBannerHidden);
+  const [backendStatus, setBackendStatus] = useState<BackendRestartStatus["status"]>("running");
+  const [backendRestartState, setBackendRestartState] = useState<"idle" | "restarting" | "success" | "error">("idle");
+  const [backendRestartMessage, setBackendRestartMessage] = useState("");
+  const backendRestartPollTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -263,6 +267,22 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
       .then((avatars) => { if (!cancelled) setCustomAvatars(avatars); })
       .catch(() => undefined);
     return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshStatus = () => {
+      void getBackendRestartStatus()
+        .then((status) => { if (!cancelled) setBackendStatus(status.status); })
+        .catch(() => { if (!cancelled) setBackendStatus("offline"); });
+    };
+    refreshStatus();
+    const timer = window.setInterval(refreshStatus, 8_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.clearTimeout(backendRestartPollTimerRef.current);
+    };
   }, []);
 
   const autoSavePayload = useMemo(() => ({
@@ -375,6 +395,50 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
       window.setTimeout(() => setCalendarSubscriptionCopied(false), 1_800);
     } catch {
       setCalendarSubscriptionError("The browser could not copy the link.");
+    }
+  };
+
+  const restartBackend = async () => {
+    if (backendRestartState === "restarting") return;
+    if (!window.confirm("Restart the local AmirOS backend now? The dashboard may disconnect briefly.")) return;
+    setBackendRestartState("restarting");
+    setBackendRestartMessage("Restarting… AmirOS will reconnect automatically.");
+    setBackendStatus("restarting");
+    try {
+      await restartAmirosBackend();
+      const deadline = Date.now() + 35_000;
+      const pollForBackend = () => {
+        void getBackendRestartStatus()
+          .then((status) => {
+            setBackendStatus(status.status);
+            if (status.status === "running") {
+              setBackendRestartState("success");
+              setBackendRestartMessage("AmirOS backend is running again.");
+              window.setTimeout(() => setBackendRestartState("idle"), 4_000);
+              return;
+            }
+            if (Date.now() >= deadline) {
+              setBackendRestartState("error");
+              setBackendRestartMessage("AmirOS did not return in time. Open Terminal from your profile menu for details.");
+              return;
+            }
+            backendRestartPollTimerRef.current = window.setTimeout(pollForBackend, 800);
+          })
+          .catch(() => {
+            if (Date.now() >= deadline) {
+              setBackendStatus("offline");
+              setBackendRestartState("error");
+              setBackendRestartMessage("AmirOS did not return in time. Open Terminal from your profile menu for details.");
+              return;
+            }
+            backendRestartPollTimerRef.current = window.setTimeout(pollForBackend, 800);
+          });
+      };
+      backendRestartPollTimerRef.current = window.setTimeout(pollForBackend, 800);
+    } catch (error) {
+      setBackendRestartState("error");
+      setBackendRestartMessage(error instanceof Error ? error.message : "AmirOS could not start the restart.");
+      void getBackendRestartStatus().then((status) => setBackendStatus(status.status)).catch(() => setBackendStatus("offline"));
     }
   };
 
@@ -538,6 +602,18 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
           {calendarSubscriptionError ? <small className="subscription-error">{calendarSubscriptionError}</small> : null}
         </section>
         </div>
+        <section className="panel settings-summary system-diagnostics-settings">
+          <span className="setting-hero-icon"><RefreshCw className={backendRestartState === "restarting" ? "spin" : ""} size={25} /></span>
+          <div className="system-diagnostics-copy">
+            <div className="system-diagnostics-heading"><div><h2>System &amp; Diagnostics</h2><p>AmirOS v{data.release.version} · local service controls</p></div></div>
+            <p>Restarts the local AmirOS service. The dashboard may disconnect briefly.</p>
+            {backendRestartState !== "idle" ? <small className={`backend-restart-notice ${backendRestartState}`} role="status" aria-live="polite">{backendRestartMessage}</small> : null}
+          </div>
+          <div className="system-diagnostics-actions">
+            <span className={`backend-status ${backendStatus}`}><i />{backendStatus === "running" ? "Running" : backendStatus === "restarting" ? "Restarting" : "Offline"}</span>
+            <button className="button secondary" type="button" disabled={backendRestartState === "restarting"} onClick={() => void restartBackend()}><RefreshCw className={backendRestartState === "restarting" ? "spin" : ""} size={16} />{backendRestartState === "restarting" ? "Restarting…" : "Restart AmirOS backend"}</button>
+          </div>
+        </section>
         <section className="panel settings-summary appearance-settings">
           <span className="setting-hero-icon"><Palette size={25} /></span>
           <div className="appearance-heading"><h2>Color theme</h2><p>Choose the palette that feels best. Changes apply immediately and stay selected.</p></div>
