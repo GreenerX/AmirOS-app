@@ -36,6 +36,7 @@ type OverviewProps = {
   onPreset: (preset: ModelPreset) => Promise<void>;
   onTrackingDecision: (chatId: string, status: KnowledgeTrackingStatus) => Promise<void>;
   onOpenTrackingChat: (chatId: string) => void;
+  onOpenNextBestAction: (chatId: string, messageId?: string) => void;
   onOpenTodoReview: () => void;
   onTodoStatus: (chatId: string, todoId: string, status: TodoTask["status"]) => Promise<void>;
 };
@@ -113,7 +114,7 @@ function todoTimingLabel(todo: TodoTask) {
   return todo.status === "inferred" ? "Suggested from a message" : "No due date";
 }
 
-export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, onPreset, onTrackingDecision, onOpenTrackingChat, onOpenTodoReview, onTodoStatus }: OverviewProps) {
+export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, onPreset, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onOpenTodoReview, onTodoStatus }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
   const [todoFilter, setTodoFilter] = useState<TodoFilter>("all");
@@ -183,15 +184,16 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
         detail: visibleNeedsReply[0].lastIncoming?.content || "A recent message is waiting for you.",
         chatId: visibleNeedsReply[0].chatId,
         contactName: visibleNeedsReply[0].contactName,
+        messageId: visibleNeedsReply[0].lastIncoming?.messageId,
       }
     : planSuggestions[0]
-      ? { kind: "Calendar suggestion", title: planSuggestions[0].title, detail: `From ${planSuggestions[0].contactName} · ${eventDateTime(planSuggestions[0].startAt)}`, chatId: planSuggestions[0].chatId, contactName: planSuggestions[0].contactName }
+      ? { kind: "Calendar suggestion", title: planSuggestions[0].title, detail: `From ${planSuggestions[0].contactName} · ${eventDateTime(planSuggestions[0].startAt)}`, chatId: planSuggestions[0].chatId, contactName: planSuggestions[0].contactName, messageId: planSuggestions[0].evidence.messageId }
       : suggestedTodos[0]
-        ? { kind: "To-do suggestion", title: suggestedTodos[0].title, detail: `From ${suggestedTodos[0].contactName} · ${todoTimingLabel(suggestedTodos[0])}`, chatId: suggestedTodos[0].chatId, contactName: suggestedTodos[0].contactName }
+        ? { kind: "To-do suggestion", title: suggestedTodos[0].title, detail: `From ${suggestedTodos[0].contactName} · ${todoTimingLabel(suggestedTodos[0])}`, chatId: suggestedTodos[0].chatId, contactName: suggestedTodos[0].contactName, messageId: suggestedTodos[0].evidence.messageId }
         : trackedTodos.find((todo) => todo.status === "open")
-          ? (() => { const todo = trackedTodos.find((item) => item.status === "open")!; return { kind: "To-do", title: todo.title, detail: `From ${todo.contactName} · ${todoTimingLabel(todo)}`, chatId: todo.chatId, contactName: todo.contactName }; })()
+          ? (() => { const todo = trackedTodos.find((item) => item.status === "open")!; return { kind: "To-do", title: todo.title, detail: `From ${todo.contactName} · ${todoTimingLabel(todo)}`, chatId: todo.chatId, contactName: todo.contactName, messageId: todo.evidence.messageId }; })()
           : newSignals[0]
-            ? { kind: "New relationship detail", title: newSignals[0].contactName, detail: newSignals[0].content, chatId: newSignals[0].chatId, contactName: newSignals[0].contactName }
+            ? { kind: "New relationship detail", title: newSignals[0].contactName, detail: newSignals[0].content, chatId: newSignals[0].chatId, contactName: newSignals[0].contactName, messageId: newSignals[0].evidence.messageId }
             : undefined;
   const focusChat = focus ? chats.find((chat) => chat.id === focus.chatId) : undefined;
   const toggleTodo = async (todo: TodoTask) => {
@@ -336,7 +338,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
         <div className="overview-command-rail">
           <section className="panel next-best-panel">
             <div className="panel-heading"><h2>Next best action</h2><span className={focus ? "attention-label" : "attention-label clear"}>{focus ? "Priority" : "All clear"}</span></div>
-            {focus ? <button className="intelligence-focus" onClick={() => onNavigate("intelligence")}>
+            {focus ? <button className="intelligence-focus" onClick={() => onOpenNextBestAction(focus.chatId, focus.messageId)}>
               <ContactAvatar name={focus.contactName} src={focusChat?.avatarUrl} className="intelligence-focus-avatar" />
               <span><small>{focus.kind}</small><strong dir="auto">{focus.title}</strong><p dir="auto">{focus.detail}</p></span>
               <span className="intelligence-focus-link">Review <ArrowRight size={14} /></span>
