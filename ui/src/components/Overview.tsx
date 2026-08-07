@@ -25,6 +25,7 @@ import { readDashboardActionSummaries, saveDashboardActionSummary } from "../das
 import { compactNumber, formatDeviceClock, formatTime, timeOfDayGreeting } from "../format";
 import { hideIntelligenceAction, readHiddenIntelligenceActions, replyActionId } from "../intelligence-visibility";
 import { buildIntelligenceSnapshot, isKnownIntelligenceContactName } from "../intelligence-snapshot";
+import { buildProactiveReminders } from "../proactive-reminders";
 import type { Activity, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, ModelPreset, TodoTask, ViewName } from "../types";
 import { WhatsAppIcon } from "./BrandIcons";
 import { ContactAvatar } from "./ContactAvatar";
@@ -193,6 +194,8 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
   const newSignals = intelligence?.changes.filter((item) => item.status === "inferred" && isKnownIntelligenceContactName(item.contactName)) || [];
   const trackingRequests = data.knowledgeTrackingRequests.filter((item) => item.status === "pending").slice(0, 3);
   const agendaItemCount = upcomingPlans.length + trackedTodos.length + suggestedTodos.length;
+  const reminders = useMemo(() => buildProactiveReminders(intelligence, deviceTime)
+    .filter((item) => !readHiddenIntelligenceActions().has(item.id)), [deviceTime, hiddenActionVersion, intelligence]);
   const focus = visibleNeedsReply[0]
     ? {
         kind: "Needs reply",
@@ -247,7 +250,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
   };
   const dismissFocus = async () => {
     if (!focus) return;
-    if (focus.actionType === "reply") {
+    if (focus.actionType === "reply" || (focus.actionType === "todo" && focus.kind === "To-do")) {
       hideIntelligenceAction(focus.actionId);
       setHiddenActionVersion((version) => version + 1);
       return;
@@ -260,6 +263,25 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
       return;
     }
     if (focus) onOpenNextBestAction(focus.chatId, focus.messageId);
+  };
+  const dismissReminder = (id: string) => {
+    hideIntelligenceAction(id);
+    setHiddenActionVersion((version) => version + 1);
+  };
+  const openReminder = (reminder: (typeof reminders)[number]) => {
+    if (reminder.type === "calendar") {
+      onNavigate("calendar");
+      return;
+    }
+    if (reminder.type === "todo") {
+      onOpenTodoReview();
+      return;
+    }
+    onOpenNextBestAction(reminder.chatId, reminder.messageId);
+  };
+  const completeReminderTodo = (reminder: (typeof reminders)[number]) => {
+    const todo = trackedTodos.find((item) => item.id === reminder.recordId && item.chatId === reminder.chatId);
+    if (todo) void onTodoStatus(todo.chatId, todo.id, "done");
   };
 
   return (
@@ -329,6 +351,31 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
                 <button className="button compact ghost" type="button" onClick={() => void onTrackingDecision(request.chatId, "snoozed")}>Not now</button>
                 <button className="text-action muted" type="button" onClick={() => void onTrackingDecision(request.chatId, "disabled")}>Never track</button>
               </div>
+            </article>;
+          })}
+        </div>
+      </section> : null}
+
+      {reminders.length > 0 ? <section className="panel overview-reminders-panel" aria-labelledby="overview-reminders-title">
+        <div className="panel-heading">
+          <h2 id="overview-reminders-title"><CalendarClock size={19} /> Attention needed <span className="count-badge intelligence-count">{reminders.length}</span></h2>
+          <span className="overview-reminders-note">Deadlines and plans that are close</span>
+        </div>
+        <div className="overview-reminders-list">
+          {reminders.slice(0, 3).map((reminder) => {
+            const chat = chats.find((item) => item.id === reminder.chatId);
+            const actionLabel = reminder.type === "todo" ? "Mark complete" : reminder.type === "calendar" ? "Open calendar" : "Open source chat";
+            return <article className={`overview-reminder ${reminder.priority === 0 ? "is-overdue" : ""}`} key={reminder.id}>
+              <ContactAvatar name={reminder.contactName} src={chat?.avatarUrl} className="overview-reminder-avatar" />
+              <button className="overview-reminder-copy" type="button" onClick={() => openReminder(reminder)}>
+                <small>{reminder.detail}</small><strong dir="auto">{reminder.title}</strong>
+              </button>
+              <span className="overview-reminder-actions">
+                <button className="next-best-action-control primary" type="button" title={actionLabel} aria-label={actionLabel} onClick={() => reminder.type === "todo" ? completeReminderTodo(reminder) : openReminder(reminder)}>
+                  {reminder.type === "todo" ? <Check size={16} /> : reminder.type === "calendar" ? <CalendarCheck size={16} /> : <MessageCircle size={16} />}
+                </button>
+                <button className="next-best-action-control dismiss" type="button" title="Hide this reminder" aria-label="Hide this reminder" onClick={() => dismissReminder(reminder.id)}><X size={16} /></button>
+              </span>
             </article>;
           })}
         </div>
