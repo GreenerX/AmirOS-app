@@ -1479,21 +1479,32 @@ export class AmirosState {
       ownerName?: string;
     } = { knowledge: true, calendar: true },
   ): OwnerAssistantContext {
+    // Keep owner-triggered bot answers on the same retrieval path as Ask
+    // AmirOS. This is especially important for deterministic temporal ranges
+    // such as "tomorrow" and "אתמול".
+    const retrieved = this.searchIntelligence(query, 80);
+    const temporalQuery = Boolean(resolveTemporalRange(query));
     const relationship = access.knowledge
       ? this.resolveRelationshipKnowledge(query, access.requesterName, access.ownerName)
       : { knowledge: [], context: [] };
+    const knowledgeRecords = temporalQuery || !relationship.knowledge.length
+      ? retrieved
+      : relationship.knowledge;
     const knowledge = access.knowledge
-      ? (relationship.knowledge.length ? relationship.knowledge : this.searchIntelligence(query, 60))
-        .filter((record) => record.kind !== "calendar_event")
+      ? knowledgeRecords.filter((record) => record.kind !== "calendar_event")
       : [];
     const events = access.calendar
-      ? this.listCalendarEvents()
-        .filter((event) => event.startAt >= Date.now() - 86_400_000)
-        .slice(0, 80)
-        .map((event) => ({
-          ...event,
-          contactName: this.persisted.memories[event.chatId]?.chatName || event.evidence.senderName,
-        }))
+      ? retrieved
+        .filter((record) => record.kind === "calendar_event")
+        .flatMap((record) => {
+          const event = this.persisted.memories[record.chatId]?.events.find((item) => item.id === record.id);
+          if (!event) return [];
+          return [{
+            ...structuredClone(event),
+            chatId: record.chatId,
+            contactName: this.persisted.memories[record.chatId]?.chatName || event.evidence.senderName,
+          }];
+        })
       : [];
     return { knowledge, events, relationshipContext: relationship.context };
   }

@@ -63,7 +63,7 @@ type IntelligenceViewProps = {
   onRegenerateCalendarTitle: (chatId: string, eventId: string) => Promise<string>;
   onInsightStatus: (chatId: string, insightId: string, status: ContactInsight["status"]) => Promise<void>;
   onTodoStatus?: (chatId: string, todoId: string, status: TodoTask["status"]) => Promise<void>;
-  onTodoUpdate?: (chatId: string, todoId: string, patch: { status?: TodoTask["status"]; dueAt?: number | null; priority?: TodoTask["priority"] }) => Promise<void>;
+  onTodoUpdate?: (chatId: string, todoId: string, patch: { status?: TodoTask["status"]; title?: string; dueAt?: number | null; priority?: TodoTask["priority"] }) => Promise<void>;
   onDeleteQuestion: (id: string) => Promise<void>;
   navigationRequest?: {
     id: number;
@@ -137,15 +137,16 @@ function todoPriorityLabel(priority: TodoTask["priority"]) {
   return priority === "high" ? "High priority" : priority === "low" ? "Low priority" : "Normal priority";
 }
 
-function TodoEditorDialog({
+export function TodoEditorDialog({
   todo,
   onClose,
   onSave,
 }: {
   todo: TodoTask & { contactName: string };
   onClose: () => void;
-  onSave: (patch: { dueAt?: number | null; priority?: TodoTask["priority"] }) => Promise<void>;
+  onSave: (patch: { title?: string; dueAt?: number | null; priority?: TodoTask["priority"] }) => Promise<void>;
 }) {
+  const [title, setTitle] = useState(todo.title);
   const [dueAt, setDueAt] = useState(todo.dueAt ? localDateTime(todo.dueAt) : "");
   const [priority, setPriority] = useState<TodoTask["priority"]>(todo.priority || "normal");
   const [saving, setSaving] = useState(false);
@@ -155,10 +156,11 @@ function TodoEditorDialog({
       <header><span className="event-detail-icon"><ListTodo size={22} /></span><span><small>Personal to-do</small><h2 id="todo-editor-title" dir="auto">{todo.title}</h2></span><button className="icon-button" aria-label="Close to-do editor" onClick={onClose}><X size={17} /></button></header>
       <div className="todo-editor-content">
         <div className="todo-editor-meta"><span>Added {todoDateLabel(todo.createdAt)}</span><span>{todo.status === "done" ? `Completed ${todoDateLabel(todo.completedAt || todo.updatedAt)}` : todo.contactName}</span></div>
+        <label>Task <input value={title} maxLength={1_000} onChange={(event) => setTitle(event.target.value)} /></label>
         <label>Due date <input type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} /></label>
         <label>Priority <select value={priority} onChange={(event) => setPriority(event.target.value as TodoTask["priority"])}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option></select></label>
       </div>
-      <footer><button className="button" type="button" onClick={onClose}>Cancel</button><button className="button primary" type="button" disabled={saving} onClick={() => void (async () => { setSaving(true); try { await onSave({ dueAt: dueAt ? new Date(dueAt).getTime() : null, priority }); onClose(); } finally { setSaving(false); } })()}>{saving ? "Saving…" : "Save task"}</button></footer>
+      <footer><button className="button" type="button" onClick={onClose}>Cancel</button><button className="button primary" type="button" disabled={saving || !title.trim()} onClick={() => void (async () => { setSaving(true); try { await onSave({ title: title.trim(), dueAt: dueAt ? new Date(dueAt).getTime() : null, priority }); onClose(); } finally { setSaving(false); } })()}>{saving ? "Saving…" : "Save task"}</button></footer>
     </section>
   </div>;
 }
@@ -215,16 +217,14 @@ function buildQueue(data: IntelligenceData | undefined, contacts: Record<string,
     });
   }
 
-  for (const item of (data.todos || []).filter((entry) => entry.status === "inferred" || entry.status === "open")) {
+  for (const item of (data.todos || []).filter((entry) => entry.status === "inferred")) {
     if (!isKnownIntelligenceContactName(item.contactName)) continue;
     const dueAt = item.dueAt ? toMilliseconds(item.dueAt) : undefined;
     actions.push({
       id: `todo:${item.chatId}:${item.id}`, kind: "todo", chatId: item.chatId, contactName: item.contactName,
       title: item.title,
       summary: dueAt ? `Due ${relativeTime(dueAt)}` : "Task detected in a message",
-      reason: item.status === "inferred"
-        ? "To-do detected in a message · awaiting review"
-        : "Open to-do from a conversation",
+      reason: "To-do detected in a message · awaiting review",
       timestamp: dueAt || item.updatedAt,
       score: dueAt && dueAt < Date.now() + 3 * 86_400_000 ? 88 : 74,
       evidence: item.evidence.excerpt, senderName: item.evidence.senderName, messageId: item.evidence.messageId, entity: item,
@@ -511,7 +511,8 @@ export function IntelligenceView({
     } else if (action.kind === "todo") {
       if (!onTodoStatus) return;
       const item = action.entity as TodoTask;
-      await onTodoStatus(action.chatId, item.id, item.status === "inferred" ? "open" : "done");
+      await onTodoStatus(action.chatId, item.id, "open");
+      hideAction(action.id);
     } else {
       const item = action.entity as IntelligenceData["changes"][number];
       await onInsightStatus(action.chatId, item.id, "confirmed");

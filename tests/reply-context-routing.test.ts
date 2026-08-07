@@ -210,14 +210,21 @@ describe("AI reply context privacy routing", () => {
       mode: "auto",
       contactTriggerAccess: ["calendar"],
     });
+    const now = new Date();
+    const thisWeekAt = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + ((6 - now.getDay() + 7) % 7),
+      20,
+    ).getTime();
     state.mergeAnalyzedIntelligence("plans@c.us", {
       insights: [],
       commitments: [],
       events: [{
         title: "Theater night",
-        startAt: Date.now() + 4 * 86_400_000,
+        startAt: thisWeekAt,
         allDay: false,
-        evidence: { excerpt: "We are going to the theater next Friday at 8pm", timestamp: Date.now() },
+        evidence: { excerpt: "We are going to the theater on Saturday at 8pm", timestamp: Date.now() },
       }],
     });
     state.rememberMessage("laura@c.us", {
@@ -235,6 +242,8 @@ describe("AI reply context privacy routing", () => {
     } as unknown as AiService;
     const processor = new MessageProcessor(config, ai, state);
 
+    expect(state.searchIntelligence("what is Amir's schedule this week?", 80)
+      .some((item) => item.kind === "calendar_event" && item.content.includes("Theater night"))).toBe(true);
     await processor.process(textMessage({
       id: "dani-calendar-trigger",
       chatId: "dani@c.us",
@@ -261,6 +270,83 @@ describe("AI reply context privacy routing", () => {
     expect(contexts[1]?.scope).toBe("chat");
     expect(contexts[1]?.ownerEvents).toBeUndefined();
     expect(contexts[1]?.ownerKnowledge).toBeUndefined();
+  });
+
+  it("uses the same temporal evidence for dashboard Ask and Amir's !bot requests", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "amiros-owner-temporal-routing-"));
+    directories.push(directory);
+    const state = new AmirosState(join(directory, "state.json"));
+    state.updateContact("dani@c.us", { ownerTriggerAccess: ["knowledge", "calendar"] });
+    state.rememberChatName("plans@c.us", "Plans");
+
+    const now = new Date();
+    const localAt = (dayOffset: number, hour: number) => new Date(
+      now.getFullYear(), now.getMonth(), now.getDate() + dayOffset, hour,
+    ).getTime();
+    state.rememberMessage("plans@c.us", {
+      role: "user",
+      content: "נפגשנו לארוחת ערב אתמול.",
+      timestamp: localAt(-1, 18),
+      messageId: "yesterday-message",
+    });
+    state.rememberMessage("plans@c.us", {
+      role: "user",
+      content: "נפגשנו לארוחת ערב לפני יומיים.",
+      timestamp: localAt(-2, 18),
+      messageId: "two-days-ago-message",
+    });
+    state.mergeAnalyzedIntelligence("plans@c.us", {
+      insights: [],
+      commitments: [],
+      events: [
+        {
+          title: "Lunch tomorrow",
+          startAt: localAt(1, 12),
+          allDay: false,
+          evidence: { excerpt: "Lunch tomorrow at noon", timestamp: Date.now() },
+        },
+        {
+          title: "Lunch in two days",
+          startAt: localAt(2, 12),
+          allDay: false,
+          evidence: { excerpt: "Lunch in two days at noon", timestamp: Date.now() },
+        },
+      ],
+    });
+
+    const contexts: ReplyContext[] = [];
+    const ai = {
+      reply: async (_chatId: string, _prompt: string, _web: boolean, context: ReplyContext) => {
+        contexts.push(context);
+        return "Done";
+      },
+    } as unknown as AiService;
+    const processor = new MessageProcessor(config, ai, state);
+
+    const dashboardTomorrow = state.searchIntelligence("What do I have tomorrow?", 80)
+      .filter((record) => record.kind === "calendar_event")
+      .map((record) => record.id);
+    await processor.process(textMessage({
+      id: "owner-tomorrow",
+      chatId: "dani@c.us",
+      chatName: "Dani",
+      body: "!bot What do I have tomorrow?",
+      fromMe: true,
+    }), false);
+    expect(contexts[0]?.ownerEvents?.map((event) => event.id)).toEqual(dashboardTomorrow);
+
+    const dashboardYesterday = state.searchIntelligence("מה עשיתי אתמול", 80)
+      .filter((record) => record.kind === "message")
+      .map((record) => record.id);
+    await processor.process(textMessage({
+      id: "owner-yesterday",
+      chatId: "dani@c.us",
+      chatName: "Dani",
+      body: "!bot מה עשיתי אתמול",
+      fromMe: true,
+    }), false);
+    expect(contexts[1]?.ownerKnowledge?.filter((record) => record.kind === "message").map((record) => record.id))
+      .toEqual(dashboardYesterday);
   });
 
   it("turns processing failures into natural, reason-specific replies", () => {
