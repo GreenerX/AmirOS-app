@@ -7,6 +7,7 @@ import {
   CalendarClock,
   Check,
   CircleDollarSign,
+  ExternalLink,
   Image,
   ListTodo,
   MessageCircle,
@@ -45,6 +46,8 @@ type OverviewProps = {
   onOpenTodoReview: () => void;
   onTodoStatus: (chatId: string, todoId: string, status: TodoTask["status"]) => Promise<void>;
   onTodoUpdate: (chatId: string, todoId: string, patch: { title?: string; dueAt?: number | null; priority?: TodoTask["priority"] }) => Promise<void>;
+  onCalendarStatus: (chatId: string, eventId: string, patch: { status?: "inferred" | "confirmed" | "dismissed" }) => Promise<void>;
+  onInsightStatus: (chatId: string, insightId: string, status: "confirmed" | "outdated") => Promise<void>;
   onDismissNextBestAction: (action: NextBestAction) => Promise<void>;
 };
 
@@ -138,7 +141,15 @@ function compactTodoSuggestionTitle(title: string) {
   return compact.length > 52 ? `${compact.slice(0, 49).trimEnd()}…` : compact;
 }
 
-export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, onPreset, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onOpenTodoReview, onTodoStatus, onTodoUpdate, onDismissNextBestAction }: OverviewProps) {
+function compactNextBestText(value: string, maxLength = 96) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) return normalized;
+  const cut = normalized.slice(0, maxLength + 1);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${cut.slice(0, lastSpace > 48 ? lastSpace : maxLength).trimEnd()}…`;
+}
+
+export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, onPreset, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onOpenTodoReview, onTodoStatus, onTodoUpdate, onCalendarStatus, onInsightStatus, onDismissNextBestAction }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
   const [todoFilter, setTodoFilter] = useState<TodoFilter>("all");
@@ -214,11 +225,11 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
         actionId: replyActionId(visibleNeedsReply[0]),
       }
     : planSuggestions[0]
-      ? { kind: "Calendar suggestion", title: planSuggestions[0].title, detail: `From ${planSuggestions[0].contactName} · ${eventDateTime(planSuggestions[0].startAt)}`, chatId: planSuggestions[0].chatId, contactName: planSuggestions[0].contactName, messageId: planSuggestions[0].evidence.messageId, actionType: "calendar" as const, actionId: planSuggestions[0].id }
+      ? { kind: "Calendar suggestion", title: compactNextBestText(planSuggestions[0].title, 64), detail: `From ${planSuggestions[0].contactName} · ${eventDateTime(planSuggestions[0].startAt)}`, chatId: planSuggestions[0].chatId, contactName: planSuggestions[0].contactName, messageId: planSuggestions[0].evidence.messageId, actionType: "calendar" as const, actionId: planSuggestions[0].id }
       : suggestedTodos[0]
         ? { kind: "To-do suggestion", title: compactTodoSuggestionTitle(suggestedTodos[0].title), detail: `From ${suggestedTodos[0].contactName} · ${todoTimingLabel(suggestedTodos[0])}`, chatId: suggestedTodos[0].chatId, contactName: suggestedTodos[0].contactName, messageId: suggestedTodos[0].evidence.messageId, actionType: "todo" as const, actionId: suggestedTodos[0].id }
         : newSignals[0]
-          ? { kind: "New relationship detail", title: newSignals[0].contactName, detail: newSignals[0].content, chatId: newSignals[0].chatId, contactName: newSignals[0].contactName, messageId: newSignals[0].evidence.messageId, actionType: "insight" as const, actionId: newSignals[0].id }
+          ? { kind: "New relationship detail", title: newSignals[0].contactName, detail: compactNextBestText(newSignals[0].content), chatId: newSignals[0].chatId, contactName: newSignals[0].contactName, messageId: newSignals[0].evidence.messageId, actionType: "insight" as const, actionId: newSignals[0].id }
           : undefined;
   const focusChat = focus ? chats.find((chat) => chat.id === focus.chatId) : undefined;
 
@@ -261,14 +272,23 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
     }
     await onDismissNextBestAction(focus);
   };
-  const reviewFocus = async () => {
-    if (focus?.actionType === "todo" && focus.kind === "To-do suggestion") {
+  const applyFocus = async () => {
+    if (!focus) return;
+    if (focus.actionType === "calendar") {
+      await onCalendarStatus(focus.chatId, focus.actionId, { status: "confirmed" });
+      return;
+    }
+    if (focus.actionType === "insight") {
+      await onInsightStatus(focus.chatId, focus.actionId, "confirmed");
+      return;
+    }
+    if (focus.actionType === "todo" && focus.kind === "To-do suggestion") {
       await onTodoStatus(focus.chatId, focus.actionId, "open");
       hideIntelligenceAction(focus.actionId);
       setHiddenActionVersion((version) => version + 1);
       return;
     }
-    if (focus) onOpenNextBestAction(focus.chatId, focus.messageId);
+    onOpenNextBestAction(focus.chatId, focus.messageId);
   };
   const dismissReminder = (id: string) => {
     hideIntelligenceAction(id);
@@ -450,9 +470,10 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
                 <small>{focus.kind}</small><strong dir="auto">{focus.title}</strong><p dir="auto">{focus.actionType === "reply" ? actionSummaries[focus.actionId] || focus.detail : focus.detail}</p>
               </button>
               <span className="next-best-focus-actions">
-                <button className="next-best-action-control primary" type="button" title={focus.actionType === "todo" && focus.kind === "To-do suggestion" ? "Add to to-do list" : `Review ${focus.kind.toLowerCase()}`} aria-label={focus.actionType === "todo" && focus.kind === "To-do suggestion" ? "Add to to-do list" : `Review ${focus.kind.toLowerCase()}`} onClick={() => void reviewFocus()}>
+                <button className="next-best-action-control primary" type="button" title={focus.actionType === "reply" ? "Reply in chat" : focus.actionType === "calendar" ? "Add to calendar" : focus.actionType === "todo" ? "Add to to-do list" : "Confirm detail"} aria-label={focus.actionType === "reply" ? "Reply in chat" : focus.actionType === "calendar" ? "Add to calendar" : focus.actionType === "todo" ? "Add to to-do list" : "Confirm detail"} onClick={() => void applyFocus()}>
                   {focus.actionType === "reply" ? <MessageCircle size={16} /> : focus.actionType === "calendar" ? <CalendarCheck size={16} /> : focus.actionType === "todo" && focus.kind === "To-do suggestion" ? <Check size={16} /> : focus.actionType === "todo" ? <ListTodo size={16} /> : <Brain size={16} />}
                 </button>
+                {focus.actionType !== "reply" ? <button className="next-best-action-control" type="button" title="Open source message" aria-label="Open source message" onClick={() => onOpenNextBestAction(focus.chatId, focus.messageId)}><ExternalLink size={16} /></button> : null}
                 <button className="next-best-action-control dismiss" type="button" title="Dismiss action" aria-label="Dismiss action" onClick={() => void dismissFocus()}><X size={16} /></button>
               </span>
             </div> : <button className="intelligence-focus caught-up" onClick={() => onNavigate("intelligence")}><span className="intelligence-focus-symbol"><Sparkles size={19} /></span><span><small>Current status</small><strong>You’re caught up</strong><p>AmirOS will surface the next useful action here.</p></span><ArrowRight size={15} /></button>}

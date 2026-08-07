@@ -50,6 +50,51 @@ export const CURRENT_RELEASE: AmirOSRelease = {
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
   {
+    version: "0.6.7",
+    releasedAt: "2026-08-07",
+    headline: "Smarter memory and proactive assistance",
+    notes: [
+      {
+        title: "Smarter memory in English and Hebrew",
+        detail: "Time-based questions such as “What did I do yesterday?” and “מה עשיתי אתמול?” now use the correct time window in both the dashboard and WhatsApp.",
+      },
+      {
+        title: "Attention when it matters",
+        detail: "Attention Needed highlights important upcoming and overdue commitments, to-dos, and calendar events.",
+      },
+      {
+        title: "A cleaner daily workflow",
+        detail: "Next Best Action, to-dos, and task workflows are simpler and easier to use.",
+      },
+    ],
+  },
+  {
+    version: "0.6.6",
+    releasedAt: "2026-08-07",
+    headline: "Clearer Overview actions and safer recovery",
+    notes: [
+      {
+        title: "Overview actions open the right place",
+        detail: "Next Best Action items now take you to the relevant conversation or workflow so you can act with less searching.",
+      },
+      {
+        title: "Safer recovery after interruptions",
+        detail: "AmirOS can recover the local service and restore the dashboard after a brief interruption more reliably.",
+      },
+    ],
+  },
+  {
+    version: "0.6.5",
+    releasedAt: "2026-08-06",
+    headline: "More dependable published-release updates",
+    notes: [
+      {
+        title: "Updates use published releases",
+        detail: "The updater now checks for a finished published release and installs that exact version instead of relying on the moving main branch.",
+      },
+    ],
+  },
+  {
     version: "0.6.4",
     releasedAt: "2026-08-06",
     headline: "Inbox polish, safer restarts, and release-based updates",

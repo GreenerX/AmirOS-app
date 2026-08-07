@@ -354,7 +354,7 @@ button.overview-action-cell:hover { background: var(--surface-subtle); }
 .next-best-focus-copy { display: grid; min-width: 0; gap: 3px; padding: 0; border: 0; color: inherit; background: transparent; text-align: left; }
 .next-best-focus-copy small { color: var(--emerald); font-size: 8px; font-weight: 800; letter-spacing: .065em; text-transform: uppercase; }
 .next-best-focus-copy strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.next-best-focus-copy p { overflow: hidden; margin: 0; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.next-best-focus-copy p { display: -webkit-box; overflow: hidden; margin: 0; color: var(--muted); -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 10px; line-height: 1.35; }
 .next-best-focus-actions { display: inline-flex; align-items: center; gap: 6px; }
 .next-best-action-control { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--accent-border); border-radius: 9px; color: var(--muted); background: var(--surface); transition: border-color .18s ease, color .18s ease, background .18s ease; }
 .next-best-action-control:hover { color: var(--emerald-dark); border-color: var(--emerald); background: var(--emerald-soft); }
