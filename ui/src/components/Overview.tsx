@@ -17,6 +17,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { summarizeDashboardActionMessage } from "../api";
@@ -126,6 +127,13 @@ function todoTimingLabel(todo: TodoTask) {
   return todo.status === "inferred" ? "Suggested from a message" : "No due date";
 }
 
+function compactTodoSuggestionTitle(title: string) {
+  const normalized = title.replace(/\s+/g, " ").trim();
+  const contextualClause = normalized.search(/\s+(?:when|if|after|before|because|so|for|at|on|כש|אחרי|לפני|אם|כי|כדי)\s+/i);
+  const compact = contextualClause > 0 ? normalized.slice(0, contextualClause) : normalized;
+  return compact.length > 52 ? `${compact.slice(0, 49).trimEnd()}…` : compact;
+}
+
 export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, onPreset, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onOpenTodoReview, onTodoStatus, onDismissNextBestAction }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
@@ -199,7 +207,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
     : planSuggestions[0]
       ? { kind: "Calendar suggestion", title: planSuggestions[0].title, detail: `From ${planSuggestions[0].contactName} · ${eventDateTime(planSuggestions[0].startAt)}`, chatId: planSuggestions[0].chatId, contactName: planSuggestions[0].contactName, messageId: planSuggestions[0].evidence.messageId, actionType: "calendar" as const, actionId: planSuggestions[0].id }
       : suggestedTodos[0]
-        ? { kind: "To-do suggestion", title: suggestedTodos[0].title, detail: `From ${suggestedTodos[0].contactName} · ${todoTimingLabel(suggestedTodos[0])}`, chatId: suggestedTodos[0].chatId, contactName: suggestedTodos[0].contactName, messageId: suggestedTodos[0].evidence.messageId, actionType: "todo" as const, actionId: suggestedTodos[0].id }
+        ? { kind: "To-do suggestion", title: compactTodoSuggestionTitle(suggestedTodos[0].title), detail: `From ${suggestedTodos[0].contactName} · ${todoTimingLabel(suggestedTodos[0])}`, chatId: suggestedTodos[0].chatId, contactName: suggestedTodos[0].contactName, messageId: suggestedTodos[0].evidence.messageId, actionType: "todo" as const, actionId: suggestedTodos[0].id }
         : trackedTodos.find((todo) => todo.status === "open")
           ? (() => { const todo = trackedTodos.find((item) => item.status === "open")!; return { kind: "To-do", title: todo.title, detail: `From ${todo.contactName} · ${todoTimingLabel(todo)}`, chatId: todo.chatId, contactName: todo.contactName, messageId: todo.evidence.messageId, actionType: "todo" as const, actionId: todo.id }; })()
           : newSignals[0]
@@ -245,6 +253,13 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
       return;
     }
     await onDismissNextBestAction(focus);
+  };
+  const reviewFocus = () => {
+    if (focus?.actionType === "todo" && focus.kind === "To-do suggestion") {
+      void onTodoStatus(focus.chatId, focus.actionId, "open");
+      return;
+    }
+    if (focus) onOpenNextBestAction(focus.chatId, focus.messageId);
   };
 
   return (
@@ -353,7 +368,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
                   {filteredTrackedTodos.map((todo) => <div className={`overview-agenda-todo-row ${todo.status === "done" ? "is-completed" : ""} ${completingTodoIds.has(todo.id) ? "is-completing" : ""}`} key={todo.id}>
                     <button className="overview-todo-check" type="button" aria-label={todo.status === "done" ? `Mark ${todo.title} as open` : `Mark ${todo.title} as complete`} onClick={() => void toggleTodo(todo)}><Check size={16} /></button>
                     <button className="overview-agenda-item" type="button" onClick={onOpenTodoReview}>
-                      <span><strong dir="auto">{todo.title}</strong><small>{todo.status === "done" ? "Completed" : typeof todo.dueAt === "number" && Number.isFinite(todo.dueAt) ? todoTimingLabel(todo) : `Added ${eventDateTime(toMilliseconds(todo.createdAt))}`}</small></span>
+                      <span><strong dir="auto">{todo.title}</strong></span>
                       <ArrowRight size={14} />
                     </button>
                   </div>)}
@@ -367,11 +382,18 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
         <div className="overview-command-rail">
           <section className="panel next-best-panel">
             <div className="panel-heading"><h2>Next best action</h2><span className={focus ? "attention-label" : "attention-label clear"}>{focus ? "Priority" : "All clear"}</span></div>
-            {focus ? <div className="next-best-action-row"><button className="intelligence-focus" onClick={() => onOpenNextBestAction(focus.chatId, focus.messageId)}>
+            {focus ? <div className="intelligence-focus next-best-focus">
               <ContactAvatar name={focus.contactName} src={focusChat?.avatarUrl} className="intelligence-focus-avatar" />
-              <span><small>{focus.kind}</small><strong dir="auto">{focus.title}</strong><p dir="auto">{focus.actionType === "reply" ? actionSummaries[focus.actionId] || focus.detail : focus.detail}</p></span>
-              <span className="intelligence-focus-link">Review <ArrowRight size={14} /></span>
-            </button><button className="next-best-dismiss" type="button" onClick={() => void dismissFocus()}>Dismiss</button></div> : <button className="intelligence-focus caught-up" onClick={() => onNavigate("intelligence")}><span className="intelligence-focus-symbol"><Sparkles size={19} /></span><span><small>Current status</small><strong>You’re caught up</strong><p>AmirOS will surface the next useful action here.</p></span><ArrowRight size={15} /></button>}
+              <button className="next-best-focus-copy" type="button" onClick={() => onOpenNextBestAction(focus.chatId, focus.messageId)}>
+                <small>{focus.kind}</small><strong dir="auto">{focus.title}</strong><p dir="auto">{focus.actionType === "reply" ? actionSummaries[focus.actionId] || focus.detail : focus.detail}</p>
+              </button>
+              <span className="next-best-focus-actions">
+                <button className="next-best-action-control primary" type="button" title={focus.actionType === "todo" && focus.kind === "To-do suggestion" ? "Add to to-do list" : `Review ${focus.kind.toLowerCase()}`} aria-label={focus.actionType === "todo" && focus.kind === "To-do suggestion" ? "Add to to-do list" : `Review ${focus.kind.toLowerCase()}`} onClick={reviewFocus}>
+                  {focus.actionType === "reply" ? <MessageCircle size={16} /> : focus.actionType === "calendar" ? <CalendarCheck size={16} /> : focus.actionType === "todo" && focus.kind === "To-do suggestion" ? <Check size={16} /> : focus.actionType === "todo" ? <ListTodo size={16} /> : <Brain size={16} />}
+                </button>
+                <button className="next-best-action-control dismiss" type="button" title="Dismiss action" aria-label="Dismiss action" onClick={() => void dismissFocus()}><X size={16} /></button>
+              </span>
+            </div> : <button className="intelligence-focus caught-up" onClick={() => onNavigate("intelligence")}><span className="intelligence-focus-symbol"><Sparkles size={19} /></span><span><small>Current status</small><strong>You’re caught up</strong><p>AmirOS will surface the next useful action here.</p></span><ArrowRight size={15} /></button>}
           </section>
 
           <section className="panel activity-panel">
