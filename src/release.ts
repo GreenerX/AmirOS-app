@@ -30,23 +30,15 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-07",
-  headline: "A clearer home screen and more dependable recovery",
+  headline: "A correct version identity and smoother updates",
   notes: [
     {
-      title: "A cleaner, more useful home screen",
-      detail: "Your Agenda now gives more room to upcoming events and tasks. Lists stay tidy as they grow, and completed task details are kept compact here without losing the underlying information.",
+      title: "Updates now finish cleanly",
+      detail: "AmirOS now reports the installed release version correctly, so a completed update no longer reappears as pending.",
     },
     {
-      title: "Clearer next actions",
-      detail: "AmirOS can now give a short explanation for a message that needs attention and lets you dismiss an action when it is no longer useful. The original WhatsApp message is always still available.",
-    },
-    {
-      title: "Updates are easier to find later",
-      detail: "If you choose Later, AmirOS keeps the update available from the version button so you can safely install it when you are ready.",
-    },
-    {
-      title: "More reliable WhatsApp recovery",
-      detail: "AmirOS now handles an already-running WhatsApp browser session more safely, helping prevent repeated restart loops after an unexpected interruption.",
+      title: "Your private data remains protected",
+      detail: "The update process continues to back up and restore your local settings, knowledge, calendar, tasks, profile, API key, and WhatsApp link.",
     },
   ],
 };
