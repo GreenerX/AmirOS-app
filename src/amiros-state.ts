@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { isDueDateQuery, isWithinTemporalRange, resolveTemporalRange } from "./temporal-memory.js";
 
 export type ReplyMode = "off" | "suggest" | "auto";
 export type OwnerTriggerAccess = "knowledge" | "calendar";
@@ -1952,16 +1953,19 @@ export class AmirosState {
     return structuredClone(value);
   }
 
-  searchIntelligence(query: string, limit = 36, excludedChatIds = new Set<string>()): IntelligenceSearchRecord[] {
+  searchIntelligence(query: string, limit = 36, excludedChatIds = new Set<string>(), now = Date.now()): IntelligenceSearchRecord[] {
     const terms = this.searchTerms(query);
+    const temporalRange = resolveTemporalRange(query, now);
+    const dueDateQuery = isDueDateQuery(query);
     const calendarIntent = /\b(schedule|calendar|agenda|plan|plans|event|events|appointment|week|today|tomorrow|upcoming|doing)\b|(?:לוח שנה|יומן|תוכניות|השבוע|מחר)/iu.test(query);
     const records: IntelligenceSearchRecord[] = [];
     for (const [chatId, memory] of Object.entries(this.persisted.memories)) {
       if (excludedChatIds.has(chatId)) continue;
-      const push = (record: Omit<IntelligenceSearchRecord, "score">, boost = 0) => {
+      const push = (record: Omit<IntelligenceSearchRecord, "score">, boost = 0, temporalTimestamp?: number) => {
+        if (temporalRange && !isWithinTemporalRange(temporalTimestamp, temporalRange)) return;
         const haystack = `${memory.chatName || ""} ${record.senderName || ""} ${record.content}`.toLocaleLowerCase();
         const matches = terms.reduce((score, term) => score + (haystack.includes(term) ? 3 : 0), 0);
-        const recency = Math.max(0, 1 - (Date.now() - record.timestamp) / (180 * 86_400_000));
+        const recency = Math.max(0, 1 - (now - record.timestamp) / (180 * 86_400_000));
         records.push({ ...record, contactName: memory.chatName, score: matches + recency + boost });
       };
       memory.entries.forEach((entry, index) => {
@@ -1980,7 +1984,7 @@ export class AmirosState {
         push({
           id: entry.messageId || `${chatId}-message-${index}`, chatId, kind: "message",
           content: entry.content, senderName: entry.senderName, sourceAuthor, timestamp: entry.timestamp,
-        }, sourceAuthor === "owner" ? 12 : 6);
+        }, sourceAuthor === "owner" ? 12 : 6, entry.timestamp);
       });
       memory.manualItems.forEach((item) => push({
         id: item.id,
@@ -1990,7 +1994,7 @@ export class AmirosState {
         sourceAuthor: "owner",
         status: "confirmed",
         timestamp: item.createdAt,
-      }, 18));
+      }, 18, item.createdAt));
       memory.insights.filter((item) => item.status !== "outdated").forEach((item) => push({
         id: item.id,
         chatId,
@@ -1999,8 +2003,12 @@ export class AmirosState {
         senderName: item.evidence.senderName,
         status: item.status,
         timestamp: item.updatedAt,
-      }, item.status === "confirmed" ? 20 : 3));
-      memory.commitments.filter((item) => item.status === "open").forEach((item) => push({ id: item.id, chatId, kind: "commitment", content: item.content, senderName: item.assigneeName, status: item.status, timestamp: item.updatedAt }));
+      }, item.status === "confirmed" ? 20 : 3, item.evidence.timestamp));
+      memory.commitments.filter((item) => item.status === "open").forEach((item) => push(
+        { id: item.id, chatId, kind: "commitment", content: item.content, senderName: item.assigneeName, status: item.status, timestamp: item.updatedAt },
+        0,
+        dueDateQuery && item.dueAt ? item.dueAt : item.evidence.timestamp,
+      ));
       memory.todos
         .filter((item) => item.status === "inferred" || item.status === "open")
         .forEach((item) => push({
@@ -2011,9 +2019,9 @@ export class AmirosState {
           senderName: item.evidence.senderName,
           status: item.status,
           timestamp: item.dueAt || item.updatedAt,
-        }, 12));
+        }, 12, dueDateQuery && item.dueAt ? item.dueAt : item.evidence.timestamp));
       memory.events
-        .filter((item) => item.status !== "dismissed" && item.startAt >= Date.now() - 86_400_000)
+        .filter((item) => item.status !== "dismissed" && (temporalRange || item.startAt >= now - 86_400_000))
         .forEach((item) => push({
           id: item.id,
           chatId,
@@ -2022,8 +2030,8 @@ export class AmirosState {
           senderName: item.evidence.senderName,
           status: item.status,
           timestamp: item.startAt,
-        }, calendarIntent ? 24 : 0));
-      if (memory.profile) push({ id: `${chatId}-profile`, chatId, kind: "profile", content: memory.profile.summary, status: "confirmed", timestamp: memory.profile.updatedAt }, 16);
+        }, calendarIntent ? 24 : 0, item.startAt));
+      if (memory.profile && !temporalRange) push({ id: `${chatId}-profile`, chatId, kind: "profile", content: memory.profile.summary, status: "confirmed", timestamp: memory.profile.updatedAt }, 16);
     }
     const hasMatches = records.some((record) => record.score >= 3);
     return records
