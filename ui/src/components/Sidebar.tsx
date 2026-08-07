@@ -38,10 +38,11 @@ type SidebarProps = {
   onToggleCollapsed: () => void;
   profile: { displayName: string; avatarUrl: string };
   version: string;
+  updateAvailable?: boolean;
   onOpenReleaseNotes: () => void;
 };
 
-export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleCollapsed, profile, version, onOpenReleaseNotes }: SidebarProps) {
+export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleCollapsed, profile, version, updateAvailable = false, onOpenReleaseNotes }: SidebarProps) {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
 
@@ -114,7 +115,7 @@ export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleC
           <ChevronDown className={profileMenuOpen ? "profile-button-chevron open" : "profile-button-chevron"} size={18} aria-hidden="true" />
         </button>
       </div>
-      <button className="sidebar-version" type="button" onClick={onOpenReleaseNotes} title="View release notes">v{version}<span>What’s new</span></button>
+      <button className={updateAvailable ? "sidebar-version update-available" : "sidebar-version"} type="button" onClick={onOpenReleaseNotes} title={updateAvailable ? "An AmirOS update is ready" : "View release notes"}>v{version}<span>{updateAvailable ? "Update ready" : "What’s new"}</span></button>
       <small className="sidebar-rights">© 2026 Amir Friedman.<br />All rights reserved.</small>
     </aside>
   );

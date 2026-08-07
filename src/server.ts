@@ -72,15 +72,29 @@ console.log(
     `${config.openaiTextModel}, ${config.openaiImageModel}, ${config.openaiTranscribeModel}`,
 );
 
-const shutdown = async () => {
-  console.log("Stopping WhatsApp bot...");
-  intelligenceLearner.shutdown();
-  dashboard.close();
-  await whatsapp.destroy().catch(() => undefined);
-  process.exit(0);
+let shutdownPromise: Promise<never> | undefined;
+
+const shutdown = (exitCode = 0): Promise<never> => {
+  if (shutdownPromise) return shutdownPromise;
+  shutdownPromise = (async () => {
+    console.log("Stopping WhatsApp bot...");
+    intelligenceLearner.shutdown();
+    dashboard.close();
+    // Client.destroy() closes the dedicated Puppeteer browser profile. Run it
+    // for both normal stops and a failed startup so a restart never inherits a
+    // half-open WhatsApp session.
+    await whatsapp.destroy().catch(() => undefined);
+    process.exit(exitCode);
+  })();
+  return shutdownPromise;
 };
 
 process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
-await whatsapp.initialize();
+try {
+  await whatsapp.initialize();
+} catch (error) {
+  console.error("WhatsApp could not start; closing the local service cleanly.", error);
+  await shutdown(1);
+}

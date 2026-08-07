@@ -1,5 +1,5 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,6 +17,31 @@ const serverPath = configuredServerPath
   ? resolve(configuredServerPath)
   : resolve(projectDirectory, "dist/src/server.js");
 
+function localEnvironmentValue(name) {
+  const localEnvironmentPath = resolve(projectDirectory, ".env.local");
+  if (!existsSync(localEnvironmentPath)) return undefined;
+  try {
+    for (const line of readFileSync(localEnvironmentPath, "utf8").split(/\r?\n/u)) {
+      const separator = line.indexOf("=");
+      if (separator < 1 || line.slice(0, separator).trim() !== name) continue;
+      const value = line.slice(separator + 1).trim();
+      return value.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/u, "$1$2") || undefined;
+    }
+  } catch {
+    // The watchdog can still use the standard session folder if the local
+    // settings file is unavailable while a recovery is in progress.
+  }
+  return undefined;
+}
+
+const configuredWhatsAppSessionPath =
+  process.env.WHATSAPP_SESSION_PATH || localEnvironmentValue("WHATSAPP_SESSION_PATH");
+const whatsappSessionDirectory = resolve(
+  projectDirectory,
+  configuredWhatsAppSessionPath || ".wwebjs_auth",
+  "session",
+);
+
 function positiveMilliseconds(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
@@ -28,6 +53,9 @@ const healthCheckIntervalMs = positiveMilliseconds("AMIROS_WATCHDOG_HEALTH_INTER
 const healthRestartDelayMs = positiveMilliseconds("AMIROS_WATCHDOG_HEALTH_RESTART_DELAY_MS", 4_000);
 const retryBaseDelayMs = positiveMilliseconds("AMIROS_WATCHDOG_RETRY_BASE_DELAY_MS", 2_000);
 const retryMaximumDelayMs = positiveMilliseconds("AMIROS_WATCHDOG_RETRY_MAX_DELAY_MS", 30_000);
+const sessionLockGraceMs = positiveMilliseconds("AMIROS_WATCHDOG_SESSION_LOCK_GRACE_MS", 1_500);
+const sessionTerminationGraceMs = positiveMilliseconds("AMIROS_WATCHDOG_SESSION_TERMINATION_GRACE_MS", 4_000);
+const sessionLockPollMs = positiveMilliseconds("AMIROS_WATCHDOG_SESSION_LOCK_POLL_MS", 150);
 
 if (!existsSync(serverPath)) throw new Error("AmirOS has not been built yet. Run npm run build, then start it again.");
 mkdirSync(workDirectory, { recursive: true });
@@ -41,6 +69,10 @@ let recoveryInProgress = false;
 let failures = 0;
 let whatsappUnhealthySince = 0;
 let availabilityTimer;
+let startingServer = false;
+let sessionRecoveryInProgress = false;
+let shutdownExitTimer;
+let shutdownFinalizing = false;
 
 function logLine(message) {
   const descriptor = openSync(logPath, "a", 0o600);
@@ -65,6 +97,107 @@ function writeBackendStatus(status, extra = {}) {
   writeFileSync(restartStatusPath, `${JSON.stringify({ status, updatedAt: Date.now(), ...extra })}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
+function wait(milliseconds) {
+  return new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
+}
+
+function usesAmirOSWhatsAppSession(command) {
+  const plainMarker = `--user-data-dir=${whatsappSessionDirectory}`;
+  const quotedMarkers = [
+    `--user-data-dir="${whatsappSessionDirectory}"`,
+    `--user-data-dir='${whatsappSessionDirectory}'`,
+  ];
+  const isCompleteArgument = (marker) => {
+    const index = command.indexOf(marker);
+    if (index < 0) return false;
+    const remainingCommand = command.slice(index + marker.length);
+    return remainingCommand.length === 0 || /^\s+--/u.test(remainingCommand);
+  };
+  return isCompleteArgument(plainMarker) || quotedMarkers.some(isCompleteArgument);
+}
+
+function sessionBrowserProcesses() {
+  try {
+    const result = process.platform === "win32" ? undefined : execFileSync(
+      process.platform === "darwin" ? "/bin/ps" : "ps",
+      ["-ax", "-o", "pid=,ppid=,command="],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+    if (!result) return [];
+    return result
+      .split(/\r?\n/u)
+      .map((line) => {
+        const match = line.match(/^\s*(\d+)\s+(\d+)\s+([\s\S]+)$/u);
+        if (!match) return undefined;
+        return { pid: Number(match[1]), command: match[3] };
+      })
+      .filter((processInfo) =>
+        processInfo
+        && Number.isInteger(processInfo.pid)
+        && processInfo.pid !== process.pid
+        && usesAmirOSWhatsAppSession(processInfo.command),
+      );
+  } catch (error) {
+    logLine(`Unable to inspect the AmirOS WhatsApp browser session (${error instanceof Error ? error.message : String(error)}).`);
+    return [];
+  }
+}
+
+function terminateSessionProcesses(processes, signal) {
+  for (const processInfo of processes) {
+    try {
+      process.kill(processInfo.pid, signal);
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ESRCH") continue;
+      logLine(`Could not stop WhatsApp session browser PID ${processInfo.pid} (${error instanceof Error ? error.message : String(error)}).`);
+    }
+  }
+}
+
+async function releaseWhatsAppSessionBrowser() {
+  if (sessionRecoveryInProgress) return false;
+  const initialProcesses = sessionBrowserProcesses();
+  if (!initialProcesses.length) return true;
+
+  sessionRecoveryInProgress = true;
+  try {
+    const identifiers = initialProcesses.map((processInfo) => processInfo.pid).join(", ");
+    logLine(`WhatsApp session browser lock detected for AmirOS (PID ${identifiers}). Waiting briefly for it to close.`);
+    await wait(sessionLockGraceMs);
+
+    let remainingProcesses = sessionBrowserProcesses();
+    if (!remainingProcesses.length) {
+      logLine("WhatsApp session browser lock released cleanly.");
+      return true;
+    }
+
+    logLine(`Stopping the stale AmirOS WhatsApp browser session (PID ${remainingProcesses.map((processInfo) => processInfo.pid).join(", ")}).`);
+    terminateSessionProcesses(remainingProcesses, "SIGTERM");
+    await wait(sessionTerminationGraceMs);
+
+    remainingProcesses = sessionBrowserProcesses();
+    if (!remainingProcesses.length) {
+      logLine("WhatsApp session browser lock released after a graceful stop.");
+      return true;
+    }
+
+    logLine(`Force-stopping the stale AmirOS WhatsApp browser session (PID ${remainingProcesses.map((processInfo) => processInfo.pid).join(", ")}).`);
+    terminateSessionProcesses(remainingProcesses, "SIGKILL");
+    await wait(sessionLockPollMs);
+
+    remainingProcesses = sessionBrowserProcesses();
+    if (!remainingProcesses.length) {
+      logLine("WhatsApp session browser lock released after forced cleanup.");
+      return true;
+    }
+
+    logLine(`WhatsApp session browser lock is still present (PID ${remainingProcesses.map((processInfo) => processInfo.pid).join(", ")}). Recovery will retry without changing session data.`);
+    return false;
+  } finally {
+    sessionRecoveryInProgress = false;
+  }
+}
+
 function scheduleRestart(reason, delay, alreadyAnnounced = false) {
   if (stopping) return;
   if (restartTimer || restartRequest) {
@@ -83,7 +216,7 @@ function scheduleRestart(reason, delay, alreadyAnnounced = false) {
   restartTimer = setTimeout(() => {
     restartTimer = undefined;
     if (stopping) return;
-    startServer(reason, true);
+    void startServer(reason, true);
   }, delay);
 }
 
@@ -135,10 +268,15 @@ function processRestartCommand() {
   requestRestart("dashboard restart request", healthRestartDelayMs);
 }
 
-function startServer(reason, isRecovery = false) {
-  if (stopping || child) return;
-  const log = openSync(logPath, "a", 0o600);
+async function startServer(reason, isRecovery = false) {
+  if (stopping || child || startingServer) return;
+  startingServer = true;
   try {
+    const sessionReleased = await releaseWhatsAppSessionBrowser();
+    if (!sessionReleased) throw new Error("The AmirOS WhatsApp browser session is still locked");
+
+    const log = openSync(logPath, "a", 0o600);
+    try {
     logLine(isRecovery ? `Restart started (${reason}).` : `Starting service (${reason}).`);
     const serverChild = spawn(process.execPath, [serverPath], {
       cwd: projectDirectory,
@@ -157,6 +295,7 @@ function startServer(reason, isRecovery = false) {
       const exitReason = describeExit(code, signal);
       if (stopping) {
         logLine(`Backend stopped during intentional shutdown (${exitReason}).`);
+        void finishShutdown();
         return;
       }
 
@@ -177,6 +316,9 @@ function startServer(reason, isRecovery = false) {
       const wait = Math.min(retryMaximumDelayMs, retryBaseDelayMs * failures);
       scheduleRestart("automatic recovery after backend exit", wait);
     });
+    } finally {
+      closeSync(log);
+    }
   } catch (error) {
     if (!stopping) {
       recoveryInProgress = false;
@@ -186,7 +328,7 @@ function startServer(reason, isRecovery = false) {
       scheduleRestart("automatic recovery after launch failure", wait);
     }
   } finally {
-    closeSync(log);
+    startingServer = false;
   }
 }
 
@@ -278,6 +420,17 @@ healthTimer.unref();
 const restartCommandTimer = setInterval(processRestartCommand, 300);
 restartCommandTimer.unref();
 
+async function finishShutdown() {
+  if (shutdownFinalizing) return;
+  shutdownFinalizing = true;
+  if (shutdownExitTimer) clearTimeout(shutdownExitTimer);
+  // The backend normally closes Puppeteer itself. This final check handles a
+  // rare leftover process without touching any WhatsApp session files.
+  await releaseWhatsAppSessionBrowser();
+  try { unlinkSync(pidPath); } catch {}
+  process.exit(0);
+}
+
 function shutdown() {
   if (stopping) return;
   stopping = true;
@@ -298,11 +451,20 @@ function shutdown() {
     clearTimeout(restartTimer);
     restartTimer = undefined;
   }
-  if (child) child.kill("SIGTERM");
-  try { unlinkSync(pidPath); } catch {}
-  setTimeout(() => process.exit(0), 2_500);
+  if (child) {
+    child.kill("SIGTERM");
+    shutdownExitTimer = setTimeout(() => {
+      if (child) {
+        logLine("Backend did not stop cleanly in time; forcing its final shutdown.");
+        child.kill("SIGKILL");
+      }
+      void finishShutdown();
+    }, 10_000);
+    return;
+  }
+  void finishShutdown();
 }
 
 process.once("SIGTERM", shutdown);
 process.once("SIGINT", shutdown);
-startServer("launcher");
+void startServer("launcher");

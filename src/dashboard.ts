@@ -1716,6 +1716,21 @@ export function startAmirosDashboard(options: DashboardOptions) {
         return;
       }
 
+      if (request.method === "POST" && pathname === "/api/dashboard/action-summary") {
+        const body = await readJson<{ message?: unknown }>(request);
+        const message = typeof body.message === "string" ? body.message.trim() : "";
+        if (!message) {
+          sendJson(response, 400, { error: "A message is required to create a summary." });
+          return;
+        }
+        if (message.length > 4_000) {
+          sendJson(response, 400, { error: "That message is too long to summarize." });
+          return;
+        }
+        sendJson(response, 200, { summary: await ai.summarizeDashboardActionMessage(message) });
+        return;
+      }
+
       if (request.method === "GET" && pathname === "/api/activity") {
         const limit = Number(url.searchParams.get("limit") || 250);
         sendJson(response, 200, {

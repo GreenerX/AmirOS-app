@@ -42,6 +42,7 @@ import {
 import { InboxView } from "./components/InboxView";
 import { IntelligenceView } from "./components/IntelligenceView";
 import { Overview } from "./components/Overview";
+import type { NextBestAction } from "./components/Overview";
 import { Sidebar } from "./components/Sidebar";
 import { TerminalView } from "./components/TerminalView";
 import { CalendarView } from "./components/CalendarView";
@@ -506,6 +507,21 @@ export function App() {
     await refreshIntelligence();
   };
 
+  const dismissNextBestAction = async (action: NextBestAction) => {
+    try {
+      if (action.actionType === "calendar") {
+        await changeCalendarStatus(action.chatId, action.actionId, { status: "dismissed" });
+      } else if (action.actionType === "todo") {
+        await changeTodoTask(action.chatId, action.actionId, { status: "dismissed" });
+      } else if (action.actionType === "insight") {
+        await changeInsight(action.chatId, action.actionId, { status: "outdated" });
+      }
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Could not dismiss this action");
+      throw actionError;
+    }
+  };
+
   const regenerateEventTitle = async (chatId: string, eventId: string) => {
     const title = await regenerateCalendarTitle(chatId, eventId);
     await refreshIntelligence();
@@ -724,10 +740,10 @@ export function App() {
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} />
+      <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} updateAvailable={updateStatus?.status === "available"} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} />
       <div className="app-body">
         {error ? <div className="error-banner"><AlertTriangle size={17} />{error}<button onClick={() => setError(undefined)}>Dismiss</button></div> : null}
-        {view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onOpenUnread={openUnreadInbox} onPreset={choosePreset} onTrackingDecision={decideKnowledgeTracking} onOpenTrackingChat={(chatId) => openChat(chatId)} onOpenNextBestAction={openChat} onOpenTodoReview={openTodoReview} onTodoStatus={changeTodoStatus} /> : null}
+        {view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onOpenUnread={openUnreadInbox} onPreset={choosePreset} onTrackingDecision={decideKnowledgeTracking} onOpenTrackingChat={(chatId) => openChat(chatId)} onOpenNextBestAction={openChat} onOpenTodoReview={openTodoReview} onTodoStatus={changeTodoStatus} onDismissNextBestAction={dismissNextBestAction} /> : null}
         {view === "intelligence" ? <IntelligenceView data={intelligence} chats={chats} contacts={dashboard.settings.contacts} loading={loadingIntelligence} onRefresh={refreshIntelligence} onOpenChat={openChat} onOpenCalendar={() => setView("calendar")} onGenerateSummary={(chatId, isGroup) => isGroup ? summarizeSelectedGroup(chatId) : generateProfile(chatId)} onCalendarStatus={changeCalendarStatus} onRegenerateCalendarTitle={regenerateEventTitle} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onDeleteQuestion={deleteQuestion} navigationRequest={intelligenceNavigationRequest} /> : null}
         {view === "calendar" ? <CalendarView data={intelligence} onOpenChat={openChat} onStatus={changeCalendarStatus} onRegenerateTitle={regenerateEventTitle} /> : null}
         {view === "inbox" ? <InboxView chats={chats} unreadCount={unreadCount} initialFilter={inboxInitialFilter} initialContactSettingsTab={inboxContactSettingsTab} selectedChatId={selectedChatId} highlightedMessageId={highlightedMessageId} messages={visibleMessages} memory={visibleMemory} manualMemory={visibleManualMemory} profile={visibleProfile} insights={insights} styleProfile={styleProfile} groupSummary={groupSummary} groupDescription={groupDescription} composerDraft={assistantComposerDraft?.chatId === selectedChatId ? assistantComposerDraft?.body : undefined} onComposerDraftConsumed={() => setAssistantComposerDraft(undefined)} incomingMessageCount={incomingMessageCount} contact={visibleContact} drafts={dashboard.drafts} loading={loadingChat} onSelectChat={selectInboxChat} onMarkRead={readChat} onModeChange={changeMode} onContactChange={changeContact} onAddMemory={addMemory} onRemoveMemory={removeMemory} onGenerateProfile={generateProfile} onAnalyzeIntelligence={analyzeIntelligence} onInsightChange={changeInsight} onGenerateWritingStyle={learnWritingStyle} onGenerateGroupSummary={summarizeSelectedGroup} onApproveDraft={approve} onDismissDraft={dismiss} onSend={send} onSendMedia={sendChatMedia} onGenerateImage={generateChatImage} onReact={react} onReply={reply} onForward={forward} onScanHistory={scanHistory} /> : null}
@@ -737,7 +753,7 @@ export function App() {
         {view === "terminal" ? <TerminalView connection={dashboard.connection} loadLog={getTerminalLog} subscribeLog={subscribeTerminalLog} /> : null}
         {view === "settings" ? <SettingsView data={dashboard} onSave={saveSettings} onSaveApiKey={saveApiKey} onRelink={async () => { await relink(); }} onPause={togglePaused} /> : null}
         <FloatingAssistant data={intelligence} loading={loadingIntelligence} onRefresh={refreshIntelligence} onAsk={askRelationships} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onSaveKnowledge={addMemory} onInsertReply={(chatId, body) => { setAssistantComposerDraft({ chatId, body }); openChat(chatId); }} />
-        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} theme={dashboard.settings.theme} ownerProfile={dashboard.settings.ownerProfile} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onFinishOnboarding={async (choice, theme) => saveSettings({ knowledgeTrackingDefault: choice, theme })} onSaveOwnerProfile={async (ownerProfile) => saveSettings({ ownerProfile })} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
+        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} theme={dashboard.settings.theme} ownerProfile={dashboard.settings.ownerProfile} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onFinishOnboarding={async (choice, theme) => saveSettings({ knowledgeTrackingDefault: choice, theme })} onSaveOwnerProfile={async (ownerProfile) => saveSettings({ ownerProfile })} update={updateStatus} onStartUpdate={startDashboardUpdate} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
         <UpdatePrompt update={updateStatus} onStartUpdate={startDashboardUpdate} />
       </div>
     </div>

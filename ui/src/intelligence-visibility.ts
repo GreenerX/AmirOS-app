@@ -3,6 +3,7 @@ import type { IntelligenceChat } from "./types.js";
 export const HIDDEN_INTELLIGENCE_ACTIONS_KEY = "amiros-hidden-radar";
 
 type StorageReader = Pick<Storage, "getItem">;
+type StorageWriter = Pick<Storage, "getItem" | "setItem">;
 
 export function replyActionId(chat: IntelligenceChat): string {
   const messageIdentity = chat.lastIncoming?.messageId
@@ -19,6 +20,14 @@ export function readHiddenIntelligenceActions(storage?: StorageReader): Set<stri
   } catch {
     return new Set();
   }
+}
+
+/** Keep an action out of AmirOS's local review queue without touching WhatsApp. */
+export function hideIntelligenceAction(actionId: string, storage?: StorageWriter): void {
+  const source = storage || window.localStorage;
+  const hidden = readHiddenIntelligenceActions(source);
+  hidden.add(actionId);
+  source.setItem(HIDDEN_INTELLIGENCE_ACTIONS_KEY, JSON.stringify([...hidden]));
 }
 
 export function visibleReplyChats(chats: IntelligenceChat[], hidden: Set<string>): IntelligenceChat[] {

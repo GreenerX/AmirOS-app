@@ -1004,6 +1004,24 @@ export class AiService {
     };
   }
 
+  async summarizeDashboardActionMessage(message: string): Promise<string> {
+    this.assertAvailable();
+    const source = message.replace(/\s+/g, " ").trim();
+    if (!source) return "";
+    const result = await this.structuredResponse<{ summary: string }>({
+      name: "dashboard_action_summary",
+      instructions: "Summarize this one incoming WhatsApp message in one short, factual sentence. Keep the message's language. Do not add facts, advice, names, or context that are not present. Return only the summary.",
+      input: JSON.stringify({ message: source.slice(0, 4_000) }),
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { summary: { type: "string", maxLength: 280 } },
+        required: ["summary"],
+      },
+    });
+    return result.summary.replace(/\s+/g, " ").trim().slice(0, 280);
+  }
+
   async regenerateCalendarTitle(input: {
     contactName: string;
     currentTitle: string;

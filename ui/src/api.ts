@@ -90,6 +90,14 @@ export async function startAmirosUpdate(): Promise<{ ok: true; latestVersion: st
   return request("/api/update", { method: "POST", body: "{}" });
 }
 
+export async function summarizeDashboardActionMessage(message: string): Promise<{ summary: string }> {
+  if (isDemo) return { summary: message };
+  return request("/api/dashboard/action-summary", {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+}
+
 export type BackendRestartStatus = {
   status: "running" | "restarting" | "offline";
   updatedAt: number;

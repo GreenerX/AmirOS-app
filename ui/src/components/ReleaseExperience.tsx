@@ -1,7 +1,7 @@
 import { Brain, Check, ChevronLeft, ChevronRight, KeyRound, LoaderCircle, MessageCircleMore, Palette, QrCode, Rocket, Sparkles, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { whatsappQrUrl } from "../api";
-import type { AmirOSRelease, DashboardData, KnowledgeTrackingDefault, ThemeName } from "../types";
+import type { AmirOSRelease, AmirOSUpdateStatus, DashboardData, KnowledgeTrackingDefault, ThemeName } from "../types";
 
 const ONBOARDING_KEY = "amiros.onboarding.completed";
 const RELEASE_KEY = "amiros.release-notes.seen";
@@ -17,6 +17,8 @@ type ReleaseExperienceProps = {
   connection: DashboardData["connection"];
   onSaveApiKey: (apiKey: string) => Promise<void>;
   onRelinkWhatsApp: () => Promise<DashboardData["connection"]>;
+  update?: AmirOSUpdateStatus;
+  onStartUpdate?: () => Promise<void>;
   forceReleaseOpen?: boolean;
   onReleaseNotesClosed?: () => void;
 };
@@ -38,7 +40,7 @@ function StepProgress({ current }: { current: number }) {
   </div>;
 }
 
-export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ownerProfile, onFinishOnboarding, onSaveOwnerProfile, apiKeyConfigured, connection, onSaveApiKey, onRelinkWhatsApp, forceReleaseOpen = false, onReleaseNotesClosed }: ReleaseExperienceProps) {
+export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ownerProfile, onFinishOnboarding, onSaveOwnerProfile, apiKeyConfigured, connection, onSaveApiKey, onRelinkWhatsApp, update, onStartUpdate, forceReleaseOpen = false, onReleaseNotesClosed }: ReleaseExperienceProps) {
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [step, setStep] = useState(0);
@@ -56,6 +58,8 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
   const [ownerAvatar, setOwnerAvatar] = useState(() => onboardingAvatars[Math.floor(Math.random() * onboardingAvatars.length)]!);
   const [savingOwnerProfile, setSavingOwnerProfile] = useState(false);
   const [ownerProfileError, setOwnerProfileError] = useState<string>();
+  const [startingUpdate, setStartingUpdate] = useState(false);
+  const [updateError, setUpdateError] = useState<string>();
   const releases = release.history?.length ? release.history : [release];
   const selectedRelease = releases.find((item) => item.version === selectedVersion) ?? release;
 
@@ -89,6 +93,18 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
     window.localStorage.setItem(RELEASE_KEY, release.version);
     setReleaseOpen(false);
     onReleaseNotesClosed?.();
+  };
+
+  const startAvailableUpdate = async () => {
+    if (!onStartUpdate || startingUpdate) return;
+    setStartingUpdate(true);
+    setUpdateError(undefined);
+    try {
+      await onStartUpdate();
+    } catch (error) {
+      setUpdateError(error instanceof Error ? error.message : "AmirOS could not start the update.");
+      setStartingUpdate(false);
+    }
   };
 
   const finishOnboarding = () => {
@@ -189,6 +205,10 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
         <button className="icon-button" type="button" aria-label="Close release notes" onClick={closeRelease}><X size={18} /></button>
       </header>
       <div className="release-notes-body">
+        {update?.status === "available" ? <section className="release-update-ready">
+          <div><small>Update available</small><strong>Update to v{update.latestVersion}</strong><p>A new published AmirOS release is ready. Your private data stays on this Mac.</p>{updateError ? <em>{updateError}</em> : null}</div>
+          <button className="button primary compact" type="button" disabled={startingUpdate} onClick={() => void startAvailableUpdate()}>{startingUpdate ? "Starting…" : "Update AmirOS"}</button>
+        </section> : null}
         <div className="release-version-picker">
           <div><span>Viewing version</span><strong>v{selectedRelease.version}{selectedRelease.version === release.version ? " · Current" : ""}</strong></div>
           <label htmlFor="amiros-release-version" className="sr-only">Choose a past AmirOS version</label>
