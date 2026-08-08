@@ -14,7 +14,7 @@ const navigation: Array<{
 }> = [
   { id: "overview", label: "Overview", icon: OverviewIcon },
   { id: "inbox", label: "Inbox", icon: InboxIcon },
-  { id: "intelligence", label: "Intelligence", icon: IntelligenceIcon },
+  { id: "intelligence", label: "People", icon: IntelligenceIcon },
   { id: "calendar", label: "Calendar", icon: CalendarIcon },
   { id: "contacts", label: "Contacts", icon: ContactsIcon },
 ];
@@ -86,7 +86,6 @@ export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleC
           >
             <span className="nav-icon-shell"><Icon size={22} /></span>
             <span>{label}</span>
-            {id === "intelligence" ? <span className="beta-badge nav-beta">Beta</span> : null}
             {id === "inbox" && unreadCount > 0 ? (
               <span className="nav-count" aria-label={`${unreadCount} unread messages`} title={`${unreadCount} unread messages`}>{unreadCount > 99 ? "99+" : unreadCount}</span>
             ) : null}

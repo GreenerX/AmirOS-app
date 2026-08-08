@@ -20,6 +20,7 @@ import { confirmedPlansForRelationship, type RelationshipPlan } from "../relatio
 import { isLegacyProfileSummary, profileSummaryParagraph } from "../profile-summary";
 import { CalendarEventForm, type CalendarEventDraft } from "./CalendarEventForm";
 import { ContactAvatar } from "./ContactAvatar";
+import { PeopleExperience } from "./PeopleExperience";
 
 type IntelligenceTab = "briefing" | "knowledge" | "people" | "history";
 type QueueFilter = "all" | "reply" | "event" | "todo" | "signal";
@@ -90,8 +91,7 @@ const KNOWLEDGE_LABELS: Record<ContactInsight["kind"], string> = {
 const INTELLIGENCE_TAB_KEY = "amiros-intelligence-tab";
 
 function initialIntelligenceTab(): IntelligenceTab {
-  const saved = sessionStorage.getItem(INTELLIGENCE_TAB_KEY);
-  return saved === "knowledge" || saved === "people" || saved === "history" ? saved : "briefing";
+  return "people";
 }
 
 function toMilliseconds(value: number) {
@@ -713,6 +713,16 @@ export function IntelligenceView({
     </article>;
   };
 
+  if (activeTab === "people") return <PeopleExperience
+    data={data}
+    chats={chats}
+    contacts={contacts}
+    loading={loading}
+    onRefresh={onRefresh}
+    onOpenChat={onOpenChat}
+    onOpenCalendar={onOpenCalendar}
+  />;
+
   return <main className="main-content intelligence-page intelligence-command">
     <header className="page-header intel-command-header"><div><div className="intel-title-row"><h1>Intelligence</h1><span className="beta-badge intel-beta">Beta</span></div><p>Your personal command center for priorities, people, and next best actions.</p></div><div className="intelligence-sync"><CheckCircle2 size={15} /><span>{loading ? "Syncing knowledge…" : data ? `Synced ${relativeTime(data.generatedAt)}` : "Waiting for knowledge"}</span><button className="icon-button" aria-label="Refresh intelligence" disabled={loading} onClick={() => void onRefresh()}><RefreshCw size={17} className={loading ? "spin" : ""} /></button></div></header>
 
@@ -814,7 +824,7 @@ export function IntelligenceView({
           </section>
         </section> : null}
 
-        {activeTab === "people" ? <section className="intel-people-view">
+        {false ? <section className="intel-people-view">
           <header><div><span className="intel-eyebrow">Relationship knowledge</span><h2>People and groups</h2><p>See what AmirOS knows, what is changing, and where attention may be useful.</p></div><label className="intel-search"><Search size={16} /><input value={peopleSearch} onChange={(event) => setPeopleSearch(event.target.value)} placeholder="Search people and groups" aria-label="Search people and groups" />{peopleSearch ? <button onClick={() => setPeopleSearch("")} aria-label="Clear search"><X size={14} /></button> : null}</label></header>
           <div className="intel-filter-tabs intel-people-filter-tabs" aria-label="Filter people and groups">
             {(["all", "people", "groups"] as PeopleFilter[]).map((filter) => <button key={filter} className={peopleFilter === filter ? "active" : ""} aria-pressed={peopleFilter === filter} onClick={() => setPeopleFilter(filter)}>{filter === "all" ? "All" : filter === "people" ? "People" : "Groups"}<span>{peopleCounts[filter]}</span></button>)}
