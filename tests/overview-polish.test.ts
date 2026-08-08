@@ -39,8 +39,9 @@ describe("Overview polish", () => {
   });
 
   it("renders a people-first Today’s Focus and a compact timeline for today only", async () => {
-    const [overview, styles] = await Promise.all([
+    const [overview, calendar, styles] = await Promise.all([
       readFile(new URL("../ui/src/components/Overview.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../ui/src/components/CalendarView.tsx", import.meta.url), "utf8"),
       readFile(new URL("../ui/src/styles.css", import.meta.url), "utf8"),
     ]);
     expect(overview).not.toContain("intelligence-overview-stats");
@@ -50,6 +51,9 @@ describe("Overview polish", () => {
     expect(overview).toContain("filteredTrackedTodos.map");
     expect(overview).toContain("View full agenda");
     expect(overview).toContain("Nothing is scheduled for today yet.");
+    expect(calendar).toContain("calendar-day-more");
+    expect(calendar).toContain("Show all ${dayEvents.length} events");
+    expect(calendar).toContain("calendar-day-events-dialog");
     expect(styles).toContain(".overview-timeline-event { display: grid;");
     expect(styles).toContain(".todays-focus-item-avatar");
     expect(styles).toContain(".overview-agenda-pair > .panel { height: 100%; }");

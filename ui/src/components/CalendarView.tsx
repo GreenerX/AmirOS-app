@@ -58,6 +58,7 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
   const [dates, setDates] = useState<Record<string, string>>({});
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [selectedEvent, setSelectedEvent] = useState<EnrichedEvent>();
+  const [selectedMonthDay, setSelectedMonthDay] = useState<{ date: Date; events: EnrichedEvent[] }>();
   const [editDraft, setEditDraft] = useState<CalendarEventDraft>();
   const [deleteCandidate, setDeleteCandidate] = useState<EnrichedEvent>();
   const [deletedEvent, setDeletedEvent] = useState<EnrichedEvent>();
@@ -88,15 +89,16 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
   }, [confirmed.length, subscriptionHidden]);
 
   useEffect(() => {
-    if (!selectedEvent && !deleteCandidate) return;
+    if (!selectedEvent && !deleteCandidate && !selectedMonthDay) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (deleteCandidate) setDeleteCandidate(undefined);
+      else if (selectedMonthDay) setSelectedMonthDay(undefined);
       else { setSelectedEvent(undefined); setEditDraft(undefined); }
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [selectedEvent?.id, deleteCandidate?.id]);
+  }, [selectedEvent?.id, deleteCandidate?.id, selectedMonthDay?.date.getTime()]);
 
   useEffect(() => {
     if (!deletedEvent) return;
@@ -223,8 +225,15 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
 
     <section className="panel calendar-month-panel">
       <div className="calendar-month-header"><div><h2>{new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(month)}</h2><small>{confirmed.length} confirmed plans</small></div><span><button className="icon-button" aria-label="Previous month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}><ChevronLeft size={17} /></button><button className="button compact" onClick={() => setMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1))}>Today</button><button className="icon-button" aria-label="Next month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}><ChevronRight size={17} /></button></span></div>
-      <div className="calendar-month-grid">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <strong className="calendar-weekday" key={day}>{day}</strong>)}{days.map((day) => { const dayEvents = confirmed.filter((event) => sameDay(day, event.startAt)); const outside = day.getMonth() !== month.getMonth(); const today = sameDay(day, Date.now()); return <div key={day.toISOString()} className={`calendar-day ${outside ? "outside" : ""} ${today ? "today" : ""}`}><span>{day.getDate()}</span>{dayEvents.slice(0, 3).map((event) => <button key={event.id} onClick={() => openEvent(event)} title={`View ${event.title} at ${shortTime(event.startAt)}`}><time>{shortTime(event.startAt)}</time><span>{event.title}</span></button>)}{dayEvents.length > 3 ? <small>+{dayEvents.length - 3} more</small> : null}</div>; })}</div>
+      <div className="calendar-month-grid">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <strong className="calendar-weekday" key={day}>{day}</strong>)}{days.map((day) => { const dayEvents = confirmed.filter((event) => sameDay(day, event.startAt)); const outside = day.getMonth() !== month.getMonth(); const today = sameDay(day, Date.now()); return <div key={day.toISOString()} className={`calendar-day ${outside ? "outside" : ""} ${today ? "today" : ""}`}><span>{day.getDate()}</span>{dayEvents.slice(0, 3).map((event) => <button key={event.id} onClick={() => openEvent(event)} title={`View ${event.title} at ${shortTime(event.startAt)}`}><time>{shortTime(event.startAt)}</time><span>{event.title}</span></button>)}{dayEvents.length > 3 ? <button type="button" className="calendar-day-more" aria-label={`Show all ${dayEvents.length} events on ${new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric" }).format(day)}`} onClick={() => setSelectedMonthDay({ date: day, events: dayEvents })}>+{dayEvents.length - 3} more</button> : null}</div>; })}</div>
     </section>
+
+    {selectedMonthDay ? <div className="event-detail-backdrop" role="presentation" onClick={() => setSelectedMonthDay(undefined)}>
+      <section className="event-detail-bubble calendar-day-events-dialog" role="dialog" aria-modal="true" aria-labelledby="calendar-day-events-title" onClick={(event) => event.stopPropagation()}>
+        <header><span className="event-detail-icon"><CalendarDays size={22} /></span><span><small>Day agenda</small><h2 id="calendar-day-events-title">{new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(selectedMonthDay.date)}</h2></span><button className="icon-button" aria-label="Close day agenda" onClick={() => setSelectedMonthDay(undefined)}><X size={17} /></button></header>
+        <div className="calendar-day-events-list">{selectedMonthDay.events.map((event) => <button key={event.id} type="button" onClick={() => { setSelectedMonthDay(undefined); openEvent(event); }}><time>{shortTime(event.startAt)}</time><span><strong>{event.title}</strong><small>{event.location || `With ${event.contactName}`}</small></span><ChevronRight size={16} /></button>)}</div>
+      </section>
+    </div> : null}
 
     <section className="panel calendar-confirmed"><div className="panel-heading"><h2>Confirmed agenda</h2><small>{confirmed.length} plans</small></div>
         <div className="calendar-agenda">{confirmed.map((event) => <article key={event.id}>
