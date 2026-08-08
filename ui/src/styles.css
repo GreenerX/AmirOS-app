@@ -249,6 +249,10 @@ button.overview-action-cell:hover { background: var(--surface-subtle); }
 .overview-reminders-panel { margin-bottom: 18px; }
 .overview-reminders-note { color: var(--muted); font-size: 11px; }
 .todays-focus-panel { display: grid; gap: 11px; }
+.todays-focus-empty { min-height: 142px; justify-content: center; padding: 24px 28px; border: 1px solid var(--border); border-radius: var(--radius); background: linear-gradient(135deg, var(--todays-focus-theme-soft), var(--surface) 62%); box-shadow: var(--shadow-sm); }
+.todays-focus-empty > svg { flex: 0 0 auto; color: var(--todays-focus-theme); }
+.todays-focus-empty strong { font-size: 17px; letter-spacing: -.25px; }
+.todays-focus-empty small { margin-top: 3px; font-size: 13px; }
 .todays-focus-heading { display: flex; min-height: 54px; align-items: center; justify-content: space-between; padding: 0 2px; }
 .todays-focus-title-block { display: flex; align-items: center; gap: 11px; }
 .todays-focus-title-icon { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 12px; color: var(--todays-focus-theme); background: var(--todays-focus-theme-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--todays-focus-theme) 18%, transparent); }

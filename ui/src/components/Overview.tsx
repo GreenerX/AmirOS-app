@@ -438,7 +438,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
               </button>
             </article>;
           })}
-        </div> : <div className="overview-agenda-empty"><CalendarClock size={22} /><span><strong>Everything important is under control today.</strong><small>AmirOS will surface new priorities here.</small></span></div>}
+        </div> : <div className="overview-agenda-empty todays-focus-empty"><CalendarClock size={28} /><span><strong>You’re all caught up for today.</strong><small>When something needs you, it’ll show up here.</small></span></div>}
       </section>
 
       <section className="overview-action-strip" aria-label="Today at a glance">

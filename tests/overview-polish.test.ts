@@ -51,11 +51,13 @@ describe("Overview polish", () => {
     expect(overview).toContain("filteredTrackedTodos.map");
     expect(overview).toContain("View full agenda");
     expect(overview).toContain("Nothing is scheduled for today yet.");
+    expect(overview).toContain("You’re all caught up for today.");
     expect(calendar).toContain("calendar-day-more");
     expect(calendar).toContain("Show all ${dayEvents.length} events");
     expect(calendar).toContain("calendar-day-events-dialog");
     expect(styles).toContain(".overview-timeline-event { display: grid;");
     expect(styles).toContain(".todays-focus-item-avatar");
+    expect(styles).toContain(".todays-focus-empty");
     expect(styles).toContain(".overview-agenda-pair > .panel { height: 100%; }");
   });
 });
