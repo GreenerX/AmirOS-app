@@ -29,16 +29,16 @@ export const AMIROS_VERSION = packageVersion();
 
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
-  releasedAt: "2026-08-07",
-  headline: "A correct version identity and smoother updates",
+  releasedAt: "2026-08-08",
+  headline: "A clearer, more personal Today’s Focus",
   notes: [
     {
-      title: "Updates now finish cleanly",
-      detail: "AmirOS now reports the installed release version correctly, so a completed update no longer reappears as pending.",
+      title: "Today’s Focus is easier to scan",
+      detail: "Your most important items now use clearer cards, meaningful icons, and quick actions so you can see what needs attention at a glance.",
     },
     {
-      title: "Your private data remains protected",
-      detail: "The update process continues to back up and restore your local settings, knowledge, calendar, tasks, profile, API key, and WhatsApp link.",
+      title: "A more consistent look in every theme",
+      detail: "Today’s Focus now uses theme-aware accents, and the model selector keeps the full selected plan name visible.",
     },
   ],
 };
@@ -49,6 +49,21 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.6.8",
+    releasedAt: "2026-08-07",
+    headline: "A correct version identity and smoother updates",
+    notes: [
+      {
+        title: "Updates now finish cleanly",
+        detail: "AmirOS now reports the installed release version correctly, so a completed update no longer reappears as pending.",
+      },
+      {
+        title: "Your private data remains protected",
+        detail: "The update process continues to back up and restore your local settings, knowledge, calendar, tasks, profile, API key, and WhatsApp link.",
+      },
+    ],
+  },
   {
     version: "0.6.7",
     releasedAt: "2026-08-07",

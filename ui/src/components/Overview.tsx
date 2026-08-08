@@ -1,7 +1,9 @@
 import {
   ArrowRight,
+  BellRing,
   Bot,
   Brain,
+  CakeSlice,
   CalendarDays,
   CalendarCheck,
   CalendarClock,
@@ -149,11 +151,27 @@ function compactNextBestText(value: string, maxLength = 96) {
   return `${cut.slice(0, lastSpace > 48 ? lastSpace : maxLength).trimEnd()}…`;
 }
 
+const HIDDEN_TODAYS_FOCUS_STORAGE_KEY = "amiros.hidden-todays-focus.v1";
+
+function readHiddenTodaysFocus(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const stored = window.sessionStorage.getItem(HIDDEN_TODAYS_FOCUS_STORAGE_KEY);
+    const entries: unknown = stored ? JSON.parse(stored) : [];
+    return Array.isArray(entries)
+      ? new Set(entries.filter((entry): entry is string => typeof entry === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
 export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, onPreset, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onOpenTodoReview, onTodoStatus, onTodoUpdate, onCalendarStatus, onInsightStatus, onDismissNextBestAction }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
   const [todoFilter, setTodoFilter] = useState<TodoFilter>("all");
   const [hiddenActionVersion, setHiddenActionVersion] = useState(0);
+  const [hiddenTodaysFocus, setHiddenTodaysFocus] = useState<Set<string>>(() => readHiddenTodaysFocus());
   const [actionSummaries, setActionSummaries] = useState<Record<string, string>>(readDashboardActionSummaries);
   const pendingActionSummaries = useRef(new Set<string>());
   const [completingTodoIds, setCompletingTodoIds] = useState<Set<string>>(() => new Set());
@@ -212,6 +230,10 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
   const trackingRequests = data.knowledgeTrackingRequests.filter((item) => item.status === "pending").slice(0, 3);
   const agendaItemCount = upcomingPlans.length + trackedTodos.length + suggestedTodos.length;
   const todaysFocus = useMemo(() => buildTodaysFocus(intelligence, deviceTime), [deviceTime, intelligence]);
+  const visibleTodaysFocus = useMemo(
+    () => todaysFocus.filter((item) => !hiddenTodaysFocus.has(item.id)),
+    [hiddenTodaysFocus, todaysFocus],
+  );
   const focus = visibleNeedsReply[0]
     ? {
         kind: "Needs reply",
@@ -300,6 +322,20 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
     }
     onOpenNextBestAction(item.chatId, item.messageId);
   };
+
+  const hideTodaysFocus = (itemId: string) => {
+    setHiddenTodaysFocus((current) => {
+      if (current.has(itemId)) return current;
+      const next = new Set(current);
+      next.add(itemId);
+      try {
+        window.sessionStorage.setItem(HIDDEN_TODAYS_FOCUS_STORAGE_KEY, JSON.stringify([...next]));
+      } catch {
+        // Session storage is optional; this view still hides the item immediately.
+      }
+      return next;
+    });
+  };
   const removeTodo = async (todo: TodoTask & { contactName: string }) => {
     if (!window.confirm(`Remove “${todo.title}” from your to-do list?`)) return;
     await onTodoStatus(todo.chatId, todo.id, "dismissed");
@@ -321,6 +357,81 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
           <time className="overview-current-time" dateTime={deviceTime.toISOString()} aria-label={`Current device time ${formatDeviceClock(deviceTime)}`}><strong>{formatDeviceClock(deviceTime)}</strong><small>Local time</small></time>
         </div>
       </header>
+
+      <section className="overview-reminders-panel todays-focus-panel" aria-labelledby="overview-reminders-title">
+        <div className="todays-focus-heading">
+          <div className="todays-focus-title-block">
+            <span className="todays-focus-title-icon"><Sparkles size={19} /></span>
+            <span>
+              <span className="todays-focus-title-row">
+                <h2 id="overview-reminders-title">Today's Focus</h2>
+                {visibleTodaysFocus.length > 0 ? <span className="count-badge intelligence-count">{visibleTodaysFocus.length}</span> : null}
+              </span>
+              <small>What matters most today</small>
+            </span>
+          </div>
+          {visibleTodaysFocus.length > 4 ? <button className="button compact ghost todays-focus-view-all" type="button" onClick={() => onNavigate("intelligence")}>View all <ArrowRight size={14} /></button> : null}
+        </div>
+        {visibleTodaysFocus.length > 0 ? <div className={`overview-reminders-list todays-focus-grid todays-focus-grid-${Math.min(visibleTodaysFocus.length, 4)}`}>
+          {visibleTodaysFocus.slice(0, 4).map((item) => {
+            const actionLabel = item.action === "calendar" ? "Open event" : item.action === "todo" ? "Open task" : item.action === "reply" ? "Reply now" : "Open chat";
+            const category = item.priority === 0 ? "Overdue" : item.type === "calendar" ? "Happening today" : item.type === "reply" ? "Waiting for your reply" : "Due today";
+            const context = item.contactName ? `${item.detail} · ${item.contactName}` : item.detail;
+            const isBirthday = item.action === "calendar" && /birthday/i.test(item.title);
+            const itemIcon = isBirthday
+              ? <CakeSlice size={26} />
+              : item.action === "todo"
+                ? <ListTodo size={26} />
+                : item.action === "calendar"
+                  ? <CalendarCheck size={26} />
+                  : item.action === "reply"
+                    ? <MessageCircle size={26} />
+                    : <BellRing size={26} />;
+            const openItem = () => openTodaysFocus(item);
+            return <article
+              className={`overview-reminder todays-focus-item todays-focus-${item.type} ${item.priority === 0 ? "is-overdue" : ""}`}
+              key={item.id}
+              role="button"
+              tabIndex={0}
+              onClick={openItem}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  openItem();
+                }
+              }}
+            >
+              <button
+                className="todays-focus-dismiss"
+                type="button"
+                aria-label={`Hide ${item.title} from Today's Focus`}
+                title="Hide from Today's Focus"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  hideTodaysFocus(item.id);
+                }}
+              >
+                ×
+              </button>
+              <span className="todays-focus-item-icon" aria-hidden="true">{itemIcon}</span>
+              <div className="todays-focus-item-copy">
+                <small>{category}</small>
+                <span className="overview-reminder-copy">
+                  <strong dir="auto">{item.title}</strong>
+                  <span dir="auto">{context}</span>
+                </span>
+              </div>
+              <button className="button compact ghost todays-focus-action" type="button" onClick={(event) => {
+                event.stopPropagation();
+                openItem();
+              }}>
+                {itemIcon}{actionLabel}
+              </button>
+            </article>;
+          })}
+        </div> : <div className="overview-agenda-empty"><CalendarClock size={22} /><span><strong>Everything important is under control today.</strong><small>AmirOS will surface new priorities here.</small></span></div>}
+      </section>
 
       <section className="overview-action-strip" aria-label="Today at a glance">
         <button className="overview-action-cell next-event-cell" type="button" onClick={() => onNavigate("calendar")}>
@@ -350,7 +461,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
             <strong>{data.models.text}</strong>
             <span>${formattedCost} today · {repliesToday} {repliesToday === 1 ? "reply" : "replies"} sent</span>
           </span>
-          <select aria-label="Overview model preset" value={data.preset} onChange={(event) => void onPreset(event.target.value as ModelPreset)}><option value="economy">Economy</option><option value="balanced">Balanced</option><option value="quality">Quality</option></select>
+          <select className="overview-model-preset" aria-label="Overview model preset" value={data.preset} onChange={(event) => void onPreset(event.target.value as ModelPreset)}><option value="economy">Economy</option><option value="balanced">Balanced</option><option value="quality">Quality</option></select>
         </div>
       </section>
 
@@ -377,28 +488,6 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
           })}
         </div>
       </section> : null}
-
-      <section className="panel overview-reminders-panel" aria-labelledby="overview-reminders-title">
-        <div className="panel-heading">
-          <h2 id="overview-reminders-title"><CalendarClock size={19} /> Today's Focus {todaysFocus.length > 0 ? <span className="count-badge intelligence-count">{todaysFocus.length}</span> : null}</h2>
-          <span className="overview-reminders-note">What needs your attention today</span>
-        </div>
-        {todaysFocus.length > 0 ? <div className="overview-reminders-list">
-          {todaysFocus.map((item) => {
-            const chat = chats.find((chat) => chat.id === item.chatId);
-            const actionLabel = item.action === "calendar" ? "Open calendar" : item.action === "todo" ? "Open task" : item.action === "reply" ? "Reply" : "Open chat";
-            return <article className={`overview-reminder ${item.priority === 0 ? "is-overdue" : ""}`} key={item.id}>
-              <ContactAvatar name={item.contactName} src={chat?.avatarUrl} className="overview-reminder-avatar" />
-              <button className="overview-reminder-copy" type="button" onClick={() => openTodaysFocus(item)}>
-                <small>{item.detail}</small><strong dir="auto">{item.title}</strong>
-              </button>
-              <button className="next-best-action-control primary" type="button" title={actionLabel} aria-label={actionLabel} onClick={() => openTodaysFocus(item)}>
-                {item.action === "todo" ? <ListTodo size={16} /> : item.action === "calendar" ? <CalendarCheck size={16} /> : <MessageCircle size={16} />}
-              </button>
-            </article>;
-          })}
-        </div> : <div className="overview-agenda-empty"><CalendarClock size={22} /><span><strong>Everything important is under control today.</strong><small>AmirOS will surface new priorities here.</small></span></div>}
-      </section>
 
       <div className="overview-primary-grid">
         <section className="panel intelligence-snapshot-panel">
