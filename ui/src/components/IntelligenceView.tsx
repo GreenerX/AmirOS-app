@@ -15,6 +15,7 @@ import {
   replyActionId,
 } from "../intelligence-visibility";
 import { buildIntelligenceSnapshot, isKnownIntelligenceContactName } from "../intelligence-snapshot";
+import { replaceIntelligencePhoneReferences, resolveIntelligenceContactName } from "../intelligence-contact-name";
 import { confirmedPlansForRelationship, type RelationshipPlan } from "../relationship-plans";
 import { isLegacyProfileSummary, profileSummaryParagraph } from "../profile-summary";
 import { CalendarEventForm, type CalendarEventDraft } from "./CalendarEventForm";
@@ -182,7 +183,7 @@ function eventEnd(event: CalendarEvent) {
   return event.endAt && toMilliseconds(event.endAt) > startAt ? toMilliseconds(event.endAt) : startAt + 60 * 60 * 1_000;
 }
 
-function buildQueue(data: IntelligenceData | undefined, contacts: Record<string, ContactPreferences>, hidden: Set<string>): QueueAction[] {
+function buildQueue(data: IntelligenceData | undefined, chats: ChatSummary[], contacts: Record<string, ContactPreferences>, hidden: Set<string>): QueueAction[] {
   if (!data) return [];
   const chatById = new Map(data.chats.map((chat) => [chat.chatId, chat]));
   const actions: QueueAction[] = [];
@@ -234,7 +235,7 @@ function buildQueue(data: IntelligenceData | undefined, contacts: Record<string,
   for (const item of data.changes.filter((entry) => entry.status === "inferred")) {
     if (!isKnownIntelligenceContactName(item.contactName)) continue;
     const chat = chatById.get(item.chatId);
-    const subjects = knowledgeSuggestionSubjects(item);
+    const subjects = knowledgeSuggestionSubjects(item).map((subject) => resolveIntelligenceContactName(subject, chats));
     const subjectLabel = subjects.length > 1
       ? `${subjects[0]} +${subjects.length - 1}`
       : subjects[0] || item.contactName;
@@ -242,7 +243,7 @@ function buildQueue(data: IntelligenceData | undefined, contacts: Record<string,
       id: `signal:${item.chatId}:${item.id}`, kind: "signal", chatId: item.chatId, contactName: subjectLabel,
       // The insight itself is the useful decision here. Keep it as the primary
       // queue copy instead of hiding it behind a generic "Review …" label.
-      title: item.content,
+      title: replaceIntelligencePhoneReferences(item.content, chats),
       summary: "",
       reason: `${Math.round(item.confidence * 100)}% confidence · ${chat?.isGroup ? "learned in a group" : "new relationship signal"}`,
       timestamp: item.updatedAt, score: 54 + Math.round(item.confidence * 20),
@@ -389,7 +390,7 @@ export function IntelligenceView({
   const peopleMetricPlans = peopleMetricSelection
     ? relationshipPlansByChatId.get(peopleMetricSelection.chatId) || []
     : [];
-  const queue = useMemo(() => buildQueue(data, contacts, hiddenActions), [data, contacts, hiddenActions]);
+  const queue = useMemo(() => buildQueue(data, chats, contacts, hiddenActions), [data, chats, contacts, hiddenActions]);
   const selectedAction = queue.find((item) => item.id === selectedActionId);
   const visibleQueue = queueFilter === "all" ? queue : queue.filter((item) => item.kind === queueFilter);
   const latest = data?.questionHistory[0];
