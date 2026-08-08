@@ -202,7 +202,6 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
   const repliesToday = data.activities.filter((activity) => activity.kind === "text" && sameLocalDay(activity.timestamp, deviceTime)).length;
   const nextEvent = intelligenceSnapshot.upcomingEvents[0];
   const planSuggestions = intelligence?.events.filter((item) => item.status === "inferred" && isKnownIntelligenceContactName(item.contactName)) || [];
-  const upcomingPlans = intelligenceSnapshot.upcomingEvents;
   const trackedTodos = useMemo(() => (intelligence?.todos || [])
     .filter((todo) => todo.status === "open" || todo.status === "done")
     .sort((left, right) => {
@@ -228,7 +227,13 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
   }, [hiddenActionVersion, intelligence]);
   const newSignals = intelligence?.changes.filter((item) => item.status === "inferred" && isKnownIntelligenceContactName(item.contactName)) || [];
   const trackingRequests = data.knowledgeTrackingRequests.filter((item) => item.status === "pending").slice(0, 3);
-  const agendaItemCount = upcomingPlans.length + trackedTodos.length + suggestedTodos.length;
+  const todaysAgenda = useMemo(() => (intelligence?.events || [])
+    .filter((event) => (
+      event.status === "confirmed"
+      && isKnownIntelligenceContactName(event.contactName)
+      && sameLocalDay(toMilliseconds(event.startAt), deviceTime)
+    ))
+    .sort((left, right) => toMilliseconds(left.startAt) - toMilliseconds(right.startAt)), [deviceTime, intelligence]);
   const todaysFocus = useMemo(() => buildTodaysFocus(intelligence, deviceTime), [deviceTime, intelligence]);
   const visibleTodaysFocus = useMemo(
     () => todaysFocus.filter((item) => !hiddenTodaysFocus.has(item.id)),
@@ -341,7 +346,6 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
     await onTodoStatus(todo.chatId, todo.id, "dismissed");
     if (todoEditor?.id === todo.id) setTodoEditor(undefined);
   };
-
   return (
     <main className="main-content overview-page">
       <header className="page-header">
@@ -378,6 +382,8 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
             const category = item.priority === 0 ? "Overdue" : item.type === "calendar" ? "Happening today" : item.type === "reply" ? "Waiting for your reply" : "Due today";
             const context = item.contactName ? `${item.detail} · ${item.contactName}` : item.detail;
             const isBirthday = item.action === "calendar" && /birthday/i.test(item.title);
+            const isPersonFocus = isBirthday || item.type === "commitment" || item.action === "reply";
+            const chat = isPersonFocus ? chats.find((candidate) => candidate.id === item.chatId) : undefined;
             const itemIcon = isBirthday
               ? <CakeSlice size={26} />
               : item.action === "todo"
@@ -414,7 +420,9 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
               >
                 ×
               </button>
-              <span className="todays-focus-item-icon" aria-hidden="true">{itemIcon}</span>
+              {isPersonFocus && chat?.avatarUrl
+                ? <ContactAvatar name={item.contactName} src={chat.avatarUrl} className="todays-focus-item-avatar" />
+                : <span className="todays-focus-item-icon" aria-hidden="true">{itemIcon}</span>}
               <div className="todays-focus-item-copy">
                 <small>{category}</small>
                 <span className="overview-reminder-copy">
@@ -490,53 +498,45 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
       </section> : null}
 
       <div className="overview-primary-grid">
-        <section className="panel intelligence-snapshot-panel">
-          <div className="panel-heading">
-            <h2><CalendarCheck size={19} /> Your agenda <span className="count-badge intelligence-count">{agendaItemCount}</span></h2>
-            <button className="text-button" onClick={() => onNavigate("intelligence")}>Open Intelligence <ArrowRight size={16} /></button>
-          </div>
-          <div className="intelligence-snapshot-body" style={{ gridTemplateRows: "minmax(0, 1fr)" }}>
-            <div className="overview-agenda-columns">
-              <section className="overview-agenda-column overview-agenda-events" aria-labelledby="overview-upcoming-events-title">
-                <header>
-                  <span><CalendarDays size={17} /><span><small>Calendar</small><h3 id="overview-upcoming-events-title">Upcoming events</h3></span></span>
-                  <button className="text-button" type="button" onClick={() => onNavigate("calendar")}>View calendar <ArrowRight size={14} /></button>
-                </header>
-                {upcomingPlans.length > 0 ? <div className="overview-agenda-list">
-                  {upcomingPlans.map((event) => <button className="overview-agenda-item" type="button" key={event.id} onClick={() => onNavigate("calendar")}>
-                    <span className="overview-agenda-item-icon"><CalendarCheck size={15} /></span>
-                    <span><strong dir="auto">{event.title}</strong><small>{eventDateTime(toMilliseconds(event.startAt))} · {event.contactName}</small></span>
-                    <ArrowRight size={14} />
-                  </button>)}
-                </div> : <div className="overview-agenda-empty"><CalendarDays size={19} /><span><strong>No upcoming events</strong><small>Confirmed plans will appear here.</small></span></div>}
-              </section>
-
-              <section className="overview-agenda-column overview-agenda-todos" aria-labelledby="overview-todo-list-title">
-                <header className="overview-todo-header">
-                  <span><ListTodo size={17} /><span><small>Tasks</small><h3 id="overview-todo-list-title">To-do list</h3></span></span>
-                  <span className="overview-todo-header-actions"><button className="text-button" type="button" onClick={onOpenTodoReview}>{suggestedTodos.length > 0 ? `Review ${suggestedTodos.length}` : "View tasks"} <ArrowRight size={14} /></button></span>
-                </header>
-                {trackedTodos.length > 0 ? <><div className="overview-todo-filter-bar" aria-label="Filter to-dos">
-                  {(["all", "open", "completed"] as TodoFilter[]).map((filter) => <button key={filter} className={todoFilter === filter ? "is-active" : ""} type="button" aria-pressed={todoFilter === filter} onClick={() => setTodoFilter(filter)}>{filter === "all" ? "All" : filter === "open" ? "Open" : "Completed"}<span>{todoCounts[filter]}</span></button>)}
-                </div>
-                {filteredTrackedTodos.length > 0 ? <div className="overview-agenda-list">
-                  {filteredTrackedTodos.map((todo) => <div className={`overview-agenda-todo-row ${todo.status === "done" ? "is-completed" : ""} ${completingTodoIds.has(todo.id) ? "is-completing" : ""}`} key={todo.id}>
-                    <button className="overview-todo-check" type="button" aria-label={todo.status === "done" ? `Mark ${todo.title} as open` : `Mark ${todo.title} as complete`} onClick={() => void toggleTodo(todo)}><Check size={16} /></button>
-                    <button className="overview-todo-title" type="button" onClick={() => setTodoEditor(todo)} title={`Edit ${todo.title}`}>
-                      <span className={`overview-todo-priority priority-${todo.priority || "normal"}`} role="img" aria-label={`${todo.priority || "normal"} priority`} />
-                      <strong dir="auto">{todo.title}</strong>
-                    </button>
-                    <span className="overview-todo-actions">
-                      <button className="overview-todo-action" type="button" title={`Edit ${todo.title}`} aria-label={`Edit ${todo.title}`} onClick={() => setTodoEditor(todo)}><PencilLine size={14} /></button>
-                      <button className="overview-todo-action danger" type="button" title={`Remove ${todo.title}`} aria-label={`Remove ${todo.title}`} onClick={() => void removeTodo(todo)}><Trash2 size={14} /></button>
-                    </span>
-                  </div>)}
-                </div> : <div className="overview-agenda-empty overview-todo-filter-empty"><ListTodo size={19} /><span><strong>No {todoFilter === "completed" ? "completed" : "open"} to-dos</strong><small>Try another filter to see saved tasks.</small></span></div>}
-                </> : suggestedTodos.length > 0 ? <div className="overview-agenda-empty"><ListTodo size={19} /><span><strong>{suggestedTodos.length} task {suggestedTodos.length === 1 ? "suggestion" : "suggestions"} waiting</strong><small>Review a message before it becomes a to-do.</small></span></div> : <div className="overview-agenda-empty"><ListTodo size={19} /><span><strong>No to-dos yet</strong><small>Actionable messages will appear here for review.</small></span></div>}
-              </section>
+        <div className="overview-agenda-pair">
+          <section className="panel intelligence-snapshot-panel overview-today-agenda-panel" aria-labelledby="overview-agenda-title">
+            <div className="panel-heading">
+              <h2 id="overview-agenda-title"><CalendarCheck size={19} /> Agenda {todaysAgenda.length > 0 ? <span className="count-badge intelligence-count">{todaysAgenda.length}</span> : null}</h2>
+              <span className="overview-agenda-today">Today</span>
             </div>
-          </div>
-        </section>
+            {todaysAgenda.length > 0 ? <div className="overview-today-agenda">
+              {todaysAgenda.map((event, index) => {
+                const startAt = toMilliseconds(event.startAt);
+                const details = [event.contactName, event.location].filter(Boolean).join(" · ") || "Confirmed event";
+                return <button className="overview-timeline-event" type="button" key={event.id} onClick={() => onNavigate("calendar")}>
+                  <time dateTime={new Date(startAt).toISOString()}>{event.allDay ? "All day" : formatTime(startAt)}</time>
+                  <span className="overview-timeline-rail" aria-hidden="true"><span className={`overview-timeline-marker marker-${index % 4}`} /></span>
+                  <span className="overview-timeline-copy"><strong dir="auto">{event.title}</strong><small dir="auto">{details}</small></span>
+                  <ArrowRight size={15} />
+                </button>;
+              })}
+            </div> : <div className="overview-agenda-empty overview-today-agenda-empty"><CalendarDays size={22} /><span><strong>Your day is clear.</strong><small>Nothing is scheduled for today yet.</small></span></div>}
+            <footer className="overview-today-agenda-footer"><button className="text-button" type="button" onClick={() => onNavigate("calendar")}>View full agenda <ArrowRight size={15} /></button></footer>
+          </section>
+
+          <section className="panel overview-todos-panel" aria-labelledby="overview-todo-list-title">
+            <div className="panel-heading">
+              <h2 id="overview-todo-list-title"><ListTodo size={19} /> To-dos <span className="count-badge intelligence-count">{todoCounts.open}</span></h2>
+              <button className="text-button" type="button" onClick={onOpenTodoReview}>View tasks <ArrowRight size={14} /></button>
+            </div>
+            {trackedTodos.length > 0 ? <><div className="overview-todo-filter-bar" aria-label="Filter to-dos">
+              {(["all", "open", "completed"] as TodoFilter[]).map((filter) => <button key={filter} className={todoFilter === filter ? "is-active" : ""} type="button" aria-pressed={todoFilter === filter} onClick={() => setTodoFilter(filter)}>{filter === "all" ? "All" : filter === "open" ? "Open" : "Completed"}<span>{todoCounts[filter]}</span></button>)}
+            </div>
+            {filteredTrackedTodos.length > 0 ? <div className="overview-agenda-list">
+              {filteredTrackedTodos.map((todo) => <div className={`overview-agenda-todo-row ${todo.status === "done" ? "is-completed" : ""} ${completingTodoIds.has(todo.id) ? "is-completing" : ""}`} key={todo.id}>
+                <button className="overview-todo-check" type="button" aria-label={todo.status === "done" ? `Mark ${todo.title} as open` : `Mark ${todo.title} as complete`} onClick={() => void toggleTodo(todo)}><Check size={16} /></button>
+                <button className="overview-todo-title" type="button" onClick={() => setTodoEditor(todo)} title={`Edit ${todo.title}`}><span className={`overview-todo-priority priority-${todo.priority || "normal"}`} role="img" aria-label={`${todo.priority || "normal"} priority`} /><strong dir="auto">{todo.title}</strong></button>
+                <span className="overview-todo-actions"><button className="overview-todo-action" type="button" title={`Edit ${todo.title}`} aria-label={`Edit ${todo.title}`} onClick={() => setTodoEditor(todo)}><PencilLine size={14} /></button><button className="overview-todo-action danger" type="button" title={`Remove ${todo.title}`} aria-label={`Remove ${todo.title}`} onClick={() => void removeTodo(todo)}><Trash2 size={14} /></button></span>
+              </div>)}
+            </div> : <div className="overview-agenda-empty overview-todo-filter-empty"><ListTodo size={19} /><span><strong>No {todoFilter === "completed" ? "completed" : "open"} to-dos</strong><small>Try another filter to see saved tasks.</small></span></div>}
+            </> : suggestedTodos.length > 0 ? <div className="overview-agenda-empty"><ListTodo size={19} /><span><strong>{suggestedTodos.length} task {suggestedTodos.length === 1 ? "suggestion" : "suggestions"} waiting</strong><small>Review a message before it becomes a to-do.</small></span></div> : <div className="overview-agenda-empty"><ListTodo size={19} /><span><strong>No to-dos yet</strong><small>Actionable messages will appear here for review.</small></span></div>}
+          </section>
+        </div>
 
         <div className="overview-command-rail">
           <section className="panel next-best-panel">

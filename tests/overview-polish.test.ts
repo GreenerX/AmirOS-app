@@ -38,15 +38,20 @@ describe("Overview polish", () => {
     expect(sidebar).toContain("Update ready");
   });
 
-  it("uses independently scrollable Agenda lists without restoring the removed statistic strip", async () => {
+  it("renders a people-first Today’s Focus and a compact timeline for today only", async () => {
     const [overview, styles] = await Promise.all([
       readFile(new URL("../ui/src/components/Overview.tsx", import.meta.url), "utf8"),
       readFile(new URL("../ui/src/styles.css", import.meta.url), "utf8"),
     ]);
     expect(overview).not.toContain("intelligence-overview-stats");
-    expect(overview).toContain("upcomingPlans.map");
+    expect(overview).toContain("isPersonFocus && chat?.avatarUrl");
+    expect(overview).toContain("todaysAgenda.map");
+    expect(overview).toContain("overview-todos-panel");
     expect(overview).toContain("filteredTrackedTodos.map");
-    expect(overview).toContain('todo.status === "done" ? "Completed"');
-    expect(styles).toContain(".overview-agenda-list { display: grid; min-height: 0; align-content: start; overflow-y: auto;");
+    expect(overview).toContain("View full agenda");
+    expect(overview).toContain("Nothing is scheduled for today yet.");
+    expect(styles).toContain(".overview-timeline-event { display: grid;");
+    expect(styles).toContain(".todays-focus-item-avatar");
+    expect(styles).toContain(".overview-agenda-pair > .panel { height: 100%; }");
   });
 });
