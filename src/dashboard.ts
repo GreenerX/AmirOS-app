@@ -2308,6 +2308,12 @@ export function startAmirosDashboard(options: DashboardOptions) {
           }
           if (value !== undefined) patch[key] = value.trim();
         }
+        for (const key of ["pinned", "hidden"] as const) {
+          if (patch[key] !== undefined && typeof patch[key] !== "boolean") {
+            sendJson(response, 400, { error: `${key} must be true or false` });
+            return;
+          }
+        }
         if (patch.customInstructions !== undefined) {
           if (patch.customInstructions.length > 2_000) {
             sendJson(response, 400, { error: "Custom instructions must be 2,000 characters or fewer" });

@@ -74,6 +74,8 @@ export const demoChats: ChatSummary[] = [
 export const demoContact: ContactPreferences = {
   mode: "suggest",
   relationship: "Client",
+  pinned: false,
+  hidden: false,
   tone: "Warm & concise",
   language: "Automatic",
   pronouns: "unspecified",
@@ -156,17 +158,27 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.6.0",
-    releasedAt: "2026-08-05",
-    headline: "A clearer, more reliable daily assistant",
+    version: "0.7.0",
+    releasedAt: "2026-08-09",
+    headline: "A more personal People experience",
     notes: [
-      { title: "A to-do list that remembers", detail: "Checked-off tasks stay in your list with their completion time, while active tasks stay at the top." },
-      { title: "Your day, in one place", detail: "Upcoming plans and to-dos now live together in a cleaner agenda." },
-      { title: "Smarter relationship knowledge", detail: "Useful conversation knowledge is easier to organise and review before it is saved." },
-      { title: "More dependable conversations", detail: "Long messages, mentions, and returning to a conversation work more smoothly." },
-      { title: "Updates from inside AmirOS", detail: "AmirOS can let you know when a newer public version is ready and start the private, backed-up update from the dashboard." },
+      { title: "People is your relationship directory", detail: "Browse relationship cards, Favorites, Quick Views, and dedicated contact profiles." },
+      { title: "Your day is easier to scan", detail: "Today’s Focus, today-only Agenda, and to-dos keep the next useful actions close together." },
+      { title: "Reviewed knowledge stays reviewed", detail: "Approved and dismissed details do not reappear when the same information is worded differently." },
+      { title: "Navigation is more intentional", detail: "Premium sidebar icons clarify active sections, while all-clear status stays put instead of redirecting to People." },
     ],
     history: [
+      {
+        version: "0.7.0",
+        releasedAt: "2026-08-09",
+        headline: "A more personal People experience",
+        notes: [
+          { title: "People is your relationship directory", detail: "Browse relationship cards, Favorites, Quick Views, and dedicated contact profiles." },
+          { title: "Your day is easier to scan", detail: "Today’s Focus, today-only Agenda, and to-dos keep the next useful actions close together." },
+          { title: "Reviewed knowledge stays reviewed", detail: "Approved and dismissed details do not reappear when the same information is worded differently." },
+          { title: "Navigation is more intentional", detail: "Premium sidebar icons clarify active sections, while all-clear status stays put instead of redirecting to People." },
+        ],
+      },
       {
         version: "0.6.0",
         releasedAt: "2026-08-05",

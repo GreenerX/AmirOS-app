@@ -18,6 +18,8 @@ const message: ChatMessage = {
 const contact: ContactPreferences = {
   mode: "auto",
   relationship: "Friend",
+  pinned: false,
+  hidden: false,
   tone: "Friendly",
   language: "Automatic",
   pronouns: "unspecified",

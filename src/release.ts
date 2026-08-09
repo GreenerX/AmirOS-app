@@ -29,16 +29,24 @@ export const AMIROS_VERSION = packageVersion();
 
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
-  releasedAt: "2026-08-08",
-  headline: "A clearer, more personal Today’s Focus",
+  releasedAt: "2026-08-09",
+  headline: "A more personal People experience",
   notes: [
     {
-      title: "Today’s Focus is easier to scan",
-      detail: "Your most important items now use clearer cards, meaningful icons, and quick actions so you can see what needs attention at a glance.",
+      title: "People is now your relationship directory",
+      detail: "Browse the people AmirOS knows through concise relationship cards, Favorites, Quick Views, search, filters, and a dedicated contact profile.",
     },
     {
-      title: "A more consistent look in every theme",
-      detail: "Today’s Focus now uses theme-aware accents, and the model selector keeps the full selected plan name visible.",
+      title: "Your day is clearer at a glance",
+      detail: "Today’s Focus, a today-only Agenda, and the to-do list now present the next useful actions with stronger identity and calmer layout.",
+    },
+    {
+      title: "Reviewed knowledge stays reviewed",
+      detail: "Approved and dismissed relationship details now remain suppressed even when a new message phrases the same information differently.",
+    },
+    {
+      title: "Navigation feels more intentional",
+      detail: "Sidebar icons now have clearer active states, and the all-clear Next best action card no longer redirects to People.",
     },
   ],
 };

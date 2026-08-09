@@ -31,6 +31,10 @@ export type ContactPronouns = "unspecified" | "she/her" | "he/him" | "they/them"
 export type ContactPreferences = {
   mode: ReplyMode;
   relationship: string;
+  /** Keeps a favorite contact at the top of the People directory. */
+  pinned: boolean;
+  /** Removes a contact from ordinary People collections without deleting data. */
+  hidden: boolean;
   tone: string;
   language: string;
   pronouns: ContactPronouns;
@@ -340,6 +344,8 @@ type PersistedState = {
 const DEFAULT_CONTACT: ContactPreferences = {
   mode: "off",
   relationship: "Contact",
+  pinned: false,
+  hidden: false,
   tone: "Warm & concise",
   language: "Automatic",
   pronouns: "unspecified",
@@ -2409,7 +2415,10 @@ export class AmirosState {
       timestamp: entry.timestamp,
     });
     const addInsight = (kind: ContactInsight["kind"], confidence: number) => {
-      if (memory.insights.some((item) => this.similarText(item.content, text))) return;
+      // The immediate extractor runs before the fuller AI pass. It must honor
+      // reviewed knowledge just as the AI merge does, or a small paraphrase of
+      // an approved/dismissed detail becomes a new pending suggestion.
+      if (memory.insights.some((item) => this.isDuplicateKnowledgeText(item.content, text))) return;
       const now = Date.now();
       memory.insights.push({
         id: randomUUID(), kind, content: text, status: "inferred", confidence,

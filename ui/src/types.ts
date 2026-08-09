@@ -50,6 +50,8 @@ export type ContactPronouns = "unspecified" | "she/her" | "he/him" | "they/them"
 export type ContactPreferences = {
   mode: ReplyMode;
   relationship: string;
+  pinned: boolean;
+  hidden: boolean;
   tone: string;
   language: string;
   pronouns: ContactPronouns;

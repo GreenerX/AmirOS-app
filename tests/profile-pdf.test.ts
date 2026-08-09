@@ -18,6 +18,8 @@ describe("contact profile PDF export", () => {
       contact: {
         mode: "suggest",
         relationship: "Client",
+        pinned: false,
+        hidden: false,
         tone: "Warm & concise",
         language: "English",
         pronouns: "unspecified",

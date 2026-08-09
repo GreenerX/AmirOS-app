@@ -19,6 +19,8 @@ const context: ReplyContext = {
   contact: {
     mode: "auto",
     relationship: "Client",
+    pinned: false,
+    hidden: false,
     tone: "Professional",
     language: "Hebrew",
     pronouns: "unspecified",

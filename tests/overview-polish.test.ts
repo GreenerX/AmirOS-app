@@ -52,6 +52,8 @@ describe("Overview polish", () => {
     expect(overview).toContain("View full agenda");
     expect(overview).toContain("Nothing is scheduled for today yet.");
     expect(overview).toContain("You’re all caught up for today.");
+    expect(overview).toContain('className="intelligence-focus caught-up" role="status"');
+    expect(overview).not.toContain('className="intelligence-focus caught-up" onClick={() => onNavigate("intelligence")}');
     expect(calendar).toContain("calendar-day-more");
     expect(calendar).toContain("Show all ${dayEvents.length} events");
     expect(calendar).toContain("calendar-day-events-dialog");

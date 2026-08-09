@@ -1,33 +1,30 @@
-import { ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { BarChart3, CalendarDays, ChevronDown, ContactRound, Home, ListChecks, Mail, PanelLeftClose, PanelLeftOpen, Settings, TerminalSquare, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import type { ViewName } from "../types";
-import {
-  AutomationsIcon, CalendarIcon, ContactsIcon, InboxIcon,
-  IntelligenceIcon, OverviewIcon, SettingsIcon, TerminalIcon, UsageIcon,
-} from "./NavigationIcons";
-
 const navigation: Array<{
   id: ViewName;
   label: string;
   icon: ComponentType<{ size?: number }>;
+  tone: string;
 }> = [
-  { id: "overview", label: "Overview", icon: OverviewIcon },
-  { id: "inbox", label: "Inbox", icon: InboxIcon },
-  { id: "intelligence", label: "People", icon: IntelligenceIcon },
-  { id: "calendar", label: "Calendar", icon: CalendarIcon },
-  { id: "contacts", label: "Contacts", icon: ContactsIcon },
+  { id: "overview", label: "Overview", icon: Home, tone: "overview" },
+  { id: "inbox", label: "Inbox", icon: Mail, tone: "inbox" },
+  { id: "intelligence", label: "People", icon: UsersRound, tone: "people" },
+  { id: "calendar", label: "Calendar", icon: CalendarDays, tone: "calendar" },
+  { id: "contacts", label: "Contacts", icon: ContactRound, tone: "contacts" },
 ];
 
 const profileNavigation: Array<{
   id: ViewName;
   label: string;
   icon: ComponentType<{ size?: number }>;
+  tone: string;
 }> = [
-  { id: "settings", label: "Settings", icon: SettingsIcon },
-  { id: "automations", label: "Automations", icon: AutomationsIcon },
-  { id: "terminal", label: "Terminal", icon: TerminalIcon },
-  { id: "usage", label: "Usage", icon: UsageIcon },
+  { id: "settings", label: "Settings", icon: Settings, tone: "settings" },
+  { id: "automations", label: "Automations", icon: ListChecks, tone: "tasks" },
+  { id: "terminal", label: "Terminal", icon: TerminalSquare, tone: "terminal" },
+  { id: "usage", label: "Usage", icon: BarChart3, tone: "usage" },
 ];
 
 type SidebarProps = {
@@ -76,15 +73,15 @@ export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleC
       <button className="sidebar-collapse" type="button" onClick={onToggleCollapsed} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}<span>{collapsed ? "Expand" : "Collapse"}</span></button>
 
       <nav className="navigation" aria-label="Main navigation">
-        {navigation.map(({ id, label, icon: Icon }) => (
+        {navigation.map(({ id, label, icon: Icon, tone }) => (
           <button
             key={id}
-            className={current === id ? "nav-item active" : "nav-item"}
+            className={`nav-item nav-tone-${tone}${current === id ? " active" : ""}`}
             onClick={() => onNavigate(id)}
             aria-label={label}
             aria-current={current === id ? "page" : undefined}
           >
-            <span className="nav-icon-shell"><Icon size={22} /></span>
+            <span className={`nav-icon-shell nav-icon-${tone}`}><Icon size={24} /></span>
             <span>{label}</span>
             {id === "inbox" && unreadCount > 0 ? (
               <span className="nav-count" aria-label={`${unreadCount} unread messages`} title={`${unreadCount} unread messages`}>{unreadCount > 99 ? "99+" : unreadCount}</span>
@@ -97,9 +94,9 @@ export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleC
       <div className="profile-menu-wrap" ref={profileMenuRef}>
         {profileMenuOpen ? (
           <div className="profile-menu" id="profile-tools-menu" role="menu" aria-label="AmirOS tools">
-            {profileNavigation.map(({ id, label, icon: Icon }) => (
+            {profileNavigation.map(({ id, label, icon: Icon, tone }) => (
               <button key={id} className={current === id ? "profile-menu-item active" : "profile-menu-item"} type="button" role="menuitem" aria-current={current === id ? "page" : undefined} onClick={() => navigateFromProfile(id)}>
-                <span className="profile-menu-icon"><Icon size={19} /></span>
+                <span className={`profile-menu-icon nav-icon-${tone}`}><Icon size={21} /></span>
                 <span>{label}</span>
               </button>
             ))}

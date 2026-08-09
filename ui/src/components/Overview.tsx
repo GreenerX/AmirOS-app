@@ -553,7 +553,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
                 {focus.actionType !== "reply" ? <button className="next-best-action-control" type="button" title="Open source message" aria-label="Open source message" onClick={() => onOpenNextBestAction(focus.chatId, focus.messageId)}><ExternalLink size={16} /></button> : null}
                 <button className="next-best-action-control dismiss" type="button" title="Dismiss action" aria-label="Dismiss action" onClick={() => void dismissFocus()}><X size={16} /></button>
               </span>
-            </div> : <button className="intelligence-focus caught-up" onClick={() => onNavigate("intelligence")}><span className="intelligence-focus-symbol"><Sparkles size={19} /></span><span><small>Current status</small><strong>You’re caught up</strong><p>AmirOS will surface the next useful action here.</p></span><ArrowRight size={15} /></button>}
+            </div> : <div className="intelligence-focus caught-up" role="status"><span className="intelligence-focus-symbol"><Sparkles size={19} /></span><span><small>Current status</small><strong>You’re caught up</strong><p>AmirOS will surface the next useful action here.</p></span></div>}
           </section>
 
           <section className="panel activity-panel">

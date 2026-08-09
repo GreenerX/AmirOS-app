@@ -56,10 +56,12 @@ type IntelligenceViewProps = {
   data?: IntelligenceData;
   chats: ChatSummary[];
   contacts: Record<string, ContactPreferences>;
+  ownerName: string;
   loading: boolean;
   onRefresh: () => Promise<void>;
   onOpenChat: (chatId: string, messageId?: string) => void;
   onOpenCalendar: () => void;
+  onContactChange: (chatId: string, patch: Partial<ContactPreferences>) => Promise<boolean>;
   onGenerateSummary: (chatId: string, isGroup: boolean) => Promise<void>;
   onCalendarStatus: (chatId: string, eventId: string, patch: { status?: CalendarEvent["status"]; title?: string; startAt?: number; endAt?: number; allDay?: boolean; location?: string }) => Promise<void>;
   onRegenerateCalendarTitle: (chatId: string, eventId: string) => Promise<string>;
@@ -350,7 +352,7 @@ function PeopleMetricModal({
 }
 
 export function IntelligenceView({
-  data, chats, contacts, loading, onRefresh, onOpenChat, onOpenCalendar,
+  data, chats, contacts, ownerName, loading, onRefresh, onOpenChat, onOpenCalendar, onContactChange,
   onGenerateSummary, onCalendarStatus, onRegenerateCalendarTitle, onInsightStatus, onTodoStatus, onTodoUpdate, onDeleteQuestion, navigationRequest,
 }: IntelligenceViewProps) {
   const [activeTab, setActiveTab] = useState<IntelligenceTab>(() => navigationRequest?.tab || initialIntelligenceTab());
@@ -717,10 +719,13 @@ export function IntelligenceView({
     data={data}
     chats={chats}
     contacts={contacts}
+    ownerName={ownerName}
     loading={loading}
     onRefresh={onRefresh}
     onOpenChat={onOpenChat}
     onOpenCalendar={onOpenCalendar}
+    onContactChange={onContactChange}
+    onGenerateSummary={onGenerateSummary}
   />;
 
   return <main className="main-content intelligence-page intelligence-command">

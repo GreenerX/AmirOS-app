@@ -44,16 +44,20 @@ describe("AmirosState", () => {
     state.updateContact("contact@c.us", {
       mode: "suggest",
       relationship: "Client",
+      pinned: true,
+      hidden: true,
     });
 
     expect(state.getContact("contact@c.us")).toMatchObject({
       mode: "suggest",
       relationship: "Client",
+      pinned: true,
+      hidden: true,
       tone: "Warm & concise",
       ownerTriggerAccess: ["knowledge", "calendar"],
       contactTriggerAccess: [],
     });
-    expect(new AmirosState(filePath).getContact("contact@c.us").mode).toBe("suggest");
+    expect(new AmirosState(filePath).getContact("contact@c.us")).toMatchObject({ mode: "suggest", pinned: true, hidden: true });
     expect(statSync(filePath).mode & 0o777).toBe(0o600);
     expect(readFileSync(filePath, "utf8")).not.toContain("message body");
   });
@@ -444,6 +448,33 @@ describe("AmirosState", () => {
     expect(state.getInsights(chatId)).toEqual([
       expect.objectContaining({ id: dismissed.id, status: "outdated" }),
     ]);
+  });
+
+  it("does not re-surface approved or dismissed local knowledge as a new signal", () => {
+    const { state } = createState();
+
+    for (const status of ["confirmed", "outdated"] as const) {
+      const chatId = `${status}@c.us`;
+      state.rememberMessage(chatId, {
+        role: "user",
+        author: "contact",
+        content: "I live on King Street.",
+        messageId: `${status}-original`,
+      });
+      const reviewed = state.getInsights(chatId)[0]!;
+      state.updateInsight(chatId, reviewed.id, { status });
+
+      state.rememberMessage(chatId, {
+        role: "user",
+        author: "contact",
+        content: "I live on King Street now.",
+        messageId: `${status}-repeat`,
+      });
+
+      expect(state.getInsights(chatId)).toEqual([
+        expect.objectContaining({ id: reviewed.id, status }),
+      ]);
+    }
   });
 
   it("routes one shared knowledge suggestion to every named person and reviews it once", () => {
