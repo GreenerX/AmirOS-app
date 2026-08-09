@@ -7,6 +7,8 @@ import { useMemo, useState } from "react";
 import type { ChatSummary, ContactPreferences, IntelligenceChat, IntelligenceData, RelationshipCommitment, TodoTask } from "../types";
 import { isKnownIntelligenceContactName } from "../intelligence-snapshot";
 import { profileSummaryParagraph } from "../profile-summary";
+import { replyAssessmentCopy } from "../reply-assessment-copy";
+import { formatDateTime } from "../format";
 import { ContactAvatar } from "./ContactAvatar";
 
 type PeopleFilter = "all" | "favorites" | "waiting" | "upcoming" | "recent" | "hidden" | "family" | "friends" | "work" | "groups";
@@ -44,7 +46,7 @@ function relativeTime(value: number) {
 }
 
 function shortDate(value: number) {
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(toMilliseconds(value)));
+  return formatDateTime(toMilliseconds(value), { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function relationshipLabel(person: IntelligenceChat, preferences?: ContactPreferences) {
@@ -156,7 +158,7 @@ function openTodos(person: IntelligenceChat, todos: TodoTask[]) {
 }
 
 function commitmentOwnerLabel(commitment: RelationshipCommitment) {
-  return commitment.owner === "me" ? "Waiting on you" : "Waiting on them";
+  return commitment.owner === "me" ? "Follow-up for you" : "Follow-up from them";
 }
 
 function SectionEmpty({ children }: { children: string }) {
@@ -278,6 +280,7 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
     const todos = openTodos(selectedPerson, allTodos);
     const waitingOnMe = commitments.filter((item) => item.owner === "me");
     const waitingOnThem = commitments.filter((item) => item.owner !== "me");
+    const replyCopy = replyAssessmentCopy(selectedPerson.replyAssessment);
     const topics = selectedPerson.insights.filter((item) => item.status === "confirmed")
       .sort((left, right) => toMilliseconds(right.updatedAt) - toMilliseconds(left.updatedAt));
     const timeline: TimelineItem[] = [
@@ -301,8 +304,8 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
         <section className="contact-intelligence-section plans"><header><span><CalendarDays size={19} /><h2>Upcoming plans</h2></span><button type="button" onClick={onOpenCalendar}>View calendar <ArrowRight size={14} /></button></header>{plans.length ? <div className="contact-item-list">{plans.slice(0, 3).map((item) => <button type="button" key={item.id} onClick={onOpenCalendar}><span className="contact-item-date">{shortDate(item.startAt)}</span><span><strong dir="auto">{item.title}</strong><small>{item.location || "Confirmed plan"}</small></span><ArrowRight size={14} /></button>)}</div> : <SectionEmpty>No upcoming confirmed plans.</SectionEmpty>}</section>
         <section className="contact-intelligence-section commitments"><header><span><CheckCircle2 size={19} /><h2>Open commitments</h2></span></header>{commitments.length ? <div className="contact-item-list">{commitments.slice(0, 3).map((item) => <article key={item.id}><span><strong dir="auto">{item.content}</strong><small>{commitmentOwnerLabel(item)}{item.dueAt ? ` · due ${shortDate(item.dueAt)}` : ""}</small></span></article>)}</div> : <SectionEmpty>No open commitments.</SectionEmpty>}</section>
         <section className="contact-intelligence-section todos"><header><span><ListTodo size={19} /><h2>Open to-dos</h2></span></header>{todos.length ? <div className="contact-item-list">{todos.slice(0, 3).map((item) => <article key={item.id}><span><strong dir="auto">{item.title}</strong><small>{item.dueAt ? `Due ${shortDate(item.dueAt)}` : "Open to-do"}</small></span></article>)}</div> : <SectionEmpty>{`No open to-dos involving ${selectedPerson.contactName}.`}</SectionEmpty>}</section>
-        <section className="contact-intelligence-section waiting-on-them"><header><span><Clock3 size={19} /><h2>Waiting on them</h2></span></header>{waitingOnThem.length ? <div className="contact-item-list">{waitingOnThem.slice(0, 3).map((item) => <article key={item.id}><span><strong dir="auto">{item.content}</strong><small>Open {relativeTime(item.updatedAt)}</small></span></article>)}</div> : <SectionEmpty>Nothing is waiting on them.</SectionEmpty>}</section>
-        <section className="contact-intelligence-section waiting-on-me"><header><span><MessageCircle size={19} /><h2>Waiting on me</h2></span></header>{selectedPerson.needsReply || waitingOnMe.length ? <div className="contact-item-list">{selectedPerson.needsReply ? <button type="button" onClick={() => onOpenChat(selectedPerson.chatId, selectedPerson.lastIncoming?.messageId)}><span><strong>Reply to their recent message</strong><small>{relativeTime(selectedPerson.lastIncoming?.timestamp || selectedPerson.updatedAt)}</small></span><ArrowRight size={14} /></button> : null}{waitingOnMe.slice(0, 2).map((item) => <article key={item.id}><span><strong dir="auto">{item.content}</strong><small>Open {relativeTime(item.updatedAt)}</small></span></article>)}</div> : <SectionEmpty>Nothing is waiting on you.</SectionEmpty>}</section>
+        <section className="contact-intelligence-section waiting-on-them"><header><span><Clock3 size={19} /><h2>Follow-ups from them</h2></span></header>{waitingOnThem.length ? <div className="contact-item-list">{waitingOnThem.slice(0, 3).map((item) => <article key={item.id}><span><strong dir="auto">{item.content}</strong><small>Open {relativeTime(item.updatedAt)}</small></span></article>)}</div> : <SectionEmpty>No follow-ups from them.</SectionEmpty>}</section>
+        <section className="contact-intelligence-section waiting-on-me"><header><span><MessageCircle size={19} /><h2>Your follow-ups</h2></span></header>{selectedPerson.needsReply || waitingOnMe.length ? <div className="contact-item-list">{selectedPerson.needsReply ? <button type="button" onClick={() => onOpenChat(selectedPerson.chatId, selectedPerson.lastIncoming?.messageId)}><span><strong>May need your reply</strong><small>{replyCopy ? `${replyCopy.text} · ${relativeTime(selectedPerson.lastIncoming?.timestamp || selectedPerson.updatedAt)}` : relativeTime(selectedPerson.lastIncoming?.timestamp || selectedPerson.updatedAt)}</small></span><ArrowRight size={14} /></button> : null}{waitingOnMe.slice(0, 2).map((item) => <article key={item.id}><span><strong dir="auto">{item.content}</strong><small>Open {relativeTime(item.updatedAt)}</small></span></article>)}</div> : <SectionEmpty>Nothing needs your attention.</SectionEmpty>}</section>
         <section className="contact-intelligence-section topics"><header><span><Sparkles size={19} /><h2>Recent important topics</h2></span></header>{topics.length ? <div className="contact-topic-list">{topics.slice(0, 6).map((item) => <span key={item.id} dir="auto">{item.content}</span>)}</div> : <SectionEmpty>No confirmed important topics yet.</SectionEmpty>}</section>
       </div>
       <section className="contact-timeline"><header><span><Clock3 size={19} /><div><h2>Conversation timeline</h2><p>Recent events and confirmed relationship context.</p></div></span></header>{timeline.length ? <div>{timeline.map((item) => <button type="button" key={item.id} onClick={() => onOpenChat(selectedPerson.chatId)}><time>{shortDate(item.timestamp)}</time><span><small>{item.label}</small><strong dir="auto">{item.content}</strong></span><ArrowRight size={14} /></button>)}</div> : <SectionEmpty>No relationship activity has been saved yet.</SectionEmpty>}</section>
@@ -311,10 +314,10 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
 
   return <main className="main-content secondary-page people-experience">
     <header className="people-page-header"><div><h1>People</h1><p>Your people, summarized by AmirOS.</p></div><button className="icon-button" aria-label="Refresh people" disabled={loading} onClick={() => void onRefresh()}><Sparkles size={18} className={loading ? "spin" : ""} /></button></header>
-    <section className="people-directory-tools" aria-label="Find people"><label><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search people" aria-label="Search people" />{query ? <button type="button" aria-label="Clear people search" onClick={() => setQuery("")}>×</button> : null}</label><div className="people-filter-bar" aria-label="Filter people">{(["all", "favorites", "family", "friends", "work", "groups", "hidden"] as PeopleFilter[]).map((item) => <button key={item} type="button" className={filter === item ? "active" : ""} aria-pressed={filter === item} onClick={() => setFilter(item)}>{item === "all" ? "All people" : item[0].toUpperCase() + item.slice(1)} <span>{filterCounts[item]}</span></button>)}</div></section>
+    <section className="people-directory-tools" aria-label="Find people"><label><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search people" aria-label="Search people" />{query ? <button type="button" aria-label="Clear people search" onClick={() => setQuery("")}>×</button> : null}</label><div className="people-filter-bar" aria-label="Filter people">{(["all", "favorites", "family", "friends", "work", "groups", "hidden"] as PeopleFilter[]).map((item) => <button key={item} type="button" className={filter === item ? "active" : ""} aria-pressed={filter === item} onClick={() => setFilter(item)}>{item === "all" ? "All people" : item === "waiting" ? "Follow-ups" : item[0].toUpperCase() + item.slice(1)} <span>{filterCounts[item]}</span></button>)}</div></section>
     <section className="people-quick-views" aria-label="Quick view collections">
       <QuickViewCard icon={Heart} label="Favorites" description="People you want close" people={favoritePeople} chats={chatById} active={filter === "favorites"} onClick={() => setFilter("favorites")} />
-      <QuickViewCard icon={MessageCircle} label="Waiting" description="Open replies and commitments" people={waitingPeople} chats={chatById} active={filter === "waiting"} onClick={() => setFilter("waiting")} />
+      <QuickViewCard icon={MessageCircle} label="Follow-ups" description="Replies and commitments to review" people={waitingPeople} chats={chatById} active={filter === "waiting"} onClick={() => setFilter("waiting")} />
       <QuickViewCard icon={CalendarDays} label="Upcoming" description="Plans and important dates" people={upcomingPeople} chats={chatById} active={filter === "upcoming"} onClick={() => setFilter("upcoming")} />
       <QuickViewCard icon={Clock3} label="Recently active" description="Your latest conversations" people={recentlyActivePeople} chats={chatById} active={filter === "recent"} onClick={() => setFilter("recent")} />
     </section>
@@ -341,7 +344,7 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
         </div>
         <label className="people-relationship-picker"><span>Relationship</span><select value={relationship} aria-label={`Relationship with ${person.contactName}`} onChange={(event) => void onContactChange(person.chatId, { relationship: event.currentTarget.value })}>{relationshipOptions(person, relationship).map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
         <div className="people-card-summary"><p dir="auto">{personSummary(person, ownerName)}</p>{needsSummary ? <button type="button" className="people-summary-action" disabled={summaryBusy} onClick={() => void generatePersonSummary(person)}>{summaryBusy ? <RefreshCw size={13} className="spin" /> : <Sparkles size={13} />}{summaryBusy ? "Updating summary…" : hasSummary ? "Regenerate summary" : "Generate summary"}{hasSummary && !summaryBusy ? <em>New information</em> : null}</button> : null}</div>
-        <div className="people-card-metrics"><span><CalendarDays size={16} /><b>{plans.length}</b><small>Upcoming</small></span><span><MessageCircle size={16} /><b>{waitingOnMe}</b><small>Waiting on me</small></span><span><Clock3 size={16} /><b>{waitingOnThem}</b><small>Waiting on them</small></span></div>
+        <div className="people-card-metrics"><span><CalendarDays size={16} /><b>{plans.length}</b><small>Upcoming</small></span><span><MessageCircle size={16} /><b>{waitingOnMe}</b><small>For you</small></span><span><Clock3 size={16} /><b>{waitingOnThem}</b><small>From them</small></span></div>
         <button type="button" className="people-card-footer" onClick={() => setSelectedChatId(person.chatId)}>Last interaction {relativeTime(interactedAt)} <ArrowRight size={16} /></button>
       </article>;
     })}</section>

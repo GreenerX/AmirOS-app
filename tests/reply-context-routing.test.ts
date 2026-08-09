@@ -242,13 +242,13 @@ describe("AI reply context privacy routing", () => {
     } as unknown as AiService;
     const processor = new MessageProcessor(config, ai, state);
 
-    expect(state.searchIntelligence("what is Amir's schedule this week?", 80)
+    expect(state.searchIntelligence("what is on Amir's upcoming schedule?", 80)
       .some((item) => item.kind === "calendar_event" && item.content.includes("Theater night"))).toBe(true);
     await processor.process(textMessage({
       id: "dani-calendar-trigger",
       chatId: "dani@c.us",
       chatName: "Dani",
-      body: "!bot what is Amir's schedule this week?",
+      body: "!bot what is on Amir's upcoming schedule?",
       fromMe: false,
     }), false);
 
@@ -263,7 +263,7 @@ describe("AI reply context privacy routing", () => {
       id: "dani-automatic-message",
       chatId: "dani@c.us",
       chatName: "Dani",
-      body: "What is Amir's schedule this week?",
+      body: "What is on Amir's upcoming schedule?",
       fromMe: false,
     }), false);
 

@@ -3,15 +3,17 @@
 ## What currently works
 
 - AmirOS runs as a local TypeScript service with a Vite/React dashboard for WhatsApp, contact intelligence, calendar items, tasks, and reminders.
-- The Overview now treats person-centred Today’s Focus items as identity cards: a contact photo is the leading visual when available, with the relevant birthday, reply, task, calendar, or reminder icon otherwise.
-- Overview keeps its equal-height to-do card beside an Agenda that shows confirmed events scheduled for the current local day in chronological order as a compact timeline. Both cards align with the Recent activity stack. The Agenda includes a clear empty state and a link to the full agenda.
+- The Overview now treats person-centred Today’s Focus items as identity cards: a contact photo is the leading visual when available, with the relevant birthday, reply, task, calendar, or reminder icon otherwise. Today’s next confirmed event leads the Focus cards, replacing the former Next event / Inbox pulse / AI model strip.
+- Overview keeps its equal-height to-do card beside an Agenda that shows confirmed events scheduled for the current local day in chronological order as a compact timeline. Suggested action stays alongside that row; Current session, Reply modes, and Recent activity form a three-card row directly underneath. The former Quick actions card is removed. The Agenda includes a clear empty state and a link to the full agenda.
 - Calendar month cells now expose every event: a `+N more` control opens that day’s complete agenda, and selecting an entry opens its usual event details.
 - The Today’s Focus empty state is a larger, friendly rounded card. Intelligence queue labels and insight text replace recognized WhatsApp phone handles with their known contact names.
 - People is the primary relationship directory. It reuses the existing Intelligence data to show contact cards and a Contact Intelligence detail view without changing backend analysis or approval flows. Favorites reuse the existing contact pin data, hidden contacts can be restored through the Hidden filter, and Quick Views make Favorites, Waiting, Upcoming, and Recently Active directly reachable.
 - Contact Intelligence presents each relationship as a personal profile with a prominent avatar and summary, recent interaction, plans, commitments, to-dos, waiting items, topics, and conversation history.
-- Sidebar navigation has premium active icon treatments, while the People directory and Contact Intelligence views use a calmer, more spacious visual system.
+- Sidebar navigation has premium active icon treatments, while the People directory and Contact Intelligence views use a calmer, more spacious visual system. WhatsApp status is aligned beneath the AmirOS wordmark, and a compact split-color circular control sits on the sidebar edge so navigation starts higher without losing collapse behavior.
+- The Overview header now combines automatic local weather, the existing live local clock, persistent Celsius/Fahrenheit and 12/24-hour selectors, and up to three saved city clocks. The time preference updates the local clock, city clocks, Agenda, Calendar, Inbox, People, Intelligence, assistant history, and other shared timestamp surfaces. Location permission changes trigger an immediate weather retry. Each city shows current local weather and switches between cached morning, afternoon, and night artwork; WhatsApp connection status now sits compactly beneath the sidebar logo.
 - Reviewed relationship knowledge is durable: immediate local extraction now uses the same semantic duplicate check as full analysis, so an approved or dismissed item does not return as a reworded pending suggestion.
 - The all-clear Next best action card is an informational status only; it does not redirect into People.
+- Reply-needed assessments now use high-confidence local rules for obvious replies and non-replies, with the existing OpenAI service consulted only below the 90% confidence cutoff. Suggested-action and follow-up surfaces show a concise, plain-English confidence/reason label while existing intelligence behavior remains unchanged.
 
 ## What remains
 
@@ -21,11 +23,16 @@
 ## Architectural decisions
 
 - `ui/src/components/Overview.tsx` keeps the UI-specific day filter local, reusing `buildIntelligenceSnapshot` as the canonical source of confirmed, chronological calendar events.
-- Contact photos are sourced from the existing chat avatar pipeline through `ContactAvatar`; semantic icons remain the non-photo fallback so the action still reads at a glance.
+- Contact photos are sourced from the existing chat avatar pipeline through `ContactAvatar`; non-person Today’s Focus cards request a relevant `gpt-image-1.5` icon and cache it privately under `work/todays-focus-icons`, while semantic icons remain the immediate and failure-safe fallback.
 - Tasks remain reachable through Today’s Focus and Intelligence; the Overview Agenda is intentionally event-only to keep it a concise day timeline.
 - `ui/src/intelligence-contact-name.ts` only replaces a phone reference when it matches an existing chat ID, so unknown phone handles are never assigned a guessed identity.
 - `ui/src/components/PeopleExperience.tsx` is a front-end-only view over current chats, intelligence, contacts, commitments, events, to-dos, and summaries; it does not create or modify intelligence records.
 - `src/amiros-state.ts` preserves reviewed insight statuses as durable tombstones. Both immediate local extraction and full AI analysis use the same semantic duplicate detection before creating a new pending item.
+- `src/reply-needed.ts` is the canonical reply-needed evaluator. It treats direct questions, direct requests, owner replies, acknowledgements, endings, stale messages, and clear owner mentions in groups deterministically; decisions below 90% confidence may call AI. AI results are cached against a versioned hash of the recent conversation context and invalidated when new stored messages arrive. `ui/src/reply-assessment-copy.ts` maps those internal results to user-facing copy without exposing reason codes.
+- Weather and city search use fixed Open-Meteo proxy routes in `src/dashboard.ts`; the browser stores only the selected temperature unit and up to three normalized cities. `src/weather-timezones.ts` validates all city coordinates and IANA timezones before weather or image work begins.
+- City artwork uses the existing configured OpenAI client with `gpt-image-2` at a 3:2 card ratio. Morning, afternoon, and night images are generated only when missing, stored with private permissions under `work/timezone-backgrounds`, and retained when a card is removed so adding the city again is free and immediate.
+- Today’s Focus includes confirmed events later today and tomorrow, labels each day accurately, and keeps event details to time plus location. Its compact cards remain fully clickable without separate action buttons; the desktop Agenda and To-dos share a 360px aligned height. One to five Agenda events divide the available card height evenly, with larger type when fewer events are present; additional events scroll in compact rows.
+- `ui/src/TimeFormatProvider.tsx` owns the persisted `amiros-time-format.v1` preference. Shared timestamp presentation goes through `ui/src/format.ts`, while `App` subscribes to the preference so every active page rerenders immediately when the user switches formats.
 - `tsconfig.json` compiles the runtime service and scripts only. Vitest owns test-file compilation, keeping customer updates from failing on dashboard test-only imports.
 
 ## Run and test
@@ -33,6 +40,9 @@
 - `pnpm dev` — run the local service in watch mode.
 - `pnpm ui:dev` — run the Vite dashboard.
 - `node_modules/.bin/vitest run tests/amiros-state.test.ts tests/intelligence-learner.test.ts tests/people-experience.test.ts tests/overview-polish.test.ts` — run the focused relationship and Overview tests.
+- `node_modules/.bin/vitest run tests/reply-needed.test.ts tests/chat-list-filter.test.ts tests/intelligence-snapshot.test.ts tests/todays-focus.test.ts tests/people-experience.test.ts` — verify hybrid reply-needed detection and its dashboard consumers.
+- `node_modules/.bin/vitest run tests/weather-timezones.test.ts tests/timezone-weather-ui.test.ts tests/time-format.test.ts tests/overview-polish.test.ts` — verify weather proxy normalization, persisted time formatting, background-period switching, and the Overview header structure.
+- `node_modules/.bin/vitest run tests/todays-focus.test.ts tests/todays-focus-icons.test.ts tests/overview-polish.test.ts` — verify Today’s Focus timing, generated-icon cache inputs, and compact Overview presentation.
 - `node_modules/.bin/tsc -p ui/tsconfig.json --noEmit` — type-check the dashboard.
 - `pnpm build` — compile the runtime service used by the updater.
 - `pnpm ui:build` — build the production dashboard bundle.

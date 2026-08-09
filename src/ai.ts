@@ -17,6 +17,7 @@ import {
 import { cleanSourceUrl, formatWhatsAppText } from "./whatsapp-format.js";
 import { hasCalendarPlanIntent, isOwnerTodoSource } from "./amiros-state.js";
 import { relationshipLearningInstructions } from "./prompts/relationship-learning.js";
+import type { ReplyAssessmentContextEntry } from "./reply-needed.js";
 import type {
   ContactMemoryItem,
   ContactPreferences,
@@ -132,6 +133,12 @@ export type RelationshipAnalysis = {
     dueAt?: number;
     evidence: { messageId?: string; excerpt: string; senderName?: string; timestamp: number };
   }>;
+};
+
+export type AiReplyNeedAssessment = {
+  needsReply: boolean;
+  confidence: number;
+  reason: string;
 };
 
 export type NetworkAnswer = {
@@ -930,6 +937,60 @@ export class AiService {
     };
   }
 
+  /**
+   * Resolves only the small set of reply cases the deterministic rules cannot
+   * safely classify. It receives one chat's local recent context—never global
+   * knowledge, calendar data, or other conversations.
+   */
+  async assessReplyNeed(input: {
+    chatId: string;
+    ownerName: string;
+    contactName: string;
+    isGroup: boolean;
+    messages: ReplyAssessmentContextEntry[];
+  }): Promise<AiReplyNeedAssessment> {
+    this.assertAvailable();
+    const messages = input.messages.slice(-8).map((entry) => ({
+      author: entry.author || entry.role,
+      senderName: entry.senderName?.slice(0, 120),
+      ownerMentioned: entry.ownerMentioned === true,
+      content: entry.content.replace(/\s+/g, " ").trim().slice(0, 600),
+      timestamp: entry.timestamp,
+    }));
+    const result = await this.structuredResponse<AiReplyNeedAssessment>({
+      name: "reply_needed_assessment",
+      instructions: [
+        "Decide only whether the latest incoming WhatsApp message likely needs a reply from the owner.",
+        "Use only the supplied single-conversation context. Do not infer private facts, give advice, or create tasks.",
+        "Answer yes for a real unanswered question or request addressed to the owner. Answer no for an acknowledgement, ordinary update, closed conversation, or when the owner already replied.",
+        "In a group, answer yes only when the owner is clearly addressed or the context makes that clear. If uncertain, return a lower confidence rather than inventing intent.",
+        "Give a confidence from 0 to 100 and a factual reason of at most 12 words.",
+      ].join(" "),
+      input: JSON.stringify({
+        ownerName: input.ownerName,
+        contactName: input.contactName,
+        isGroup: input.isGroup,
+        messages,
+      }),
+      maxOutputTokens: 160,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          needsReply: { type: "boolean" },
+          confidence: { type: "number", minimum: 0, maximum: 100 },
+          reason: { type: "string", minLength: 1, maxLength: 160 },
+        },
+        required: ["needsReply", "confidence", "reason"],
+      },
+    });
+    return {
+      needsReply: result.needsReply === true,
+      confidence: Math.max(0, Math.min(100, Number(result.confidence) || 0)),
+      reason: result.reason.replace(/\s+/g, " ").trim().slice(0, 160) || "ambiguous context",
+    };
+  }
+
   async analyzeWritingStyle(input: {
     chatId: string;
     messages: string[];
@@ -1047,6 +1108,7 @@ export class AiService {
     instructions: string;
     input: string;
     schema: Record<string, unknown>;
+    maxOutputTokens?: number;
   }): Promise<T> {
     this.assertAvailable();
     const response = await this.client.responses.create({
@@ -1054,7 +1116,7 @@ export class AiService {
       instructions: input.instructions,
       input: input.input,
       reasoning: { effort: this.options.reasoningEffort },
-      max_output_tokens: Math.max(800, Math.min(this.options.maxOutputTokens * 2, 2_400)),
+      max_output_tokens: input.maxOutputTokens || Math.max(800, Math.min(this.options.maxOutputTokens * 2, 2_400)),
       text: { format: { type: "json_schema", name: input.name, strict: true, schema: input.schema } },
     });
     this.recordTextUsage(response);
@@ -1137,21 +1199,27 @@ export class AiService {
     return `${formattedAnswer}\n\n🔗 *Sources*\n${sources.join("\n")}`;
   }
 
-  async generateImage(prompt: string): Promise<Buffer> {
+  async generateImage(prompt: string, overrides: {
+    model?: string;
+    size?: "1024x1024" | "1536x1024" | "1024x1536";
+    quality?: ImageQuality;
+  } = {}): Promise<Buffer> {
     this.assertAvailable();
+    const model = overrides.model || this.options.imageModel;
+    const quality = overrides.quality || this.options.imageQuality;
     const result = await this.client.images.generate({
-      model: this.options.imageModel,
+      model,
       prompt,
       n: 1,
-      size: "1024x1024",
-      quality: this.options.imageQuality,
+      size: overrides.size || "1024x1024",
+      quality,
     });
     const encoded = result.data?.[0]?.b64_json;
     if (!encoded) throw new Error("The image API returned no image data");
     this.usage.imageRequests += 1;
     const imageSpend = imageCostUsd(
-      this.options.imageModel,
-      this.options.imageQuality,
+      model,
+      quality,
       result.usage
         ? {
             inputTokens: result.usage.input_tokens,

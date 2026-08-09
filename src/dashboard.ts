@@ -36,6 +36,27 @@ import { checkForAmirosUpdate, type UpdateStatus } from "./update-check.js";
 import { handleAiUsageApiRoute } from "./dashboard/ai-usage-routes.js";
 import { handleSettingsApiRoute } from "./dashboard/settings-routes.js";
 import { handleSystemApiRoute } from "./dashboard/system-routes.js";
+import {
+  assessDeterministicReplyNeed,
+  replyAssessmentContextKey,
+  resolveReplyAssessment,
+  type ReplyAssessment,
+  type ReplyAssessmentContextEntry,
+} from "./reply-needed.js";
+import {
+  fetchCurrentWeather,
+  normalizeTimeZoneCity,
+  searchTimeZoneCities,
+  TIME_ZONE_BACKGROUND_PERIODS,
+  timeZoneBackgroundPrompt,
+  timeZoneCityCacheKey,
+  type TimeZoneCity,
+} from "./weather-timezones.js";
+import {
+  normalizeTodaysFocusIconRequest,
+  todaysFocusIconCacheKey,
+  todaysFocusIconPrompt,
+} from "./todays-focus-icons.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -251,32 +272,25 @@ export function isKnownIntelligenceChat(chatId: string, contactName: string): bo
   return true;
 }
 
-const DIRECT_QUESTION_PATTERN = /(?:[?？]|\b(?:who|what|when|where|why|how|can|could|would|will|do|does|did|are|is|should)\b|(?:^|\s)(?:מי|מה|מתי|איפה|היכן|למה|איך|האם)(?:\s|$))/iu;
-const DIRECT_REQUEST_PATTERN = /(?:\b(?:please|pls|can you|could you|would you|will you|send me|tell me|let me know|remind me|don['’]t forget|need you to)\b|(?:^|\s)(?:בבקשה|תוכל|תוכלי|תשלח|תשלחי|תגיד|תגידי|תעדכן|תעדכני|תזכיר|תזכירי|אל תשכח|אל תשכחי)(?:\s|$))/iu;
-const OWNER_MENTION_PATTERN = /(?:\bamir\b|אמיר|עמיר)/iu;
-const GROUP_DIRECT_REQUEST_PATTERN = /(?:\b(?:can you|could you|would you|will you|please send|please tell|let me know)\b|(?:^|\s)(?:תוכל|תוכלי|תשלח|תשלחי|תגיד|תגידי|תעדכן|תעדכני|תזכיר|תזכירי)(?:\s|$))/iu;
-
 /**
- * A saved incoming message is not automatically an outstanding reply. Private
- * conversations qualify when the latest message contains a real question or
- * request. Groups are intentionally stricter so ordinary chatter does not flood
- * the action queue.
+ * Compatibility helper for callers that only need the deterministic portion.
+ * The `/api/intelligence` path below adds cached AI fallback for ambiguous
+ * messages, while this stays synchronous and safe for list filtering.
  */
 export function isReplyWorthyIntelligenceMessage(
   chatId: string,
   content: string | undefined,
   latestMessageIsIncoming = true,
 ): boolean {
-  if (!latestMessageIsIncoming) return false;
-  const message = (content || "").replace(/\s+/g, " ").trim();
-  if (!message || message === "Media message" || message.length > 1_200) return false;
-
-  const isQuestion = DIRECT_QUESTION_PATTERN.test(message);
-  const isRequest = DIRECT_REQUEST_PATTERN.test(message);
-  if (!chatId.endsWith("@g.us")) return isQuestion || isRequest;
-
-  const addressedToOwner = OWNER_MENTION_PATTERN.test(message) && (isQuestion || isRequest);
-  return addressedToOwner || GROUP_DIRECT_REQUEST_PATTERN.test(message);
+  const assessment = assessDeterministicReplyNeed({
+    chatId,
+    content,
+    latestMessageIsIncoming,
+    ownerName: "Amir",
+  });
+  // Legacy callers asked whether a message was worth reviewing at all. The
+  // richer endpoint now distinguishes a high-confidence need from ambiguity.
+  return assessment.needsReply || assessment.mayNeedReply;
 }
 
 type CachedMessageModel = {
@@ -1605,6 +1619,39 @@ export function startAmirosDashboard(options: DashboardOptions) {
   const chatNameCache = new Map<string, string>();
   const senderNameCache = new Map<string, string>();
   const calendarFeedToken = persistentCalendarFeedToken(calendarFeedTokenPath);
+  const timeZoneBackgroundRoot = resolve("work/timezone-backgrounds");
+  const timeZoneBackgroundJobs = new Map<string, Promise<void>>();
+  const todaysFocusIconRoot = resolve("work/todays-focus-icons");
+  const todaysFocusIconJobs = new Map<string, Promise<void>>();
+  const timeZoneBackgroundUrls = (cityKey: string) => Object.fromEntries(
+    TIME_ZONE_BACKGROUND_PERIODS.map((period) => [period, `/api/timezones/backgrounds/${cityKey}/${period}.png`]),
+  ) as Record<(typeof TIME_ZONE_BACKGROUND_PERIODS)[number], string>;
+  const ensureTimeZoneBackgrounds = async (city: TimeZoneCity) => {
+    const cityKey = timeZoneCityCacheKey(city);
+    const directory = join(timeZoneBackgroundRoot, cityKey);
+    const missing = TIME_ZONE_BACKGROUND_PERIODS.filter((period) => !existsSync(join(directory, `${period}.png`)));
+    if (missing.length > 0) {
+      let job = timeZoneBackgroundJobs.get(cityKey);
+      if (!job) {
+        job = (async () => {
+          mkdirSync(directory, { recursive: true, mode: 0o700 });
+          // Run sequentially so the existing monthly spend guard is checked
+          // again before each premium GPT Image generation.
+          for (const period of missing) {
+            const image = await ai.generateImage(timeZoneBackgroundPrompt(city, period), {
+              model: "gpt-image-2",
+              size: "1536x1024",
+              quality: "high",
+            });
+            writeFileSync(join(directory, `${period}.png`), image, { mode: 0o600 });
+          }
+        })().finally(() => timeZoneBackgroundJobs.delete(cityKey));
+        timeZoneBackgroundJobs.set(cityKey, job);
+      }
+      await job;
+    }
+    return { cityKey, backgrounds: timeZoneBackgroundUrls(cityKey), cached: missing.length === 0 };
+  };
   let updateCheck: UpdateStatus | undefined;
   let updateCheckExpiresAt = 0;
   const latestUpdateStatus = async (force = false): Promise<UpdateStatus> => {
@@ -1623,6 +1670,93 @@ export function startAmirosDashboard(options: DashboardOptions) {
       }
       const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
       const { pathname } = url;
+
+      if (request.method === "GET" && pathname === "/api/timezones/search") {
+        const query = url.searchParams.get("q") || "";
+        if (query.trim().length < 2 || query.length > 80) {
+          sendJson(response, 200, { cities: [] });
+          return;
+        }
+        sendJson(response, 200, { cities: await searchTimeZoneCities(query) });
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/weather/current") {
+        const latitude = Number(url.searchParams.get("latitude"));
+        const longitude = Number(url.searchParams.get("longitude"));
+        const timezone = url.searchParams.get("timezone") || "auto";
+        sendJson(response, 200, await fetchCurrentWeather(latitude, longitude, timezone));
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/timezones/backgrounds") {
+        const city = normalizeTimeZoneCity(await readJson<unknown>(request));
+        if (!city) {
+          sendJson(response, 400, { error: "Choose a valid city" });
+          return;
+        }
+        sendJson(response, 200, await ensureTimeZoneBackgrounds(city));
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/todays-focus/icon") {
+        const item = normalizeTodaysFocusIconRequest(await readJson<unknown>(request));
+        if (!item) {
+          sendJson(response, 400, { error: "Choose a valid Today’s Focus item" });
+          return;
+        }
+        const iconKey = todaysFocusIconCacheKey(item);
+        const iconPath = join(todaysFocusIconRoot, `${iconKey}.png`);
+        const cached = existsSync(iconPath);
+        if (!cached) {
+          let job = todaysFocusIconJobs.get(iconKey);
+          if (!job) {
+            job = (async () => {
+              mkdirSync(todaysFocusIconRoot, { recursive: true, mode: 0o700 });
+              const image = await ai.generateImage(todaysFocusIconPrompt(item), {
+                model: "gpt-image-1.5",
+                size: "1024x1024",
+                quality: "high",
+              });
+              writeFileSync(iconPath, image, { mode: 0o600 });
+            })().finally(() => todaysFocusIconJobs.delete(iconKey));
+            todaysFocusIconJobs.set(iconKey, job);
+          }
+          await job;
+        }
+        sendJson(response, 200, { url: `/api/todays-focus/icons/${iconKey}.png`, cached });
+        return;
+      }
+
+      const todaysFocusIconMatch = pathname.match(/^\/api\/todays-focus\/icons\/([a-f0-9]{24})\.png$/u);
+      if (request.method === "GET" && todaysFocusIconMatch) {
+        const iconPath = join(todaysFocusIconRoot, `${todaysFocusIconMatch[1]}.png`);
+        if (!existsSync(iconPath)) {
+          sendJson(response, 404, { error: "Today’s Focus icon is not ready" });
+          return;
+        }
+        response.writeHead(200, {
+          "content-type": "image/png",
+          "cache-control": "private, max-age=31536000, immutable",
+        });
+        createReadStream(iconPath).pipe(response);
+        return;
+      }
+
+      const timeZoneBackgroundMatch = pathname.match(/^\/api\/timezones\/backgrounds\/([a-z0-9-]{10,80})\/(morning|afternoon|night)\.png$/u);
+      if (request.method === "GET" && timeZoneBackgroundMatch) {
+        const imagePath = join(timeZoneBackgroundRoot, timeZoneBackgroundMatch[1]!, `${timeZoneBackgroundMatch[2]}.png`);
+        if (!existsSync(imagePath)) {
+          sendJson(response, 404, { error: "City background is not ready" });
+          return;
+        }
+        response.writeHead(200, {
+          "content-type": "image/png",
+          "cache-control": "private, max-age=31536000, immutable",
+        });
+        createReadStream(imagePath).pipe(response);
+        return;
+      }
 
       if (request.method === "GET" && pathname === "/api/calendar/subscription") {
         const baseUrl = config.amirosPublicUrl || `http://127.0.0.1:${port}`;
@@ -1872,23 +2006,66 @@ export function startAmirosDashboard(options: DashboardOptions) {
         } catch {
           // Saved intelligence remains available while WhatsApp is still syncing.
         }
-        const chats = state.intelligenceSnapshot()
+        const ownerName = state.getSettings().ownerProfile.displayName;
+        const assessedAt = Date.now();
+        const candidates = state.intelligenceSnapshot()
           .filter((item) => !archived.has(item.chatId))
           .map((item) => {
             const contactName = chatNameCache.get(item.chatId) || "WhatsApp contact";
+            const replyAssessment = assessDeterministicReplyNeed({
+              chatId: item.chatId,
+              content: item.lastIncoming?.content,
+              latestMessageIsIncoming: item.needsReply,
+              lastIncomingAt: item.lastIncoming?.timestamp,
+              ownerName,
+              ownerMentioned: item.lastIncoming?.ownerMentioned,
+              now: assessedAt,
+            });
             return {
               ...item,
               contactName,
               todos: item.todos.map((todo) => ({ ...todo, chatId: item.chatId, contactName })),
               isGroup: item.chatId.endsWith("@g.us"),
-              needsReply: isReplyWorthyIntelligenceMessage(
-                item.chatId,
-                item.lastIncoming?.content,
-                item.needsReply,
-              ),
+              replyAssessment,
             };
           })
           .filter((item) => isKnownIntelligenceChat(item.chatId, item.contactName));
+        const ambiguousContexts = new Map<string, ReplyAssessmentContextEntry[]>();
+        const uncachedAmbiguousChatIds = new Set(
+          candidates
+            .filter((item) => item.replyAssessment.requiresAi)
+            .filter((item) => {
+              const context = state.getConversationMemory(item.chatId, 8);
+              ambiguousContexts.set(item.chatId, context);
+              return !state.getReplyAssessment(item.chatId, replyAssessmentContextKey(item.chatId, context));
+            })
+            .sort((left, right) => (right.lastIncoming?.timestamp || right.updatedAt) - (left.lastIncoming?.timestamp || left.updatedAt))
+            // Bound first-load work: cached decisions are free, and any extra
+            // ambiguous chats are considered by a later dashboard refresh.
+            .slice(0, 3)
+            .map((item) => item.chatId),
+        );
+        const chats = await Promise.all(candidates.map(async (item) => {
+          const context = ambiguousContexts.get(item.chatId) || (item.replyAssessment.requiresAi
+            ? state.getConversationMemory(item.chatId, 8)
+            : []);
+          const replyAssessment: ReplyAssessment = await resolveReplyAssessment({
+            chatId: item.chatId,
+            content: item.lastIncoming?.content,
+            latestMessageIsIncoming: item.needsReply,
+            lastIncomingAt: item.lastIncoming?.timestamp,
+            ownerName,
+            ownerMentioned: item.lastIncoming?.ownerMentioned,
+            now: assessedAt,
+            contactName: item.contactName,
+            context,
+            cache: state,
+            ai,
+            allowAi: uncachedAmbiguousChatIds.has(item.chatId),
+          });
+          const { replyAssessment: _deterministicReplyAssessment, ...chat } = item;
+          return { ...chat, needsReply: replyAssessment.needsReply, replyAssessment };
+        }));
         const commitments = chats.flatMap((item) => item.commitments
           .filter((commitment) => commitment.status === "open")
           .map((commitment) => ({ ...commitment, chatId: item.chatId, contactName: item.contactName })))

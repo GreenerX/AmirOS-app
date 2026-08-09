@@ -82,6 +82,7 @@ import type {
   ViewName,
   WritingStyleProfile,
 } from "./types";
+import { useTimeFormat } from "./TimeFormatProvider";
 
 const presetModels: Record<ModelPreset, DashboardData["models"]> = {
   economy: {
@@ -126,6 +127,7 @@ function preserveLocalMessageState(current: ChatMessage[], incoming: ChatMessage
 }
 
 export function App() {
+  const { timeFormat } = useTimeFormat();
   const [view, setView] = useState<ViewName>("overview");
   const [dashboard, setDashboard] = useState<DashboardData>();
   const [chats, setChats] = useState<ChatSummary[]>([]);
@@ -746,11 +748,11 @@ export function App() {
   const unreadCount = chats.reduce((total, chat) => total + Math.max(0, chat.unreadCount), 0);
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} updateAvailable={updateStatus?.status === "available"} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} />
+    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`} data-time-format={timeFormat}>
+      <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} updateAvailable={updateStatus?.status === "available"} connection={dashboard.connection} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} />
       <div className="app-body">
         {error ? <div className="error-banner"><AlertTriangle size={17} />{error}<button onClick={() => setError(undefined)}>Dismiss</button></div> : null}
-{view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onOpenUnread={openUnreadInbox} onPreset={choosePreset} onTrackingDecision={decideKnowledgeTracking} onOpenTrackingChat={(chatId) => openChat(chatId)} onOpenNextBestAction={openChat} onOpenTodoReview={openTodoReview} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onCalendarStatus={changeCalendarStatus} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onDismissNextBestAction={dismissNextBestAction} /> : null}
+{view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onTrackingDecision={decideKnowledgeTracking} onOpenTrackingChat={(chatId) => openChat(chatId)} onOpenNextBestAction={openChat} onOpenTodoReview={openTodoReview} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onCalendarStatus={changeCalendarStatus} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onDismissNextBestAction={dismissNextBestAction} /> : null}
         {view === "intelligence" ? <IntelligenceView data={intelligence} chats={chats} contacts={dashboard.settings.contacts} ownerName={dashboard.settings.ownerProfile.displayName} loading={loadingIntelligence} onRefresh={refreshIntelligence} onOpenChat={openChat} onOpenCalendar={() => setView("calendar")} onContactChange={changeContact} onGenerateSummary={(chatId, isGroup) => isGroup ? summarizeSelectedGroup(chatId) : generateProfile(chatId)} onCalendarStatus={changeCalendarStatus} onRegenerateCalendarTitle={regenerateEventTitle} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onDeleteQuestion={deleteQuestion} navigationRequest={intelligenceNavigationRequest} /> : null}
         {view === "calendar" ? <CalendarView data={intelligence} onOpenChat={openChat} onStatus={changeCalendarStatus} onRegenerateTitle={regenerateEventTitle} /> : null}
         {view === "inbox" ? <InboxView chats={chats} unreadCount={unreadCount} initialFilter={inboxInitialFilter} initialContactSettingsTab={inboxContactSettingsTab} selectedChatId={selectedChatId} highlightedMessageId={highlightedMessageId} messages={visibleMessages} memory={visibleMemory} manualMemory={visibleManualMemory} profile={visibleProfile} insights={insights} styleProfile={styleProfile} groupSummary={groupSummary} groupDescription={groupDescription} composerDraft={assistantComposerDraft?.chatId === selectedChatId ? assistantComposerDraft?.body : undefined} onComposerDraftConsumed={() => setAssistantComposerDraft(undefined)} incomingMessageCount={incomingMessageCount} contact={visibleContact} drafts={dashboard.drafts} loading={loadingChat} onSelectChat={selectInboxChat} onMarkRead={readChat} onModeChange={changeMode} onContactChange={changeContact} onAddMemory={addMemory} onRemoveMemory={removeMemory} onGenerateProfile={generateProfile} onAnalyzeIntelligence={analyzeIntelligence} onInsightChange={changeInsight} onGenerateWritingStyle={learnWritingStyle} onGenerateGroupSummary={summarizeSelectedGroup} onApproveDraft={approve} onDismissDraft={dismiss} onSend={send} onSendMedia={sendChatMedia} onGenerateImage={generateChatImage} onReact={react} onReply={reply} onForward={forward} onScanHistory={scanHistory} /> : null}

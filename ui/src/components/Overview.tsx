@@ -8,7 +8,6 @@ import {
   CalendarCheck,
   CalendarClock,
   Check,
-  CircleDollarSign,
   ExternalLink,
   Image,
   ListTodo,
@@ -16,7 +15,6 @@ import {
   Mic,
   Pause,
   PencilLine,
-  Plus,
   Search,
   ShieldCheck,
   Sparkles,
@@ -24,24 +22,23 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { summarizeDashboardActionMessage } from "../api";
+import { ensureTodaysFocusIcon, summarizeDashboardActionMessage } from "../api";
 import { readDashboardActionSummaries, saveDashboardActionSummary } from "../dashboard-action-summary-cache";
-import { compactNumber, formatDeviceClock, formatTime, timeOfDayGreeting } from "../format";
+import { compactNumber, formatDateTime, formatTime, timeOfDayGreeting } from "../format";
 import { hideIntelligenceAction, readHiddenIntelligenceActions, replyActionId } from "../intelligence-visibility";
 import { buildIntelligenceSnapshot, isKnownIntelligenceContactName } from "../intelligence-snapshot";
+import { replyAssessmentCopy } from "../reply-assessment-copy";
 import { buildTodaysFocus, type TodaysFocusItem } from "../todays-focus";
-import type { Activity, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, ModelPreset, TodoTask, ViewName } from "../types";
-import { WhatsAppIcon } from "./BrandIcons";
+import type { Activity, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, TodoTask, ViewName } from "../types";
 import { ContactAvatar } from "./ContactAvatar";
 import { TodoEditorDialog } from "./IntelligenceView";
+import { OverviewHeaderExperience } from "./OverviewHeaderExperience";
 
 type OverviewProps = {
   data: DashboardData;
   chats: ChatSummary[];
   intelligence?: IntelligenceData;
   onNavigate: (view: ViewName) => void;
-  onOpenUnread: () => void;
-  onPreset: (preset: ModelPreset) => Promise<void>;
   onTrackingDecision: (chatId: string, status: KnowledgeTrackingStatus) => Promise<void>;
   onOpenTrackingChat: (chatId: string) => void;
   onOpenNextBestAction: (chatId: string, messageId?: string) => void;
@@ -62,6 +59,7 @@ export type NextBestAction = {
   messageId?: string;
   actionType: "reply" | "calendar" | "todo" | "insight";
   actionId: string;
+  replyAssessment?: IntelligenceData["chats"][number]["replyAssessment"];
 };
 
 type TodoFilter = "all" | "open" | "completed";
@@ -107,22 +105,13 @@ function sameLocalDay(left: number, right: Date) {
 }
 
 function eventDateTime(timestamp: number) {
-  return new Intl.DateTimeFormat(undefined, {
+  return formatDateTime(timestamp, {
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-  }).format(new Date(timestamp));
-}
-
-function eventCountdown(timestamp: number, now: Date) {
-  const eventDate = new Date(timestamp);
-  if (sameLocalDay(timestamp, now)) return "Today";
-  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  if (sameLocalDay(timestamp, tomorrow)) return "Tomorrow";
-  const dayDifference = Math.max(1, Math.ceil((eventDate.getTime() - now.getTime()) / 86_400_000));
-  return `In ${dayDifference} days`;
+  });
 }
 
 function toMilliseconds(timestamp: number) {
@@ -166,14 +155,17 @@ function readHiddenTodaysFocus(): Set<string> {
   }
 }
 
-export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, onPreset, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onOpenTodoReview, onTodoStatus, onTodoUpdate, onCalendarStatus, onInsightStatus, onDismissNextBestAction }: OverviewProps) {
+export function Overview({ data, chats, intelligence, onNavigate, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onOpenTodoReview, onTodoStatus, onTodoUpdate, onCalendarStatus, onInsightStatus, onDismissNextBestAction }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
   const [todoFilter, setTodoFilter] = useState<TodoFilter>("all");
   const [hiddenActionVersion, setHiddenActionVersion] = useState(0);
   const [hiddenTodaysFocus, setHiddenTodaysFocus] = useState<Set<string>>(() => readHiddenTodaysFocus());
+  const [todaysFocusIcons, setTodaysFocusIcons] = useState<Record<string, string>>({});
   const [actionSummaries, setActionSummaries] = useState<Record<string, string>>(readDashboardActionSummaries);
   const pendingActionSummaries = useRef(new Set<string>());
+  const pendingTodaysFocusIcons = useRef(new Set<string>());
+  const failedTodaysFocusIcons = useRef(new Set<string>());
   const [completingTodoIds, setCompletingTodoIds] = useState<Set<string>>(() => new Set());
   const [todoEditor, setTodoEditor] = useState<(TodoTask & { contactName: string }) | undefined>();
   useEffect(() => {
@@ -190,17 +182,12 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
   const progress = Math.min(100, (estimatedCost / budget) * 100);
   const formattedCost = estimatedCost < 0.01 ? estimatedCost.toFixed(4) : estimatedCost.toFixed(2);
   const firstName = data.settings.ownerProfile.displayName.trim().split(/\s+/)[0] || "Amir";
-  const unreadMessages = chats.reduce((total, chat) => total + Math.max(0, chat.unreadCount), 0);
-  const unreadConversations = chats.filter((chat) => chat.unreadCount > 0).length;
   const intelligenceSnapshot = useMemo(() => buildIntelligenceSnapshot(
     intelligence,
     readHiddenIntelligenceActions(),
     deviceTime.getTime(),
   ), [intelligence, deviceTime, hiddenActionVersion]);
   const visibleNeedsReply = intelligenceSnapshot.replies;
-  const needsReply = Math.max(visibleNeedsReply.length, data.drafts.length);
-  const repliesToday = data.activities.filter((activity) => activity.kind === "text" && sameLocalDay(activity.timestamp, deviceTime)).length;
-  const nextEvent = intelligenceSnapshot.upcomingEvents[0];
   const planSuggestions = intelligence?.events.filter((item) => item.status === "inferred" && isKnownIntelligenceContactName(item.contactName)) || [];
   const trackedTodos = useMemo(() => (intelligence?.todos || [])
     .filter((todo) => todo.status === "open" || todo.status === "done")
@@ -239,9 +226,29 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
     () => todaysFocus.filter((item) => !hiddenTodaysFocus.has(item.id)),
     [hiddenTodaysFocus, todaysFocus],
   );
+  useEffect(() => {
+    for (const item of visibleTodaysFocus) {
+      const isBirthday = item.action === "calendar" && /birthday/i.test(item.title);
+      const isPersonFocus = isBirthday || item.type === "commitment" || item.action === "reply";
+      const chat = isPersonFocus ? chats.find((candidate) => candidate.id === item.chatId) : undefined;
+      if ((isPersonFocus && chat?.avatarUrl) || todaysFocusIcons[item.id]
+        || pendingTodaysFocusIcons.current.has(item.id) || failedTodaysFocusIcons.current.has(item.id)) continue;
+      pendingTodaysFocusIcons.current.add(item.id);
+      void ensureTodaysFocusIcon({ title: item.title, type: item.type })
+        .then(({ url }) => {
+          if (!url) {
+            failedTodaysFocusIcons.current.add(item.id);
+            return;
+          }
+          setTodaysFocusIcons((current) => current[item.id] ? current : { ...current, [item.id]: url });
+        })
+        .catch(() => failedTodaysFocusIcons.current.add(item.id))
+        .finally(() => pendingTodaysFocusIcons.current.delete(item.id));
+    }
+  }, [chats, todaysFocusIcons, visibleTodaysFocus]);
   const focus = visibleNeedsReply[0]
     ? {
-        kind: "Needs reply",
+        kind: "May need your reply",
         title: visibleNeedsReply[0].contactName,
         detail: visibleNeedsReply[0].lastIncoming?.content || "A recent message is waiting for you.",
         chatId: visibleNeedsReply[0].chatId,
@@ -249,6 +256,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
         messageId: visibleNeedsReply[0].lastIncoming?.messageId,
         actionType: "reply" as const,
         actionId: replyActionId(visibleNeedsReply[0]),
+        replyAssessment: visibleNeedsReply[0].replyAssessment,
       }
     : planSuggestions[0]
       ? { kind: "Calendar suggestion", title: compactNextBestText(planSuggestions[0].title, 64), detail: `From ${planSuggestions[0].contactName} · ${eventDateTime(planSuggestions[0].startAt)}`, chatId: planSuggestions[0].chatId, contactName: planSuggestions[0].contactName, messageId: planSuggestions[0].evidence.messageId, actionType: "calendar" as const, actionId: planSuggestions[0].id }
@@ -257,6 +265,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
         : newSignals[0]
           ? { kind: "New relationship detail", title: newSignals[0].contactName, detail: compactNextBestText(newSignals[0].content), chatId: newSignals[0].chatId, contactName: newSignals[0].contactName, messageId: newSignals[0].evidence.messageId, actionType: "insight" as const, actionId: newSignals[0].id }
           : undefined;
+  const focusReplyCopy = focus?.actionType === "reply" ? replyAssessmentCopy(focus.replyAssessment) : undefined;
   const focusChat = focus ? chats.find((chat) => chat.id === focus.chatId) : undefined;
 
   useEffect(() => {
@@ -348,24 +357,17 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
   };
   return (
     <main className="main-content overview-page">
-      <header className="page-header">
-        <div>
+      <header className="page-header overview-header">
+        <div className="overview-header-copy">
           <h1>{timeOfDayGreeting(deviceTime)}, {firstName} <span aria-hidden="true">👋</span></h1>
           <figure className="overview-quote"><blockquote>“{quote.text}”</blockquote><figcaption>— {quote.author}</figcaption></figure>
         </div>
-        <div className="header-actions">
-          <span className={`connection-status ${data.connection.status}`}>
-            <span className="connection-brand-lockup"><WhatsAppIcon size={18} /><span className="status-dot" /></span>
-            {data.connection.status === "ready" ? "WhatsApp connected" : data.connection.detail}
-          </span>
-          <time className="overview-current-time" dateTime={deviceTime.toISOString()} aria-label={`Current device time ${formatDeviceClock(deviceTime)}`}><strong>{formatDeviceClock(deviceTime)}</strong><small>Local time</small></time>
-        </div>
+        <OverviewHeaderExperience now={deviceTime} />
       </header>
 
       <section className="overview-reminders-panel todays-focus-panel" aria-labelledby="overview-reminders-title">
         <div className="todays-focus-heading">
           <div className="todays-focus-title-block">
-            <span className="todays-focus-title-icon"><Sparkles size={19} /></span>
             <span>
               <span className="todays-focus-title-row">
                 <h2 id="overview-reminders-title">Today's Focus</h2>
@@ -378,9 +380,11 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
         </div>
         {visibleTodaysFocus.length > 0 ? <div className={`overview-reminders-list todays-focus-grid todays-focus-grid-${Math.min(visibleTodaysFocus.length, 4)}`}>
           {visibleTodaysFocus.slice(0, 4).map((item) => {
-            const actionLabel = item.action === "calendar" ? "Open event" : item.action === "todo" ? "Open task" : item.action === "reply" ? "Reply now" : "Open chat";
-            const category = item.priority === 0 ? "Overdue" : item.type === "calendar" ? "Happening today" : item.type === "reply" ? "Waiting for your reply" : "Due today";
-            const context = item.contactName ? `${item.detail} · ${item.contactName}` : item.detail;
+            const category = item.priority === 0 ? "Overdue" : item.type === "calendar" ? item.detail : item.type === "reply" ? "May need your reply" : "Due today";
+            const context = item.type === "calendar"
+              ? [item.allDay ? "All day" : formatTime(item.timestamp), item.location].filter(Boolean).join(" · ")
+              : item.contactName ? `${item.detail} · ${item.contactName}` : item.detail;
+            const replyCopy = item.type === "reply" ? replyAssessmentCopy(item.replyAssessment) : undefined;
             const isBirthday = item.action === "calendar" && /birthday/i.test(item.title);
             const isPersonFocus = isBirthday || item.type === "commitment" || item.action === "reply";
             const chat = isPersonFocus ? chats.find((candidate) => candidate.id === item.chatId) : undefined;
@@ -422,55 +426,20 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
               </button>
               {isPersonFocus && chat?.avatarUrl
                 ? <ContactAvatar name={item.contactName} src={chat.avatarUrl} className="todays-focus-item-avatar" />
+                : todaysFocusIcons[item.id]
+                  ? <img className="todays-focus-item-icon todays-focus-generated-icon" src={todaysFocusIcons[item.id]} alt="" />
                 : <span className="todays-focus-item-icon" aria-hidden="true">{itemIcon}</span>}
               <div className="todays-focus-item-copy">
                 <small>{category}</small>
                 <span className="overview-reminder-copy">
                   <strong dir="auto">{item.title}</strong>
                   <span dir="auto">{context}</span>
+                  {replyCopy ? <span className="reply-assessment-indicator">{replyCopy.text}</span> : null}
                 </span>
               </div>
-              <button className="button compact ghost todays-focus-action" type="button" onClick={(event) => {
-                event.stopPropagation();
-                openItem();
-              }}>
-                {itemIcon}{actionLabel}
-              </button>
             </article>;
           })}
         </div> : <div className="overview-agenda-empty todays-focus-empty"><CalendarClock size={28} /><span><strong>You’re all caught up for today.</strong><small>When something needs you, it’ll show up here.</small></span></div>}
-      </section>
-
-      <section className="overview-action-strip" aria-label="Today at a glance">
-        <button className="overview-action-cell next-event-cell" type="button" onClick={() => onNavigate("calendar")}>
-          <span className="overview-action-icon"><CalendarClock size={21} /></span>
-          <span className="overview-action-copy">
-            <small>Next event</small>
-            <strong>{nextEvent?.title || (intelligence ? "No upcoming events" : "Checking your calendar…")}</strong>
-            <span>{nextEvent ? `${eventDateTime(nextEvent.startAt)} · From ${nextEvent.contactName}` : "Confirmed plans will appear here"}</span>
-          </span>
-          <span className="overview-action-link">{nextEvent ? eventCountdown(nextEvent.startAt, deviceTime) : "Calendar"}<ArrowRight size={15} /></span>
-        </button>
-
-        <button className="overview-action-cell inbox-pulse-cell" type="button" onClick={onOpenUnread}>
-          <span className="overview-action-icon"><MessageCircle size={21} /></span>
-          <span className="overview-action-copy">
-            <small>Inbox pulse</small>
-            <strong>{unreadMessages} unread</strong>
-            <span>{needsReply} replies · {unreadConversations} chats</span>
-          </span>
-          <ArrowRight className="overview-action-arrow" size={15} />
-        </button>
-
-        <div className="overview-action-cell amiros-today-cell">
-          <span className="overview-action-icon"><Sparkles size={21} /></span>
-          <span className="overview-action-copy">
-            <small>AI usage / model</small>
-            <strong>{data.models.text}</strong>
-            <span>${formattedCost} today · {repliesToday} {repliesToday === 1 ? "reply" : "replies"} sent</span>
-          </span>
-          <select className="overview-model-preset" aria-label="Overview model preset" value={data.preset} onChange={(event) => void onPreset(event.target.value as ModelPreset)}><option value="economy">Economy</option><option value="balanced">Balanced</option><option value="quality">Quality</option></select>
-        </div>
       </section>
 
       {trackingRequests.length > 0 ? <section className="panel tracking-review-panel" aria-labelledby="tracking-review-title">
@@ -504,7 +473,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
               <h2 id="overview-agenda-title"><CalendarCheck size={19} /> Agenda {todaysAgenda.length > 0 ? <span className="count-badge intelligence-count">{todaysAgenda.length}</span> : null}</h2>
               <span className="overview-agenda-today">Today</span>
             </div>
-            {todaysAgenda.length > 0 ? <div className="overview-today-agenda">
+            {todaysAgenda.length > 0 ? <div className="overview-today-agenda" data-event-count={todaysAgenda.length > 5 ? "many" : todaysAgenda.length}>
               {todaysAgenda.map((event, index) => {
                 const startAt = toMilliseconds(event.startAt);
                 const details = [event.contactName, event.location].filter(Boolean).join(" · ") || "Confirmed event";
@@ -540,11 +509,11 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
 
         <div className="overview-command-rail">
           <section className="panel next-best-panel">
-            <div className="panel-heading"><h2>Next best action</h2><span className={focus ? "attention-label" : "attention-label clear"}>{focus ? "Priority" : "All clear"}</span></div>
+            <div className="panel-heading"><h2>Suggested action</h2><span className={focus ? "attention-label" : "attention-label clear"}>{focus ? "Priority" : "All clear"}</span></div>
             {focus ? <div className="intelligence-focus next-best-focus">
               <ContactAvatar name={focus.contactName} src={focusChat?.avatarUrl} className="intelligence-focus-avatar" />
               <button className="next-best-focus-copy" type="button" onClick={() => onOpenNextBestAction(focus.chatId, focus.messageId)}>
-                <small>{focus.kind}</small><strong dir="auto">{focus.title}</strong><p dir="auto">{focus.actionType === "reply" ? actionSummaries[focus.actionId] || focus.detail : focus.detail}</p>
+                <small>{focus.kind}</small><strong dir="auto">{focus.title}</strong><p dir="auto">{focus.actionType === "reply" ? actionSummaries[focus.actionId] || focus.detail : focus.detail}</p>{focusReplyCopy ? <span className="reply-assessment-indicator">{focusReplyCopy.text}</span> : null}
               </button>
               <span className="next-best-focus-actions">
                 <button className="next-best-action-control primary" type="button" title={focus.actionType === "reply" ? "Reply in chat" : focus.actionType === "calendar" ? "Add to calendar" : focus.actionType === "todo" ? "Add to to-do list" : "Confirm detail"} aria-label={focus.actionType === "reply" ? "Reply in chat" : focus.actionType === "calendar" ? "Add to calendar" : focus.actionType === "todo" ? "Add to to-do list" : "Confirm detail"} onClick={() => void applyFocus()}>
@@ -556,19 +525,6 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
             </div> : <div className="intelligence-focus caught-up" role="status"><span className="intelligence-focus-symbol"><Sparkles size={19} /></span><span><small>Current status</small><strong>You’re caught up</strong><p>AmirOS will surface the next useful action here.</p></span></div>}
           </section>
 
-          <section className="panel activity-panel">
-            <div className="panel-heading"><h2>Recent activity</h2><small>Live</small></div>
-            <div className="activity-list">
-              {data.activities.slice(0, 3).map((activity) => (
-                <div className="activity-row" key={activity.id}>
-                  <span className="activity-symbol">{activityIcon(activity.kind)}</span>
-                  <span className="activity-line" />
-                  <span className="row-copy"><strong>{activity.title}</strong><small>{activity.detail}</small></span>
-                  <time>{formatTime(activity.timestamp)}</time>
-                </div>
-              ))}
-            </div>
-          </section>
         </div>
       </div>
 
@@ -597,11 +553,18 @@ export function Overview({ data, chats, intelligence, onNavigate, onOpenUnread, 
           <button className="text-button panel-link" onClick={() => onNavigate("contacts")}>Manage modes <ArrowRight size={16} /></button>
         </section>
 
-        <section className="panel quick-panel">
-          <h2>Quick actions</h2>
-          <button className="quick-action" onClick={() => onNavigate("automations")}><span><Plus size={21} /><span><strong>New rule</strong><small>Create an automation rule</small></span></span><ArrowRight size={18} /></button>
-          <button className="quick-action" onClick={() => onNavigate("inbox")}><span><MessageCircle size={21} /><span><strong>Open inbox</strong><small>Review conversations</small></span></span><ArrowRight size={18} /></button>
-          <button className="quick-action" onClick={() => onNavigate("usage")}><span><CircleDollarSign size={21} /><span><strong>Cost controls</strong><small>Review model usage</small></span></span><ArrowRight size={18} /></button>
+        <section className="panel activity-panel overview-secondary-activity">
+          <div className="panel-heading"><h2>Recent activity</h2><small>Live</small></div>
+          <div className="activity-list">
+            {data.activities.slice(0, 3).map((activity) => (
+              <div className="activity-row" key={activity.id}>
+                <span className="activity-symbol">{activityIcon(activity.kind)}</span>
+                <span className="activity-line" />
+                <span className="row-copy"><strong>{activity.title}</strong><small>{activity.detail}</small></span>
+                <time>{formatTime(activity.timestamp)}</time>
+              </div>
+            ))}
+          </div>
         </section>
       </div>
       {todoEditor ? <TodoEditorDialog todo={todoEditor} onClose={() => setTodoEditor(undefined)} onSave={(patch) => onTodoUpdate(todoEditor.chatId, todoEditor.id, patch)} /> : null}

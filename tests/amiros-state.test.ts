@@ -958,7 +958,7 @@ describe("AmirosState", () => {
     expect(new Date(theater!.startAt).getHours()).toBe(19);
     expect(theater!.allDay).toBe(false);
 
-    const schedule = state.searchIntelligence("What is on my schedule this week?")
+    const schedule = state.searchIntelligence("What is on my upcoming schedule?", 36, new Set(), saturday)
       .filter((record) => record.kind === "calendar_event");
     expect(schedule.map((record) => record.content)).toEqual(expect.arrayContaining([
       expect.stringContaining("rooftop party"),

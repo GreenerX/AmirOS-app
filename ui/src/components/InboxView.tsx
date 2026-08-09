@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { formatTime } from "../format";
+import { formatDateTime, formatTime } from "../format";
 import { contactProfilePdfUrl } from "../api";
 import { WhatsAppIcon } from "./BrandIcons";
 import { ContactAvatar } from "./ContactAvatar";
@@ -1016,10 +1016,10 @@ export function InboxView({
         </details>
 
         <details className="contact-accordion">
-          <summary><span><MessageSquareText size={17} />Your writing style</span><small>{styleProfile ? `Learned ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(styleProfile.updatedAt))}` : "Learning automatically"}</small><ChevronDown size={16} /></summary>
+          <summary><span><MessageSquareText size={17} />Your writing style</span><small>{styleProfile ? `Learned ${formatDateTime(styleProfile.updatedAt, { dateStyle: "medium", timeStyle: "short" })}` : "Learning automatically"}</small><ChevronDown size={16} /></summary>
           <section className="contact-accordion-body instruction-card writing-style-card">
           <div className="profile-card-heading"><span><MessageSquareText size={17} /></span><div><h3>Your writing style</h3><small>AmirOS learns this chat separately and uses the style on every AI reply.</small></div></div>
-          <div className="style-learning-status"><RefreshCw size={15} /><span><strong>Automatic per-chat learning</strong><small>{styleProfile ? <>Last learned <time dateTime={new Date(styleProfile.updatedAt).toISOString()}>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(styleProfile.updatedAt))}</time> · Refreshes after every 5 messages you send.</> : <>The first style will be learned after 5 messages you send in this chat.</>}</small></span></div>
+          <div className="style-learning-status"><RefreshCw size={15} /><span><strong>Automatic per-chat learning</strong><small>{styleProfile ? <>Last learned <time dateTime={new Date(styleProfile.updatedAt).toISOString()}>{formatDateTime(styleProfile.updatedAt, { dateStyle: "medium", timeStyle: "short" })}</time> · Refreshes after every 5 messages you send.</> : <>The first style will be learned after 5 messages you send in this chat.</>}</small></span></div>
           {styleProfile ? <>
             <p className="style-summary">{styleProfile.summary}</p>
             <div className="style-facts"><span>Length · {styleProfile.messageLength}</span><span>Emoji · {styleProfile.emojiUse}</span><span>Formality · {styleProfile.formality}</span></div>

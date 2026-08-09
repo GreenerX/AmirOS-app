@@ -1,12 +1,31 @@
-export function formatTime(timestampSecondsOrMs: number): string {
-  const milliseconds = timestampSecondsOrMs < 10_000_000_000
+import { hour12For, readTimeFormat, type TimeFormat } from "./time-format";
+
+function milliseconds(timestampSecondsOrMs: number): number {
+  return timestampSecondsOrMs < 10_000_000_000
     ? timestampSecondsOrMs * 1_000
     : timestampSecondsOrMs;
+}
+
+function includesTime(options: Intl.DateTimeFormatOptions): boolean {
+  return Boolean(options.hour || options.minute || options.second || options.timeStyle);
+}
+
+export function formatDateTime(
+  value: number | Date,
+  options: Intl.DateTimeFormatOptions,
+  timeFormat: TimeFormat = readTimeFormat(),
+): string {
   return new Intl.DateTimeFormat(undefined, {
+    ...options,
+    ...(includesTime(options) ? { hour12: hour12For(timeFormat) } : {}),
+  }).format(value instanceof Date ? value : new Date(milliseconds(value)));
+}
+
+export function formatTime(timestampSecondsOrMs: number, timeFormat: TimeFormat = readTimeFormat()): string {
+  return formatDateTime(milliseconds(timestampSecondsOrMs), {
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false,
-  }).format(milliseconds);
+  }, timeFormat);
 }
 
 export function timeOfDayGreeting(date: Date): "Good morning" | "Good afternoon" | "Good evening" | "Good night" {
@@ -17,12 +36,12 @@ export function timeOfDayGreeting(date: Date): "Good morning" | "Good afternoon"
   return "Good night";
 }
 
-export function formatDeviceClock(date: Date): string {
-  return new Intl.DateTimeFormat(undefined, {
+export function formatDeviceClock(date: Date, timeFormat: TimeFormat = readTimeFormat()): string {
+  return formatDateTime(date, {
     hour: "numeric",
     minute: "2-digit",
     second: "2-digit",
-  }).format(date);
+  }, timeFormat);
 }
 
 export function initials(name: string): string {

@@ -1,7 +1,8 @@
 import { BarChart3, CalendarDays, ChevronDown, ContactRound, Home, ListChecks, Mail, PanelLeftClose, PanelLeftOpen, Settings, TerminalSquare, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ComponentType } from "react";
-import type { ViewName } from "../types";
+import type { DashboardData, ViewName } from "../types";
+import { WhatsAppIcon } from "./BrandIcons";
 const navigation: Array<{
   id: ViewName;
   label: string;
@@ -36,10 +37,11 @@ type SidebarProps = {
   profile: { displayName: string; avatarUrl: string };
   version: string;
   updateAvailable?: boolean;
+  connection: DashboardData["connection"];
   onOpenReleaseNotes: () => void;
 };
 
-export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleCollapsed, profile, version, updateAvailable = false, onOpenReleaseNotes }: SidebarProps) {
+export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleCollapsed, profile, version, updateAvailable = false, connection, onOpenReleaseNotes }: SidebarProps) {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
 
@@ -66,11 +68,22 @@ export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleC
 
   return (
     <aside className="sidebar">
-      <button className="brand" onClick={() => onNavigate("overview")} aria-label="AmirOS overview">
-        <img src="/amiros-mark-v2-cropped.png" alt="" />
-        <span>AmirOS</span>
-      </button>
-      <button className="sidebar-collapse" type="button" onClick={onToggleCollapsed} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}<span>{collapsed ? "Expand" : "Collapse"}</span></button>
+      <div className="sidebar-brand-area">
+        <button className="brand" onClick={() => onNavigate("overview")} aria-label="AmirOS overview">
+          <img src="/amiros-mark-v2-cropped.png" alt="" />
+          <span>AmirOS</span>
+        </button>
+        <div className={`sidebar-whatsapp-status ${connection.status}`} title={connection.detail}>
+          <WhatsAppIcon size={15} />
+          <span>{connection.status === "ready" ? "WhatsApp Connected" : connection.status === "qr" ? "WhatsApp QR Ready" : connection.status === "authenticated" || connection.status === "starting" ? "WhatsApp Connecting" : "WhatsApp Disconnected"}</span>
+          <i aria-hidden="true" />
+        </div>
+        <button className="sidebar-collapse" type="button" onClick={onToggleCollapsed} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
+          <span className="sidebar-collapse-icon" aria-hidden="true">
+            {collapsed ? <><PanelLeftOpen className="sidebar-collapse-glyph on-light" size={18} /><PanelLeftOpen className="sidebar-collapse-glyph on-dark" size={18} /></> : <><PanelLeftClose className="sidebar-collapse-glyph on-light" size={18} /><PanelLeftClose className="sidebar-collapse-glyph on-dark" size={18} /></>}
+          </span>
+        </button>
+      </div>
 
       <nav className="navigation" aria-label="Main navigation">
         {navigation.map(({ id, label, icon: Icon, tone }) => (

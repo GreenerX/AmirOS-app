@@ -158,14 +158,27 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.7.1",
+    version: "0.8.0",
     releasedAt: "2026-08-09",
-    headline: "A reliable update for every tester",
+    headline: "A calmer, more useful daily command center",
     notes: [
-      { title: "Updates rebuild cleanly", detail: "The update build now compiles the AmirOS service only, so test-only dashboard files cannot stop an update." },
-      { title: "v0.7.0 improvements are ready to install", detail: "People, the clearer Overview, durable knowledge review, and navigation polish can now install as intended." },
+      { title: "A clearer Overview", detail: "Today’s Focus, the adaptive day Agenda, to-dos, Suggested action, activity, weather, clocks, and sidebar now work together in a cleaner daily layout." },
+      { title: "People feel personal", detail: "Favorites, hidden contacts, relationship summaries, contact profiles, and clearer follow-up and upcoming views make the People directory easier to use." },
+      { title: "Smarter follow-up guidance", detail: "AmirOS combines deterministic reply signals with cached AI review only for uncertain conversations, and shows confidence without overstating certainty." },
+      { title: "More durable knowledge", detail: "Approved or dismissed relationship knowledge stays reviewed instead of returning as a reworded suggestion." },
     ],
     history: [
+      {
+        version: "0.8.0",
+        releasedAt: "2026-08-09",
+        headline: "A calmer, more useful daily command center",
+        notes: [
+          { title: "A clearer Overview", detail: "Today’s Focus, the adaptive day Agenda, to-dos, Suggested action, activity, weather, clocks, and sidebar now work together in a cleaner daily layout." },
+          { title: "People feel personal", detail: "Favorites, hidden contacts, relationship summaries, contact profiles, and clearer follow-up and upcoming views make the People directory easier to use." },
+          { title: "Smarter follow-up guidance", detail: "AmirOS combines deterministic reply signals with cached AI review only for uncertain conversations, and shows confidence without overstating certainty." },
+          { title: "More durable knowledge", detail: "Approved or dismissed relationship knowledge stays reviewed instead of returning as a reworded suggestion." },
+        ],
+      },
       {
         version: "0.7.1",
         releasedAt: "2026-08-09",

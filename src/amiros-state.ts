@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDueDateQuery, isWithinTemporalRange, resolveTemporalRange } from "./temporal-memory.js";
+import type { CachedReplyAssessment } from "./reply-needed.js";
 
 export type ReplyMode = "off" | "suggest" | "auto";
 export type OwnerTriggerAccess = "knowledge" | "calendar";
@@ -322,6 +323,8 @@ type PersistedState = {
   chatNames: Record<string, string>;
   contacts: Record<string, ContactPreferences>;
   memories: Record<string, ConversationMemory>;
+  /** AI decisions for only ambiguous reply cases; keyed by one chat and a context fingerprint. */
+  replyAssessments: Record<string, CachedReplyAssessment>;
   intelligenceHistory: IntelligenceQuestionHistoryItem[];
   quietHours: {
     enabled: boolean;
@@ -386,6 +389,7 @@ const DEFAULT_STATE: PersistedState = {
   chatNames: {},
   contacts: {},
   memories: {},
+  replyAssessments: {},
   intelligenceHistory: [],
   quietHours: { enabled: false, start: "23:00", end: "07:00" },
   monthlyBudgetUsd: 20,
@@ -1058,6 +1062,32 @@ export class AmirosState {
               : [];
           }),
         ),
+        replyAssessments: Object.fromEntries(
+          Object.entries(parsed.replyAssessments || {}).flatMap(([chatId, value]) => {
+            if (!value || typeof value !== "object") return [];
+            const assessment = value as Partial<CachedReplyAssessment>;
+            if (
+              typeof assessment.contextKey !== "string" ||
+              !/^[a-f0-9]{64}$/iu.test(assessment.contextKey) ||
+              typeof assessment.needsReply !== "boolean" ||
+              typeof assessment.mayNeedReply !== "boolean" ||
+              typeof assessment.confidence !== "number" ||
+              !Number.isFinite(assessment.confidence) ||
+              typeof assessment.reason !== "string"
+            ) return [];
+            return [[chatId, {
+              contextKey: assessment.contextKey,
+              needsReply: assessment.needsReply,
+              mayNeedReply: assessment.mayNeedReply,
+              confidence: Math.max(0, Math.min(100, Math.round(assessment.confidence))),
+              source: "ai" as const,
+              reason: assessment.reason.replace(/\s+/g, " ").trim().slice(0, 160) || "ambiguous_context",
+              createdAt: typeof assessment.createdAt === "number" && Number.isFinite(assessment.createdAt)
+                ? assessment.createdAt
+                : Date.now(),
+            } satisfies CachedReplyAssessment]];
+          }).slice(-500),
+        ),
         intelligenceHistory: (Array.isArray(parsed.intelligenceHistory) ? parsed.intelligenceHistory : [])
           .filter((item): item is IntelligenceQuestionHistoryItem =>
             Boolean(item) && typeof item.question === "string" && typeof item.answer === "string",
@@ -1238,7 +1268,10 @@ export class AmirosState {
         : normalizeContactPronouns(patch.pronouns),
     };
     this.persisted.contacts[chatId] = updated;
-    if (patch.memoryEnabled === false) delete this.persisted.memories[chatId];
+    if (patch.memoryEnabled === false) {
+      delete this.persisted.memories[chatId];
+      delete this.persisted.replyAssessments[chatId];
+    }
     this.save();
     return updated;
   }
@@ -1284,6 +1317,33 @@ export class AmirosState {
     if (!this.getContact(chatId).memoryEnabled) return [];
     const safeLimit = Math.max(1, Math.min(400, Math.floor(limit)));
     return structuredClone(this.persisted.memories[chatId]?.entries.slice(-safeLimit) || []);
+  }
+
+  getReplyAssessment(chatId: string, contextKey: string): CachedReplyAssessment | undefined {
+    const assessment = this.persisted.replyAssessments[chatId];
+    if (!assessment || assessment.contextKey !== contextKey) return undefined;
+    return structuredClone(assessment);
+  }
+
+  setReplyAssessment(chatId: string, assessment: CachedReplyAssessment): void {
+    this.persisted.replyAssessments[chatId] = {
+      contextKey: assessment.contextKey,
+      needsReply: assessment.needsReply,
+      mayNeedReply: assessment.mayNeedReply,
+      confidence: Math.max(0, Math.min(100, Math.round(assessment.confidence))),
+      source: "ai",
+      reason: assessment.reason.replace(/\s+/g, " ").trim().slice(0, 160) || "ambiguous_context",
+      createdAt: assessment.createdAt,
+    };
+    const entries = Object.entries(this.persisted.replyAssessments);
+    if (entries.length > 500) {
+      for (const [expiredChatId] of entries
+        .sort((left, right) => left[1].createdAt - right[1].createdAt)
+        .slice(0, entries.length - 500)) {
+        delete this.persisted.replyAssessments[expiredChatId];
+      }
+    }
+    this.save();
   }
 
   /**
@@ -2387,6 +2447,10 @@ export class AmirosState {
     if (!this.persisted.contacts[chatId]) this.persisted.contacts[chatId] = contactAtFirstMessage;
     memory.updatedAt = Date.now();
     this.persisted.memories[chatId] = memory;
+    // A new owner or incoming entry changes the reply context. A cache key is
+    // also verified on read, but deleting here avoids retaining stale private
+    // judgments and guarantees a new relevant message can be reconsidered.
+    delete this.persisted.replyAssessments[chatId];
     this.dedupeCalendarEventsAcrossChats();
     this.save();
     return added;

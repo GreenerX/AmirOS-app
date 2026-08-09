@@ -291,6 +291,14 @@ export type IntelligenceChat = {
   styleProfile?: WritingStyleProfile;
   groupSummary?: GroupConversationSummary;
   needsReply: boolean;
+  /** Rich reply assessment is intentionally available for future UI treatment; current labels still use needsReply. */
+  replyAssessment?: {
+    needsReply: boolean;
+    mayNeedReply: boolean;
+    confidence: number;
+    source: "deterministic" | "ai";
+    reason: string;
+  };
   lastIncoming?: ChatMemoryEntry;
   updatedAt: number;
 };

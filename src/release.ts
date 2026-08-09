@@ -30,15 +30,23 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-09",
-  headline: "A reliable update for every tester",
+  headline: "A calmer, more useful daily command center",
   notes: [
     {
-      title: "Updates rebuild cleanly",
-      detail: "The update build now compiles the AmirOS service only. Test-only dashboard files no longer prevent an update from finishing.",
+      title: "A clearer Overview",
+      detail: "Today’s Focus, the adaptive day Agenda, to-dos, Suggested action, activity, weather, clocks, and sidebar now work together in a cleaner daily layout.",
     },
     {
-      title: "v0.7.0 improvements are ready to install",
-      detail: "The People experience, clearer Overview, durable knowledge review, and navigation polish can now install as intended.",
+      title: "People feel personal",
+      detail: "Favorites, hidden contacts, relationship summaries, contact profiles, and clearer follow-up and upcoming views make the People directory easier to use.",
+    },
+    {
+      title: "Smarter follow-up guidance",
+      detail: "AmirOS combines deterministic reply signals with cached AI review only for uncertain conversations, and shows confidence without overstating certainty.",
+    },
+    {
+      title: "More durable knowledge",
+      detail: "Approved or dismissed relationship knowledge stays reviewed instead of returning as a reworded suggestion.",
     },
   ],
 };
@@ -49,6 +57,21 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.7.1",
+    releasedAt: "2026-08-09",
+    headline: "A reliable update for every tester",
+    notes: [
+      {
+        title: "Updates rebuild cleanly",
+        detail: "The update build now compiles the AmirOS service only. Test-only dashboard files no longer prevent an update from finishing.",
+      },
+      {
+        title: "v0.7.0 improvements are ready to install",
+        detail: "The People experience, clearer Overview, durable knowledge review, and navigation polish can now install as intended.",
+      },
+    ],
+  },
   {
     version: "0.7.0",
     releasedAt: "2026-08-09",

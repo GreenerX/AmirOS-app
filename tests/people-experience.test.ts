@@ -32,8 +32,8 @@ describe("People experience", () => {
     expect(people).toContain("Upcoming plans");
     expect(people).toContain("Open commitments");
     expect(people).toContain("Conversation timeline");
-    expect(people).toContain("Waiting on them");
-    expect(people).toContain("Waiting on me");
+    expect(people).toContain("Follow-ups from them");
+    expect(people).toContain("Your follow-ups");
     expect(people).toContain("data?.todos || []");
     expect(people).toContain("!isOwnerContact(person, ownerName)");
     expect(people).toContain("people-relationship-picker");

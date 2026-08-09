@@ -1,5 +1,5 @@
 import { buildProactiveReminders } from "./proactive-reminders.js";
-import type { IntelligenceData } from "./types.js";
+import type { IntelligenceChat, IntelligenceData } from "./types.js";
 
 export type TodaysFocusItem = {
   id: string;
@@ -12,6 +12,9 @@ export type TodaysFocusItem = {
   messageId?: string;
   action: "chat" | "todo" | "calendar" | "reply";
   timestamp: number;
+  allDay?: boolean;
+  location?: string;
+  replyAssessment?: IntelligenceChat["replyAssessment"];
 };
 
 function toMilliseconds(value: number) {
@@ -78,20 +81,25 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
   }
 
   const tomorrow = startOfLocalDay(now) + 86_400_000;
+  const dayAfterTomorrow = tomorrow + 86_400_000;
   for (const event of data.events) {
     const startAt = toMilliseconds(event.startAt);
-    if (event.status !== "confirmed" || startAt < now.getTime() || startAt >= tomorrow) continue;
+    if (event.status !== "confirmed" || startAt < now.getTime() || startAt >= dayAfterTomorrow) continue;
     add({
       id: `calendar:${event.chatId}:${event.id}`,
       type: "calendar",
-      priority: 2,
+      // The next event is the clearest time-bound item on the Overview, so
+      // today's confirmed events lead the focus cards chronologically.
+      priority: -1,
       title: event.title,
-      detail: "Happening today",
+      detail: startAt < tomorrow ? "Happening today" : "Happening tomorrow",
       chatId: event.chatId,
       contactName: event.contactName,
       messageId: event.evidence.messageId,
       action: "calendar",
       timestamp: startAt,
+      allDay: event.allDay,
+      location: event.location,
     });
   }
 
@@ -108,6 +116,7 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
       messageId: chat.lastIncoming?.messageId,
       action: "reply",
       timestamp: chat.lastIncoming ? toMilliseconds(chat.lastIncoming.timestamp) : toMilliseconds(chat.updatedAt),
+      replyAssessment: chat.replyAssessment,
     });
   }
 

@@ -52,7 +52,50 @@ describe("buildTodaysFocus", () => {
     const value = data();
     value.events.push({ id: "event", chatId: "dani", contactName: "Dani", title: "Dinner with Dani", startAt: at(0, 19), allDay: false, status: "confirmed", evidence, createdAt: at(-1), updatedAt: at(-1) });
 
-    expect(buildTodaysFocus(value, now)).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Dinner with Dani", type: "calendar" })]));
+    expect(buildTodaysFocus(value, now)).toEqual(expect.arrayContaining([expect.objectContaining({
+      title: "Dinner with Dani",
+      type: "calendar",
+      detail: "Happening today",
+    })]));
+  });
+
+  it("includes tomorrow's events with tomorrow wording and presentation details", () => {
+    const value = data();
+    value.events.push({
+      id: "tomorrow",
+      chatId: "dani",
+      contactName: "Dani",
+      title: "Flamenco with Dani",
+      startAt: at(1, 19),
+      allDay: false,
+      location: "Suzanne Dellal Centre",
+      status: "confirmed",
+      evidence,
+      createdAt: at(-1),
+      updatedAt: at(-1),
+    });
+
+    expect(buildTodaysFocus(value, now)).toEqual(expect.arrayContaining([expect.objectContaining({
+      title: "Flamenco with Dani",
+      detail: "Happening tomorrow",
+      location: "Suzanne Dellal Centre",
+      allDay: false,
+    })]));
+  });
+
+  it("does not pull later events into Today's Focus", () => {
+    const value = data();
+    value.events.push({ id: "later", chatId: "dani", contactName: "Dani", title: "Next week", startAt: at(2, 10), allDay: false, status: "confirmed", evidence, createdAt: at(-1), updatedAt: at(-1) });
+
+    expect(buildTodaysFocus(value, now)).toHaveLength(0);
+  });
+
+  it("places today's next event before other focus items", () => {
+    const value = data();
+    value.todos!.push({ id: "overdue", chatId: "work", contactName: "Work", title: "Send report", status: "open", priority: "high", dueAt: at(-1), evidence, createdAt: at(-2), updatedAt: at(-1) });
+    value.events.push({ id: "event", chatId: "dani", contactName: "Dani", title: "Dinner with Dani", startAt: at(0, 19), allDay: false, status: "confirmed", evidence, createdAt: at(-1), updatedAt: at(-1) });
+
+    expect(buildTodaysFocus(value, now).map((item) => item.title)).toEqual(["Dinner with Dani", "Send report"]);
   });
 
   it("includes people waiting for a reply", () => {

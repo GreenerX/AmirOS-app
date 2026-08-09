@@ -16,6 +16,8 @@ import {
 } from "../intelligence-visibility";
 import { buildIntelligenceSnapshot, isKnownIntelligenceContactName } from "../intelligence-snapshot";
 import { replaceIntelligencePhoneReferences, resolveIntelligenceContactName } from "../intelligence-contact-name";
+import { replyAssessmentCopy } from "../reply-assessment-copy";
+import { formatDateTime } from "../format";
 import { confirmedPlansForRelationship, type RelationshipPlan } from "../relationship-plans";
 import { isLegacyProfileSummary, profileSummaryParagraph } from "../profile-summary";
 import { CalendarEventForm, type CalendarEventDraft } from "./CalendarEventForm";
@@ -49,6 +51,7 @@ type QueueAction = {
   evidence?: string;
   senderName?: string;
   messageId?: string;
+  replyAssessment?: IntelligenceChat["replyAssessment"];
   entity: IntelligenceData["events"][number] | IntelligenceData["changes"][number] | TodoTask | IntelligenceChat;
 };
 
@@ -77,7 +80,7 @@ type IntelligenceViewProps = {
 };
 
 const ACTION_LABELS: Record<ActionKind, string> = {
-  reply: "Reply",
+  reply: "May need your reply",
   event: "Calendar",
   todo: "To-do",
   signal: "New detail",
@@ -116,7 +119,7 @@ function eventLabel(value: number) {
     month: new Intl.DateTimeFormat(undefined, { month: "short" }).format(date).toUpperCase(),
     day: new Intl.DateTimeFormat(undefined, { day: "numeric" }).format(date),
     weekday: new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(date),
-    time: new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date),
+    time: formatDateTime(date, { hour: "numeric", minute: "2-digit" }),
   };
 }
 
@@ -127,13 +130,13 @@ function localDateTime(value: number) {
 }
 
 function todoDateLabel(value: number) {
-  return new Intl.DateTimeFormat(undefined, {
+  return formatDateTime(toMilliseconds(value), {
     month: "short",
     day: "numeric",
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
-  }).format(new Date(toMilliseconds(value)));
+  });
 }
 
 function todoPriorityLabel(priority: TodoTask["priority"]) {
@@ -185,7 +188,7 @@ function eventEnd(event: CalendarEvent) {
   return event.endAt && toMilliseconds(event.endAt) > startAt ? toMilliseconds(event.endAt) : startAt + 60 * 60 * 1_000;
 }
 
-function buildQueue(data: IntelligenceData | undefined, chats: ChatSummary[], contacts: Record<string, ContactPreferences>, hidden: Set<string>): QueueAction[] {
+function buildQueue(data: IntelligenceData | undefined, chats: ChatSummary[], hidden: Set<string>): QueueAction[] {
   if (!data) return [];
   const chatById = new Map(data.chats.map((chat) => [chat.chatId, chat]));
   const actions: QueueAction[] = [];
@@ -195,16 +198,15 @@ function buildQueue(data: IntelligenceData | undefined, chats: ChatSummary[], co
     const actionId = replyActionId(chat);
     if (hidden.has(actionId)) continue;
     const message = chat.lastIncoming?.content || "Recent incoming message";
-    const directQuestion = /[?？]\s*$/.test(message.trim());
-    const relationship = contacts[chat.chatId]?.relationship || (chat.isGroup ? "Group chat" : "Private chat");
+    const replyCopy = replyAssessmentCopy(chat.replyAssessment);
     actions.push({
       id: actionId, kind: "reply", chatId: chat.chatId, contactName: chat.contactName,
       title: `Reply to ${chat.contactName}`,
       summary: message,
-      reason: directQuestion ? `Direct question · ${relationship} · waiting ${relativeTime(chat.lastIncoming?.timestamp || chat.updatedAt).replace(" ago", "")}` : `Latest message is waiting · ${relationship}`,
+      reason: replyCopy?.text || "May need your reply · Recent incoming message",
       timestamp: chat.lastIncoming?.timestamp || chat.updatedAt,
-      score: (chat.isGroup ? 76 : 96) + (directQuestion ? 18 : 0),
-      evidence: message, senderName: chat.lastIncoming?.senderName, messageId: chat.lastIncoming?.messageId, entity: chat,
+      score: (chat.isGroup ? 76 : 96) + (replyCopy?.reason === "Direct question" ? 18 : 0),
+      evidence: message, senderName: chat.lastIncoming?.senderName, messageId: chat.lastIncoming?.messageId, replyAssessment: chat.replyAssessment, entity: chat,
     });
   }
 
@@ -213,7 +215,7 @@ function buildQueue(data: IntelligenceData | undefined, chats: ChatSummary[], co
     actions.push({
       id: `event:${item.chatId}:${item.id}`, kind: "event", chatId: item.chatId, contactName: item.contactName,
       title: item.title,
-      summary: `${new Intl.DateTimeFormat(undefined, { weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(toMilliseconds(item.startAt)))}${item.location ? ` · ${item.location}` : ""}`,
+      summary: `${formatDateTime(toMilliseconds(item.startAt), { weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}${item.location ? ` · ${item.location}` : ""}`,
       reason: `Plan detected in a message · awaiting calendar approval`,
       timestamp: item.startAt, score: 82,
       evidence: item.evidence.excerpt, senderName: item.evidence.senderName, messageId: item.evidence.messageId, entity: item,
@@ -304,10 +306,10 @@ function PeopleMetricModal({
     : "There are no confirmed calendar plans for this conversation.";
   const manageLabel = metric === "knowledge" ? "Manage knowledge" : "Open Calendar";
   const ModalIcon = metric === "knowledge" ? BookOpenCheck : CalendarDays;
-  const dateTime = (value: number) => new Intl.DateTimeFormat(undefined, {
+  const dateTime = (value: number) => formatDateTime(toMilliseconds(value), {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(toMilliseconds(value)));
+  });
 
   return <div className="event-detail-backdrop" role="presentation" onClick={onClose}>
     <section className="intel-person-metric-modal" role="dialog" aria-modal="true" aria-labelledby="intel-person-metric-title" onClick={(event) => event.stopPropagation()}>
@@ -392,7 +394,7 @@ export function IntelligenceView({
   const peopleMetricPlans = peopleMetricSelection
     ? relationshipPlansByChatId.get(peopleMetricSelection.chatId) || []
     : [];
-  const queue = useMemo(() => buildQueue(data, chats, contacts, hiddenActions), [data, chats, contacts, hiddenActions]);
+  const queue = useMemo(() => buildQueue(data, chats, hiddenActions), [data, chats, hiddenActions]);
   const selectedAction = queue.find((item) => item.id === selectedActionId);
   const visibleQueue = queueFilter === "all" ? queue : queue.filter((item) => item.kind === queueFilter);
   const latest = data?.questionHistory[0];
@@ -588,7 +590,7 @@ export function IntelligenceView({
   }), [queue]);
   const briefCopy = queue.length === 0
     ? "You are caught up. AmirOS will keep watching conversations for plans, to-dos, questions, and new relationship signals."
-    : `You have ${queue.length} item${queue.length === 1 ? "" : "s"} worth your attention. ${counts.reply ? `${counts.reply} conversation${counts.reply === 1 ? " needs" : "s need"} a reply` : "No replies are waiting"}${counts.todo ? ` · ${counts.todo} to-do${counts.todo === 1 ? "" : "s"}` : ""}${counts.event ? ` · ${counts.event} calendar review${counts.event === 1 ? "" : "s"}` : ""}.`;
+    : `You have ${queue.length} item${queue.length === 1 ? "" : "s"} worth your attention. ${counts.reply ? `${counts.reply} conversation${counts.reply === 1 ? " may" : "s may"} need your reply` : "No reply follow-ups"}${counts.todo ? ` · ${counts.todo} to-do${counts.todo === 1 ? "" : "s"}` : ""}${counts.event ? ` · ${counts.event} calendar review${counts.event === 1 ? "" : "s"}` : ""}.`;
 
   const renderActionRow = (action: QueueAction, index: number) => {
     const chat = chatById.get(action.chatId);
@@ -707,7 +709,7 @@ export function IntelligenceView({
           })}
         >{summaryCollapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}{summaryCollapsed ? "Show full summary" : "Collapse summary"}</button> : null}
         <div className="intel-person-summary-meta">
-          <span title={new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(toMilliseconds(summaryUpdatedAt!)))}><Clock3 size={12} />Summary generated {relativeTime(summaryUpdatedAt!)}</span>
+          <span title={formatDateTime(toMilliseconds(summaryUpdatedAt!), { dateStyle: "medium", timeStyle: "short" })}><Clock3 size={12} />Summary generated {relativeTime(summaryUpdatedAt!)}</span>
           {summaryNeedsRefresh || summaryNeedsRewrite ? <button disabled={summaryBusy} onClick={() => void generatePersonSummary(person)}>{summaryBusy ? <RefreshCw size={13} className="spin" /> : <RefreshCw size={13} />}{summaryBusy ? "Rewriting…" : summaryNeedsRewrite ? "Rewrite summary" : "Regenerate summary"}{!summaryBusy ? <em>{summaryNeedsRewrite ? "New format" : "New knowledge"}</em> : null}</button> : null}
         </div>
       </div> : <div className="intel-person-summary-missing"><span><Sparkles size={15} /><span><strong>No summary yet</strong><small>Generate one from saved conversation history.</small></span></span><button disabled={summaryBusy} onClick={() => void generatePersonSummary(person)}>{summaryBusy ? <RefreshCw size={13} className="spin" /> : <Sparkles size={13} />}{summaryBusy ? "Generating…" : "Generate summary"}</button></div>}
@@ -729,7 +731,7 @@ export function IntelligenceView({
   />;
 
   return <main className="main-content intelligence-page intelligence-command">
-    <header className="page-header intel-command-header"><div><div className="intel-title-row"><h1>Intelligence</h1><span className="beta-badge intel-beta">Beta</span></div><p>Your personal command center for priorities, people, and next best actions.</p></div><div className="intelligence-sync"><CheckCircle2 size={15} /><span>{loading ? "Syncing knowledge…" : data ? `Synced ${relativeTime(data.generatedAt)}` : "Waiting for knowledge"}</span><button className="icon-button" aria-label="Refresh intelligence" disabled={loading} onClick={() => void onRefresh()}><RefreshCw size={17} className={loading ? "spin" : ""} /></button></div></header>
+    <header className="page-header intel-command-header"><div><div className="intel-title-row"><h1>Intelligence</h1><span className="beta-badge intel-beta">Beta</span></div><p>Your personal command center for priorities, people, and suggested actions.</p></div><div className="intelligence-sync"><CheckCircle2 size={15} /><span>{loading ? "Syncing knowledge…" : data ? `Synced ${relativeTime(data.generatedAt)}` : "Waiting for knowledge"}</span><button className="icon-button" aria-label="Refresh intelligence" disabled={loading} onClick={() => void onRefresh()}><RefreshCw size={17} className={loading ? "spin" : ""} /></button></div></header>
 
     <nav className="intel-tabs" aria-label="Intelligence sections">
       {([
@@ -740,8 +742,8 @@ export function IntelligenceView({
     <div className={`intel-workspace ${selectedAction ? "has-inspector" : ""}`}>
       <div className="intel-primary">
         {activeTab === "briefing" ? <>
-          <section className="intel-briefing"><span className="intel-eyebrow">Today’s briefing</span><h2>{queue.length ? "A few things deserve your attention." : "Everything important is in hand."}</h2><p>{briefCopy}</p><div className="intel-briefing-stats intel-briefing-filters" aria-label="Filter action queue">{(["all", "reply", "todo", "event", "signal"] as QueueFilter[]).map((filter) => <button key={filter} type="button" className={queueFilter === filter ? "active" : ""} aria-pressed={queueFilter === filter} onClick={() => { setQueueFilter(filter); setSelectedActionId(undefined); }}><b>{counts[filter]}</b><span>{filter === "all" ? "All" : filter === "reply" ? "Waiting replies" : filter === "todo" ? "To-dos" : filter === "event" ? "Calendar decisions" : "New signals"}</span></button>)}</div></section>
-          <section className="intel-priority-list"><header><div><span className="intel-eyebrow">Your next best actions</span><h2>Everything that needs a decision</h2></div></header><div className="intel-action-head"><span>Priority</span><span>Conversation & action</span><span>Why this is here</span><span>Actions</span></div>{visibleQueue.map(renderActionRow)}{visibleQueue.length === 0 ? <div className="intel-empty"><CheckCircle2 size={28} /><strong>{queueFilter === "all" ? "You’re caught up" : "No actions in this category"}</strong><p>{queueFilter === "all" ? "New actions will appear when AmirOS finds a question, plan, to-do, or useful detail." : "Try another filter or refresh Intelligence."}</p></div> : null}</section>
+          <section className="intel-briefing"><span className="intel-eyebrow">Today’s briefing</span><h2>{queue.length ? "A few things deserve your attention." : "Everything important is in hand."}</h2><p>{briefCopy}</p><div className="intel-briefing-stats intel-briefing-filters" aria-label="Filter action queue">{(["all", "reply", "todo", "event", "signal"] as QueueFilter[]).map((filter) => <button key={filter} type="button" className={queueFilter === filter ? "active" : ""} aria-pressed={queueFilter === filter} onClick={() => { setQueueFilter(filter); setSelectedActionId(undefined); }}><b>{counts[filter]}</b><span>{filter === "all" ? "All" : filter === "reply" ? "Follow-ups" : filter === "todo" ? "To-dos" : filter === "event" ? "Calendar decisions" : "New signals"}</span></button>)}</div></section>
+          <section className="intel-priority-list"><header><div><span className="intel-eyebrow">Your suggested actions</span><h2>Everything that needs a decision</h2></div></header><div className="intel-action-head"><span>Priority</span><span>Conversation & action</span><span>Why this is here</span><span>Actions</span></div>{visibleQueue.map(renderActionRow)}{visibleQueue.length === 0 ? <div className="intel-empty"><CheckCircle2 size={28} /><strong>{queueFilter === "all" ? "You’re caught up" : "No actions in this category"}</strong><p>{queueFilter === "all" ? "New actions will appear when AmirOS finds a question, plan, to-do, or useful detail." : "Try another filter or refresh Intelligence."}</p></div> : null}</section>
           <section className="intel-changes"><header><div><span className="intel-eyebrow">Since your last visit</span><h2>What changed</h2></div></header><div>{(data?.changes || []).slice(0, 4).map((item) => <button key={item.id} onClick={() => onOpenChat(item.chatId)}><Sparkles size={15} /><span><b>{item.contactName}</b><small>{item.kind.replaceAll("_", " ")}</small><p dir="auto">{item.content}</p></span><ArrowRight size={14} /></button>)}{(data?.changes || []).length === 0 ? <p className="intel-muted-empty">No new relationship details since the last scan.</p> : null}</div></section>
           <section className="intel-snapshot-detail">
             <header><div><span className="intel-eyebrow">Intelligence snapshot</span><h2>The information behind your Overview</h2><p>These are the exact confirmed records used by the Overview snapshot. Open any item to see its source conversation.</p></div></header>
@@ -840,7 +842,7 @@ export function IntelligenceView({
           {people.length === 0 ? <div className="intel-empty"><Users size={28} /><strong>No matching {peopleFilter === "groups" ? "groups" : peopleFilter === "people" ? "people" : "conversations"}</strong><p>Try another filter or search.</p></div> : null}
         </section> : null}
 
-        {activeTab === "history" ? <section className="intel-history-view"><header><div><span className="intel-eyebrow">Ask AmirOS</span><h2>Your question history</h2><p>Search past answers, reopen their evidence, or remove what you no longer need.</p></div><label className="intel-search"><Search size={16} /><input value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} placeholder="Search questions and answers" aria-label="Search question history" />{historySearch ? <button onClick={() => setHistorySearch("")} aria-label="Clear search"><X size={14} /></button> : null}</label></header><div className="intel-history-list">{history.map((item) => <article key={item.id}><span className="question-mark"><MessageCircleQuestion size={18} /></span><div><header><strong dir="auto">{item.question}</strong><time>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(toMilliseconds(item.createdAt)))}</time></header><p dir="auto">{item.answer}</p><footer>{item.sources[0] ? <button onClick={() => onOpenChat(item.sources[0]!.chatId)}><ExternalLink size={13} />Open {item.sources[0]!.contactName}</button> : <small>No direct source cited</small>}<button className="danger" onClick={() => void onDeleteQuestion(item.id)}><X size={13} />Remove</button></footer></div></article>)}</div>{history.length === 0 ? <div className="intel-empty"><CircleHelp size={28} /><strong>No matching questions</strong><p>Ask AmirOS from the floating button on any page.</p></div> : null}</section> : null}
+        {activeTab === "history" ? <section className="intel-history-view"><header><div><span className="intel-eyebrow">Ask AmirOS</span><h2>Your question history</h2><p>Search past answers, reopen their evidence, or remove what you no longer need.</p></div><label className="intel-search"><Search size={16} /><input value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} placeholder="Search questions and answers" aria-label="Search question history" />{historySearch ? <button onClick={() => setHistorySearch("")} aria-label="Clear search"><X size={14} /></button> : null}</label></header><div className="intel-history-list">{history.map((item) => <article key={item.id}><span className="question-mark"><MessageCircleQuestion size={18} /></span><div><header><strong dir="auto">{item.question}</strong><time>{formatDateTime(toMilliseconds(item.createdAt), { dateStyle: "medium", timeStyle: "short" })}</time></header><p dir="auto">{item.answer}</p><footer>{item.sources[0] ? <button onClick={() => onOpenChat(item.sources[0]!.chatId)}><ExternalLink size={13} />Open {item.sources[0]!.contactName}</button> : <small>No direct source cited</small>}<button className="danger" onClick={() => void onDeleteQuestion(item.id)}><X size={13} />Remove</button></footer></div></article>)}</div>{history.length === 0 ? <div className="intel-empty"><CircleHelp size={28} /><strong>No matching questions</strong><p>Ask AmirOS from the floating button on any page.</p></div> : null}</section> : null}
       </div>
 
       <aside className="intel-rail">

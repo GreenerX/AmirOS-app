@@ -45,9 +45,19 @@ describe("Overview polish", () => {
       readFile(new URL("../ui/src/styles.css", import.meta.url), "utf8"),
     ]);
     expect(overview).not.toContain("intelligence-overview-stats");
+    expect(overview).not.toContain('className="todays-focus-title-icon"');
     expect(overview).toContain("isPersonFocus && chat?.avatarUrl");
+    expect(overview).toContain("ensureTodaysFocusIcon");
+    expect(overview).toContain("item.type === \"calendar\"");
+    expect(overview).toContain("formatTime(item.timestamp)");
+    expect(overview).not.toContain("todays-focus-action");
+    expect(overview).not.toContain("overview-action-strip");
     expect(overview).toContain("todaysAgenda.map");
+    expect(overview).toContain("data-event-count");
     expect(overview).toContain("overview-todos-panel");
+    expect(overview).not.toContain("Quick actions");
+    expect(overview).not.toContain('className="panel quick-panel"');
+    expect(overview.indexOf("overview-secondary-grid")).toBeLessThan(overview.indexOf("overview-secondary-activity"));
     expect(overview).toContain("filteredTrackedTodos.map");
     expect(overview).toContain("View full agenda");
     expect(overview).toContain("Nothing is scheduled for today yet.");
@@ -60,6 +70,46 @@ describe("Overview polish", () => {
     expect(styles).toContain(".overview-timeline-event { display: grid;");
     expect(styles).toContain(".todays-focus-item-avatar");
     expect(styles).toContain(".todays-focus-empty");
+    expect(styles).toContain(".overview-page .overview-header { margin-bottom: 0; }");
+    expect(styles).toContain(".overview-page .todays-focus-panel { margin-top: -45px; }");
+    expect(styles).toContain("background: var(--todays-focus-theme)");
+    expect(styles).toContain("min-height: 96px");
+    expect(styles).toContain("grid-template-columns: 62px fit-content(360px)");
+    expect(styles).toContain("height: 360px");
+    expect(styles).toContain("grid-auto-rows: 48px");
+    expect(styles).toContain('.overview-today-agenda[data-event-count="3"]');
+    expect(styles).toContain('.overview-today-agenda[data-event-count="4"]');
+    expect(styles).toContain("--agenda-time-size: 15px");
+    expect(styles).toContain("scrollbar-gutter: stable both-edges");
+    expect(styles).toContain("grid-template-columns: 62px 18px minmax(0, 1fr) 15px");
+    expect(styles).toContain("drop-shadow(0 0 13px rgba(92,239,187,.22))");
+    expect(styles).toContain("width .28s cubic-bezier(.22,.85,.3,1)");
+    expect(styles).toContain("width: 20px; height: 20px");
+    expect(styles).toContain("padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,.12)");
+    expect(styles).toContain("margin: -15px 0 0 67px");
+    expect(styles).toContain(".navigation { gap: 4px; margin-top: 40px; }");
+    expect(styles).toContain(".app-shell.sidebar-collapsed .navigation { width: 100%; margin-top: 25px; }");
     expect(styles).toContain(".overview-agenda-pair > .panel { height: 100%; }");
+    expect(styles).toContain(".overview-secondary-activity { min-height: 250px;");
+  });
+
+  it("keeps the connection in the sidebar and scopes weather/timezones to the Overview header", async () => {
+    const [overview, header, sidebar] = await Promise.all([
+      readFile(new URL("../ui/src/components/Overview.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../ui/src/components/OverviewHeaderExperience.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../ui/src/components/Sidebar.tsx", import.meta.url), "utf8"),
+    ]);
+    expect(overview).toContain("<OverviewHeaderExperience now={deviceTime} />");
+    expect(overview).not.toContain("WhatsApp connected");
+    expect(sidebar).toContain("sidebar-whatsapp-status");
+    expect(sidebar).toContain("sidebar-brand-area");
+    expect(sidebar).toContain("sidebar-collapse-icon");
+    expect(sidebar).not.toContain("<span>{collapsed ? \"Expand\" : \"Collapse\"}</span>");
+    expect(header).toContain("overview-timezone-cards");
+    expect(header).toContain("premium-weather-icon");
+    expect(header).toContain('aria-label="Clock format"');
+    expect(header).toContain('setTimeFormat("24-hour")');
+    expect(header).toContain("Maximum 3 timezones");
+    expect(header).not.toContain("Add timezone placeholder");
   });
 });

@@ -2,6 +2,7 @@ import { Check, Copy, RefreshCw, Search, TerminalSquare } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TerminalStreamStatus } from "../api";
 import type { DashboardData, TerminalLog } from "../types";
+import { formatTime } from "../format";
 import { WhatsAppIcon } from "./BrandIcons";
 
 type TerminalViewProps = {
@@ -76,8 +77,8 @@ export function TerminalView({ connection, loadLog, subscribeLog }: TerminalView
         <pre ref={outputRef} tabIndex={0}>{displayedOutput}</pre>
         <footer>
           <span>Read-only · secrets are redacted</span>
-          <span className={`terminal-stream-status ${streamStatus}`}><span className="terminal-stream-dot" />{streamStatus === "live" ? `Live · checked ${checkedAt ? new Date(checkedAt).toLocaleTimeString() : "now"}` : streamStatus === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span>
-          <span>{log.updatedAt ? `Output changed ${new Date(log.updatedAt).toLocaleTimeString()}` : "Waiting for output"}</span>
+          <span className={`terminal-stream-status ${streamStatus}`}><span className="terminal-stream-dot" />{streamStatus === "live" ? `Live · checked ${checkedAt ? formatTime(checkedAt) : "now"}` : streamStatus === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span>
+          <span>{log.updatedAt ? `Output changed ${formatTime(log.updatedAt)}` : "Waiting for output"}</span>
         </footer>
       </section>
     </main>

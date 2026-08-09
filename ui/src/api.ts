@@ -27,6 +27,7 @@ import type {
   WritingStyleProfile,
   AmirOSUpdateStatus,
 } from "./types";
+import type { CurrentWeather, TimeZoneBackgrounds, TimeZoneCity } from "./timezone-weather";
 
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 const demoManualMemory = new Map<string, ContactMemoryItem[]>();
@@ -96,6 +97,38 @@ export async function summarizeDashboardActionMessage(message: string): Promise<
     method: "POST",
     body: JSON.stringify({ message }),
   });
+}
+
+export async function ensureTodaysFocusIcon(item: {
+  title: string;
+  type: "commitment" | "todo" | "calendar" | "reply";
+}): Promise<{ url: string; cached: boolean }> {
+  if (isDemo) return { url: "", cached: true };
+  return request("/api/todays-focus/icon", { method: "POST", body: JSON.stringify(item) });
+}
+
+export async function searchTimeZoneCities(query: string): Promise<TimeZoneCity[]> {
+  if (isDemo) return [
+    { id: 5128581, name: "New York", country: "United States", admin1: "New York", latitude: 40.71427, longitude: -74.00597, timezone: "America/New_York" },
+    { id: 293397, name: "Tel Aviv", country: "Israel", admin1: "Tel Aviv", latitude: 32.08088, longitude: 34.78057, timezone: "Asia/Jerusalem" },
+    { id: 1850147, name: "Tokyo", country: "Japan", admin1: "Tokyo", latitude: 35.6895, longitude: 139.69171, timezone: "Asia/Tokyo" },
+  ].filter((city) => city.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  return (await request<{ cities: TimeZoneCity[] }>(`/api/timezones/search?q=${encodeURIComponent(query)}`)).cities;
+}
+
+export async function getCurrentWeather(latitude: number, longitude: number, timezone = "auto"): Promise<CurrentWeather> {
+  if (isDemo) return { temperatureC: 28, weatherCode: 2, isDay: true, observedAt: new Date().toISOString(), timezone };
+  const params = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude), timezone });
+  return request(`/api/weather/current?${params.toString()}`);
+}
+
+export async function ensureTimeZoneBackgrounds(city: TimeZoneCity): Promise<{
+  cityKey: string;
+  backgrounds: TimeZoneBackgrounds;
+  cached: boolean;
+}> {
+  if (isDemo) return { cityKey: `demo-${city.id}`, backgrounds: {}, cached: true };
+  return request("/api/timezones/backgrounds", { method: "POST", body: JSON.stringify(city) });
 }
 
 export type BackendRestartStatus = {

@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getCalendarSubscription, type CalendarSubscriptionInfo } from "../api";
 import { calendarSubscriptionBannerHidden, setCalendarSubscriptionBannerHidden } from "../calendar-preferences";
 import { downloadIcs, googleCalendarUrl } from "../calendar-export";
+import { formatDateTime, formatTime } from "../format";
 import type { CalendarEvent, IntelligenceData } from "../types";
 import { CalendarEventForm, type CalendarEventDraft } from "./CalendarEventForm";
 
@@ -29,14 +30,14 @@ type CalendarViewProps = {
 };
 
 function longDate(timestamp: number) {
-  return new Intl.DateTimeFormat(undefined, {
+  return formatDateTime(timestamp, {
     weekday: "long", month: "long", day: "numeric", year: "numeric",
     hour: "numeric", minute: "2-digit",
-  }).format(new Date(timestamp));
+  });
 }
 
 function shortTime(timestamp: number) {
-  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(timestamp));
+  return formatTime(timestamp);
 }
 
 function localDateTime(timestamp: number) {
