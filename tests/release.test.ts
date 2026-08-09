@@ -19,4 +19,11 @@ describe("AmirOS releases", () => {
     expect(new Set(RELEASE_HISTORY.map((release) => release.version)).size).toBe(RELEASE_HISTORY.length);
     expect(RELEASE_HISTORY.every((release) => release.notes.length > 0)).toBe(true);
   });
+
+  it("keeps the production build scoped to runtime code", () => {
+    const config = JSON.parse(readFileSync("tsconfig.json", "utf8")) as { include?: string[] };
+    expect(config.include).toContain("src/**/*.ts");
+    expect(config.include).toContain("scripts/**/*.ts");
+    expect(config.include).not.toContain("tests/**/*.ts");
+  });
 });

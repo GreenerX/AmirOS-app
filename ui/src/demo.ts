@@ -158,16 +158,23 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.7.0",
+    version: "0.7.1",
     releasedAt: "2026-08-09",
-    headline: "A more personal People experience",
+    headline: "A reliable update for every tester",
     notes: [
-      { title: "People is your relationship directory", detail: "Browse relationship cards, Favorites, Quick Views, and dedicated contact profiles." },
-      { title: "Your day is easier to scan", detail: "Today’s Focus, today-only Agenda, and to-dos keep the next useful actions close together." },
-      { title: "Reviewed knowledge stays reviewed", detail: "Approved and dismissed details do not reappear when the same information is worded differently." },
-      { title: "Navigation is more intentional", detail: "Premium sidebar icons clarify active sections, while all-clear status stays put instead of redirecting to People." },
+      { title: "Updates rebuild cleanly", detail: "The update build now compiles the AmirOS service only, so test-only dashboard files cannot stop an update." },
+      { title: "v0.7.0 improvements are ready to install", detail: "People, the clearer Overview, durable knowledge review, and navigation polish can now install as intended." },
     ],
     history: [
+      {
+        version: "0.7.1",
+        releasedAt: "2026-08-09",
+        headline: "A reliable update for every tester",
+        notes: [
+          { title: "Updates rebuild cleanly", detail: "The update build now compiles the AmirOS service only, so test-only dashboard files cannot stop an update." },
+          { title: "v0.7.0 improvements are ready to install", detail: "People, the clearer Overview, durable knowledge review, and navigation polish can now install as intended." },
+        ],
+      },
       {
         version: "0.7.0",
         releasedAt: "2026-08-09",

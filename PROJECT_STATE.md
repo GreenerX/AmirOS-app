@@ -26,6 +26,7 @@
 - `ui/src/intelligence-contact-name.ts` only replaces a phone reference when it matches an existing chat ID, so unknown phone handles are never assigned a guessed identity.
 - `ui/src/components/PeopleExperience.tsx` is a front-end-only view over current chats, intelligence, contacts, commitments, events, to-dos, and summaries; it does not create or modify intelligence records.
 - `src/amiros-state.ts` preserves reviewed insight statuses as durable tombstones. Both immediate local extraction and full AI analysis use the same semantic duplicate detection before creating a new pending item.
+- `tsconfig.json` compiles the runtime service and scripts only. Vitest owns test-file compilation, keeping customer updates from failing on dashboard test-only imports.
 
 ## Run and test
 
@@ -33,5 +34,6 @@
 - `pnpm ui:dev` — run the Vite dashboard.
 - `node_modules/.bin/vitest run tests/amiros-state.test.ts tests/intelligence-learner.test.ts tests/people-experience.test.ts tests/overview-polish.test.ts` — run the focused relationship and Overview tests.
 - `node_modules/.bin/tsc -p ui/tsconfig.json --noEmit` — type-check the dashboard.
+- `pnpm build` — compile the runtime service used by the updater.
 - `pnpm ui:build` — build the production dashboard bundle.
 - `pnpm package:clean` — create a clean, private-data-free customer copy in `release/AmirOS`.

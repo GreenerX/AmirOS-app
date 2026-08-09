@@ -30,23 +30,15 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-09",
-  headline: "A more personal People experience",
+  headline: "A reliable update for every tester",
   notes: [
     {
-      title: "People is now your relationship directory",
-      detail: "Browse the people AmirOS knows through concise relationship cards, Favorites, Quick Views, search, filters, and a dedicated contact profile.",
+      title: "Updates rebuild cleanly",
+      detail: "The update build now compiles the AmirOS service only. Test-only dashboard files no longer prevent an update from finishing.",
     },
     {
-      title: "Your day is clearer at a glance",
-      detail: "Today’s Focus, a today-only Agenda, and the to-do list now present the next useful actions with stronger identity and calmer layout.",
-    },
-    {
-      title: "Reviewed knowledge stays reviewed",
-      detail: "Approved and dismissed relationship details now remain suppressed even when a new message phrases the same information differently.",
-    },
-    {
-      title: "Navigation feels more intentional",
-      detail: "Sidebar icons now have clearer active states, and the all-clear Next best action card no longer redirects to People.",
+      title: "v0.7.0 improvements are ready to install",
+      detail: "The People experience, clearer Overview, durable knowledge review, and navigation polish can now install as intended.",
     },
   ],
 };
@@ -57,6 +49,29 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.7.0",
+    releasedAt: "2026-08-09",
+    headline: "A more personal People experience",
+    notes: [
+      {
+        title: "People is now your relationship directory",
+        detail: "Browse the people AmirOS knows through concise relationship cards, Favorites, Quick Views, search, filters, and a dedicated contact profile.",
+      },
+      {
+        title: "Your day is clearer at a glance",
+        detail: "Today’s Focus, a today-only Agenda, and the to-do list now present the next useful actions with stronger identity and calmer layout.",
+      },
+      {
+        title: "Reviewed knowledge stays reviewed",
+        detail: "Approved and dismissed relationship details now remain suppressed even when a new message phrases the same information differently.",
+      },
+      {
+        title: "Navigation feels more intentional",
+        detail: "Sidebar icons now have clearer active states, and the all-clear Next best action card no longer redirects to People.",
+      },
+    ],
+  },
   {
     version: "0.6.8",
     releasedAt: "2026-08-07",
