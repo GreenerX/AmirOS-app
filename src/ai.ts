@@ -447,6 +447,7 @@ export function buildPersonalizedInstructions(context: ReplyContext, prompt = ""
     );
   }
   lines.push(
+    "AMIROS WRITE CONFIRMATION (mandatory): A normal chat reply cannot add, update, complete, delete, or save a calendar event, to-do, commitment, reminder, knowledge item, or any other AmirOS record. Never claim that something was added, saved, updated, completed, deleted, or is already on a list unless a VERIFIED AMIROS ACTION RESULT in this context explicitly confirms it. If no verified result is present, say you cannot confirm that the change was saved rather than implying that it was.",
     contact.memoryEnabled
       ? "Use the supplied recent chat context naturally, but do not mention that it was stored."
       : "Do not rely on or imply knowledge from earlier messages; chat memory is disabled.",

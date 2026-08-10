@@ -1,5 +1,5 @@
 import type { CalendarEvent } from "./amiros-state.js";
-import { inferCalendarEventFromMessage } from "./amiros-state.js";
+import { hasTodoTaskIntent, inferCalendarEventFromMessage } from "./amiros-state.js";
 import { resolveTemporalRange, type TemporalRange } from "./temporal-memory.js";
 
 export type TimeFormatPreference = "12-hour" | "24-hour";
@@ -19,7 +19,7 @@ export type OwnerActionRequest =
 
 const TEMPORAL_CUE = /\b(?:today|tonight|tomorrow|morning|afternoon|evening|night|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2}|20\d{2}-\d{1,2}-\d{1,2}|\d{1,2}[/.\-]\d{1,2})\b|(?:היום|הערב|מחר|בוקר|צהריים|לילה|יום\s+(?:ראשון|שני|שלישי|רביעי|חמישי|שישי)|שבת|בשעה\s*\d{1,2})/iu;
 const EXPLICIT_CALENDAR_TARGET = /\b(?:calendar|agenda|appointment|event)\b|(?:יומן|לוח שנה|אירוע|תור)/iu;
-const EXPLICIT_TODO_TARGET = /\b(?:to-?do|task)(?:\s+list)?\b|(?:משימה|מטלה|רשימת משימות)/iu;
+const EXPLICIT_TODO_TARGET = /\b(?:to[ -]?do|task)(?:\s+list)?\b|(?:משימה|מטלה|רשימת משימות)/iu;
 const EXPLICIT_KNOWLEDGE_TARGET = /\b(?:knowledge|memory|remember that|save that)\b|(?:ידע|זיכרון|תזכור(?:י)? ש|שמור(?:י)? ש)/iu;
 const EXPLICIT_COMMITMENT_TARGET = /\b(?:commitment|promise)\b|(?:התחייבות|הבטחה)/iu;
 
@@ -37,8 +37,9 @@ function trimCollectionLanguage(value: string, kind: OwnerActionRequest["kind"])
     title = title.replace(/\s+(?:to|in|on)\s+(?:(?:the|my|our)\s+)?(?:calendar|agenda)\s*$/iu, "");
   } else if (kind === "todo") {
     title = title
-      .replace(/^\s*(?:a\s+)?(?:to-?do|task)\s+(?:to\s+)?/iu, "")
-      .replace(/\s+(?:to|in|on)\s+(?:(?:the|my|our)\s+)?(?:to-?do|task)(?:\s+list)?\s*$/iu, "");
+      .replace(/^\s*(?:a\s+)?(?:to[ -]?do|task)\s+(?:to\s+)?/iu, "")
+      .replace(/^\s*(?:i need to|i have to|i should|i must)\s+/iu, "")
+      .replace(/\s+(?:to|in|on)\s+(?:(?:the|my|our)\s+)?(?:to[ -]?do|task)(?:\s+list)?\s*$/iu, "");
   } else if (kind === "knowledge") {
     title = title
       .replace(/^\s*(?:knowledge|memory)\s+(?:that\s+)?/iu, "")
@@ -61,15 +62,16 @@ function dueAtFromCommand(content: string, timestamp: number): number | undefine
 }
 
 /**
- * Recognizes only owner-authored commands that explicitly ask AmirOS to write
- * something. Ordinary statements continue through the reviewable inference
- * pipeline and are never silently approved.
+ * Recognizes owner-authored write commands plus clear personal next-action
+ * statements such as “I need to buy almonds.” This parser is only invoked for
+ * owner messages, so these actions can be saved immediately and truthfully.
  */
 export function parseOwnerActionRequest(content: string, timestamp = Date.now()): OwnerActionRequest | undefined {
   const source = compact(content);
   if (!source) return undefined;
   const imperative = /^(?:please\s+)?(?:add|create|put|save|schedule|remember|remind)\b|^(?:תוסיף|תוסיפי|להוסיף|צור|צרי|שמור|שמרי|תזכור|תזכרי|תזכיר|תזכירי)\b/iu.test(source);
-  if (!imperative) return undefined;
+  const clearOwnerTodo = hasTodoTaskIntent(source);
+  if (!imperative && !clearOwnerTodo) return undefined;
 
   if (EXPLICIT_CALENDAR_TARGET.test(source)) {
     const event = inferCalendarEventFromMessage(source, timestamp);
@@ -90,7 +92,7 @@ export function parseOwnerActionRequest(content: string, timestamp = Date.now())
     };
   }
 
-  if (EXPLICIT_TODO_TARGET.test(source) || /^\s*remind me to\b/iu.test(source)) {
+  if (EXPLICIT_TODO_TARGET.test(source) || /^\s*remind me to\b/iu.test(source) || clearOwnerTodo) {
     return {
       kind: "todo",
       source,

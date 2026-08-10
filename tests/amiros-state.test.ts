@@ -31,6 +31,43 @@ afterEach(() => {
 });
 
 describe("AmirosState", () => {
+  it("restores an explicitly re-added removed to-do and reports it as newly added", () => {
+    const { state } = createState();
+    const chatId = "owner@c.us";
+    const first = state.addOwnerTodo(chatId, {
+      title: "Buy almonds 🥜",
+      evidence: { messageId: "buy-almonds-first", excerpt: "Add buy almonds to my to-do list", timestamp: 1 },
+    });
+    state.updateTodoTask(chatId, first.task.id, { status: "dismissed" });
+
+    const readded = state.addOwnerTodo(chatId, {
+      title: "Buy almonds 🥜",
+      evidence: { messageId: "buy-almonds-again", excerpt: "Add buy almonds to my to-do list", timestamp: 2 },
+    });
+
+    expect(readded).toMatchObject({ created: true, task: { id: first.task.id, status: "open" } });
+    expect(readded.task.evidence.messageId).toBe("buy-almonds-again");
+    expect(state.getTodoTasks(chatId)).toEqual([expect.objectContaining({ id: first.task.id, status: "open" })]);
+  });
+
+  it("reopens an explicitly re-added completed to-do", () => {
+    const { state } = createState();
+    const chatId = "owner@c.us";
+    const first = state.addOwnerTodo(chatId, {
+      title: "Buy almonds 🥜",
+      evidence: { messageId: "buy-almonds-first", excerpt: "Add buy almonds to my to-do list", timestamp: 1 },
+    });
+    state.completeTodoTask(chatId, first.task.id);
+
+    const readded = state.addOwnerTodo(chatId, {
+      title: "Buy almonds 🥜",
+      evidence: { messageId: "buy-almonds-again", excerpt: "Add buy almonds to my to-do list", timestamp: 2 },
+    });
+
+    expect(readded).toMatchObject({ created: false, reopenedFromCompleted: true, task: { id: first.task.id, status: "open" } });
+    expect(readded.task.completedAt).toBeUndefined();
+  });
+
   it("keeps historical calendar events through reloads and later message processing", () => {
     const { state, filePath } = createState();
     const chatId = "calendar-history@c.us";

@@ -7,7 +7,7 @@ import { MODEL_OPTIONS } from "./settings-routes.js";
 
 type SendJson = (response: ServerResponse, status: number, value: unknown) => void;
 
-type VisibleTodoTask = Pick<TodoTask, "status" | "dueAt" | "createdAt" | "updatedAt" | "completedAt">;
+type VisibleTodoTask = Pick<TodoTask, "status" | "priority" | "dueAt" | "createdAt" | "updatedAt" | "completedAt">;
 
 type AiUsageRouteOptions = {
   request: IncomingMessage;

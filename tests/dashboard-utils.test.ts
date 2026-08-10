@@ -26,13 +26,16 @@ describe("dashboard terminal output", () => {
 describe("dashboard to-do visibility", () => {
   it("keeps completed to-dos in the response and places them below active work", () => {
     const todos = visibleTodoTasks([
-      { id: "done", status: "done" as const, createdAt: 10, updatedAt: 30, completedAt: 30 },
-      { id: "dismissed", status: "dismissed" as const, createdAt: 10, updatedAt: 40 },
-      { id: "open", status: "open" as const, createdAt: 20, updatedAt: 20 },
-      { id: "inferred", status: "inferred" as const, createdAt: 15, updatedAt: 15 },
+      { id: "done", status: "done" as const, priority: "high" as const, createdAt: 10, updatedAt: 30, completedAt: 30 },
+      { id: "dismissed", status: "dismissed" as const, priority: "high" as const, createdAt: 10, updatedAt: 40 },
+      { id: "open-low", status: "open" as const, priority: "low" as const, dueAt: 1, createdAt: 20, updatedAt: 20 },
+      { id: "open-high-later", status: "open" as const, priority: "high" as const, dueAt: 30, createdAt: 20, updatedAt: 20 },
+      { id: "open-high-soon", status: "open" as const, priority: "high" as const, dueAt: 10, createdAt: 20, updatedAt: 20 },
+      { id: "open-normal", status: "open" as const, priority: "normal" as const, dueAt: 1, createdAt: 20, updatedAt: 20 },
+      { id: "inferred", status: "inferred" as const, priority: "normal" as const, createdAt: 15, updatedAt: 15 },
     ]);
 
-    expect(todos.map((todo) => todo.id)).toEqual(["inferred", "open", "done"]);
+    expect(todos.map((todo) => todo.id)).toEqual(["inferred", "open-high-soon", "open-high-later", "open-normal", "open-low", "done"]);
     expect(todos.find((todo) => todo.id === "done")).toMatchObject({
       status: "done",
       completedAt: 30,

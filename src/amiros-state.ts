@@ -1421,6 +1421,8 @@ export class AmirosState {
   listTodoTasks(): Array<TodoTask & { chatId: string; contactName?: string }> {
     const statusPriority = (status: TodoTask["status"]) =>
       status === "inferred" ? 0 : status === "open" ? 1 : status === "done" ? 2 : 3;
+    const taskPriority = (priority: TodoTask["priority"]) =>
+      priority === "high" ? 0 : priority === "normal" ? 1 : 2;
     return Object.entries(this.persisted.memories)
       .flatMap(([chatId, memory]) => (memory.todos || [])
         .map((task) => ({
@@ -1430,6 +1432,7 @@ export class AmirosState {
         })))
       .sort((left, right) =>
         statusPriority(left.status) - statusPriority(right.status)
+        || taskPriority(left.priority) - taskPriority(right.priority)
         || (left.dueAt || Number.MAX_SAFE_INTEGER) - (right.dueAt || Number.MAX_SAFE_INTEGER)
         || right.updatedAt - left.updatedAt);
   }
@@ -1667,7 +1670,7 @@ export class AmirosState {
   addOwnerTodo(
     chatId: string,
     input: Pick<TodoTask, "title" | "dueAt" | "evidence"> & { priority?: TodoTask["priority"] },
-  ): { task: TodoTask; created: boolean } {
+  ): { task: TodoTask; created: boolean; reopenedFromCompleted?: boolean } {
     const memory = this.ensureMemory(chatId);
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 1_000);
     const priority = input.priority === "low" || input.priority === "high" ? input.priority : "normal";
@@ -1675,7 +1678,13 @@ export class AmirosState {
     const existing = memory.todos.find((task) => this.isDuplicateTodoTask(task, input));
     const now = Date.now();
     if (existing) {
-      if (existing.status !== "done") existing.status = "open";
+      // A dismissed or completed task is no longer actionable. An explicit
+      // owner request for the same task restores it instead of claiming it is
+      // already in the active to-do list.
+      const restored = existing.status === "dismissed";
+      const reopenedFromCompleted = existing.status === "done";
+      existing.status = "open";
+      if (restored || reopenedFromCompleted) existing.completedAt = undefined;
       existing.title = title;
       existing.priority = priority;
       existing.dueAt = input.dueAt;
@@ -1683,7 +1692,7 @@ export class AmirosState {
       existing.updatedAt = now;
       memory.updatedAt = now;
       this.save();
-      return { task: structuredClone(existing), created: false };
+      return { task: structuredClone(existing), created: restored, reopenedFromCompleted };
     }
     const task: TodoTask = {
       id: randomUUID(), title, status: "open", priority, dueAt: input.dueAt,

@@ -88,7 +88,7 @@ type DashboardOptions = {
   port: number;
 };
 
-type VisibleTodoTask = Pick<TodoTask, "status" | "dueAt" | "createdAt" | "updatedAt" | "completedAt">;
+type VisibleTodoTask = Pick<TodoTask, "status" | "priority" | "dueAt" | "createdAt" | "updatedAt" | "completedAt">;
 
 /**
  * Reviewed to-dos are history, not disposable queue items. Keep completed
@@ -98,6 +98,8 @@ type VisibleTodoTask = Pick<TodoTask, "status" | "dueAt" | "createdAt" | "update
 export function visibleTodoTasks<T extends VisibleTodoTask>(todos: T[]): T[] {
   const statusRank = (status: TodoTask["status"]) =>
     status === "inferred" ? 0 : status === "open" ? 1 : status === "done" ? 2 : 3;
+  const priorityRank = (priority: TodoTask["priority"]) =>
+    priority === "high" ? 0 : priority === "normal" ? 1 : 2;
   return [...todos]
     .filter((todo) => todo.status !== "dismissed")
     .sort((left, right) => {
@@ -106,7 +108,9 @@ export function visibleTodoTasks<T extends VisibleTodoTask>(todos: T[]): T[] {
       if (left.status === "done" && right.status === "done") {
         return (right.completedAt || right.updatedAt) - (left.completedAt || left.updatedAt);
       }
-      return (left.dueAt || left.createdAt) - (right.dueAt || right.createdAt)
+      const priorityDifference = priorityRank(left.priority) - priorityRank(right.priority);
+      if (priorityDifference) return priorityDifference;
+      return (left.dueAt ?? Number.MAX_SAFE_INTEGER) - (right.dueAt ?? Number.MAX_SAFE_INTEGER)
         || right.updatedAt - left.updatedAt;
     });
 }

@@ -118,6 +118,13 @@ export function naturalFailureMessage(error: unknown): string {
   return "Something went wrong while I was putting that answer together, and I can't tell exactly which part failed. I stopped rather than risk giving you the wrong information—please ask me once more.";
 }
 
+function preventUnverifiedAmirosWriteClaim(answer: string): string {
+  const claimsSavedChange = /\b(?:added|saved|updated|completed|deleted|removed|already\s+(?:in|on)|now\s+(?:in|on))\b/iu.test(answer);
+  const namesAmirosRecord = /\b(?:AmirOS|calendar|agenda|to[ -]?do|task|commitment|knowledge|memory|reminder|list)\b/iu.test(answer);
+  if (!claimsSavedChange || !namesAmirosRecord) return answer;
+  return "I couldn’t confirm that AmirOS saved that change. Please send a direct request, for example: “Add buy almonds to my to-do list.”";
+}
+
 export async function downloadAndDecryptWhatsAppMedia(
   message: Message,
   mediaFetch: MediaFetch = fetch,
@@ -505,7 +512,7 @@ export class MessageProcessor {
         ownerKnowledgeRecords: globalContext?.knowledge.length || 0,
         ownerCalendarEvents: globalContext?.events.length || 0,
       });
-      const answer = await this.ai.reply(
+      const aiAnswer = await this.ai.reply(
         chatId,
         command.prompt,
         command.kind === "web",
@@ -545,6 +552,10 @@ export class MessageProcessor {
           timeZone,
         },
       );
+      const hasVerifiedCalendarAction = calendarCapture?.status === "created" || calendarCapture?.status === "already_exists";
+      const answer = message.fromMe && !ownerAction && !hasVerifiedCalendarAction
+        ? preventUnverifiedAmirosWriteClaim(aiAnswer)
+        : aiAnswer;
       if (
         !resolved.explicit &&
         !message.fromMe &&
@@ -670,6 +681,9 @@ export class MessageProcessor {
     }
     if (action.kind === "todo") {
       const result = this.amiros.addOwnerTodo(chatId, { title, priority: todoPriority, dueAt: action.dueAt, evidence });
+      if (result.reopenedFromCompleted) {
+        return `Moved from completed to open in *AmirOS To-dos*: *${result.task.title}*${result.task.dueAt ? ` — ${formatLocalTime(result.task.dueAt, timeFormat)}` : ""}. ✅`;
+      }
       return `${result.created ? "Added to" : "Already in"} *AmirOS To-dos*: *${result.task.title}*${result.task.dueAt ? ` — ${formatLocalTime(result.task.dueAt, timeFormat)}` : ""}. ✅`;
     }
     if (action.kind === "commitment") {

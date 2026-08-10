@@ -66,6 +66,8 @@ describe("AI contact personalization", () => {
     expect(instructions).toContain("do not silently soften it");
     expect(instructions).toContain("Never schedule calls before 10:00");
     expect(instructions).toContain("Direct communicator");
+    expect(instructions).toContain("AMIROS WRITE CONFIRMATION (mandatory)");
+    expect(instructions).toContain("Never claim that something was added");
   });
 
   it("uses explicitly chosen pronouns only in that direct contact's chat", () => {

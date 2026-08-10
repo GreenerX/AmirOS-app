@@ -158,7 +158,7 @@ function readHiddenTodaysFocus(): Set<string> {
 export function Overview({ data, chats, intelligence, onNavigate, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onOpenTodoReview, onTodoStatus, onTodoUpdate, onCalendarStatus, onInsightStatus, onDismissNextBestAction }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
-  const [todoFilter, setTodoFilter] = useState<TodoFilter>("all");
+  const [todoFilter, setTodoFilter] = useState<TodoFilter>("open");
   const [hiddenActionVersion, setHiddenActionVersion] = useState(0);
   const [hiddenTodaysFocus, setHiddenTodaysFocus] = useState<Set<string>>(() => readHiddenTodaysFocus());
   const [todaysFocusIcons, setTodaysFocusIcons] = useState<Record<string, string>>({});
@@ -196,9 +196,12 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
       const rightDone = right.status === "done" ? 1 : 0;
       if (leftDone !== rightDone) return leftDone - rightDone;
       if (leftDone) return toMilliseconds(right.completedAt || right.updatedAt) - toMilliseconds(left.completedAt || left.updatedAt);
-      const leftTime = typeof left.dueAt === "number" ? toMilliseconds(left.dueAt) : toMilliseconds(left.createdAt);
-      const rightTime = typeof right.dueAt === "number" ? toMilliseconds(right.dueAt) : toMilliseconds(right.createdAt);
-      return leftTime - rightTime;
+      const priority = (value: TodoTask["priority"]) => value === "high" ? 0 : value === "normal" ? 1 : 2;
+      const priorityDifference = priority(left.priority) - priority(right.priority);
+      if (priorityDifference) return priorityDifference;
+      const leftTime = typeof left.dueAt === "number" ? toMilliseconds(left.dueAt) : Number.MAX_SAFE_INTEGER;
+      const rightTime = typeof right.dueAt === "number" ? toMilliseconds(right.dueAt) : Number.MAX_SAFE_INTEGER;
+      return leftTime - rightTime || toMilliseconds(right.updatedAt) - toMilliseconds(left.updatedAt);
     }), [intelligence]);
   const todoCounts = useMemo(() => ({
     all: trackedTodos.length,
