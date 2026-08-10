@@ -950,7 +950,8 @@ export class AmirosState {
               .filter((item) => item.content.length > 0);
             const events = (Array.isArray(memory.events) ? memory.events : [])
               .filter((item): item is CalendarEvent => Boolean(item) && typeof item.title === "string" && Number.isFinite(item.startAt))
-              .slice(-2_200)
+              // Calendar is a durable record, not a sliding suggestion feed.
+              // Keep historical events until the owner explicitly deletes them.
               .map((item): CalendarEvent => ({
                 id: typeof item.id === "string" ? item.id.slice(0, 120) : randomUUID(),
                 title: item.title.replace(/\s+/g, " ").trim().slice(0, 240),
@@ -2110,7 +2111,6 @@ export class AmirosState {
     }
     memory.insights = this.dedupeKnowledgeInsights(memory.insights).slice(-200);
     memory.commitments = this.dedupeCommitments(memory.commitments).slice(-200);
-    memory.events = memory.events.slice(-2_200);
     memory.todos = this.dedupeTodoTasks(memory.todos).slice(-400);
     memory.updatedAt = now;
     this.persisted.memories[chatId] = memory;
@@ -2630,7 +2630,6 @@ export class AmirosState {
     this.addTodoSignal(chatId, memory, entry);
     memory.insights = memory.insights.slice(-200);
     memory.commitments = memory.commitments.slice(-200);
-    memory.events = memory.events.slice(-200);
     memory.todos = this.dedupeTodoTasks(memory.todos).slice(-400);
   }
 
@@ -2758,7 +2757,6 @@ export class AmirosState {
         if (entry.role !== "user") continue;
         changed = this.addCalendarSignal(memory, entry) || changed;
       }
-      memory.events = memory.events.slice(-2_200);
     }
     changed = this.dedupeCalendarEventsAcrossChats() || changed;
     if (changed) this.save();

@@ -31,6 +31,49 @@ afterEach(() => {
 });
 
 describe("AmirosState", () => {
+  it("keeps historical calendar events through reloads and later message processing", () => {
+    const { state, filePath } = createState();
+    const chatId = "calendar-history@c.us";
+    const pastStartAt = new Date(2020, 0, 1, 9).getTime();
+    const now = new Date(2026, 7, 10, 10).getTime();
+
+    state.rememberMessage(chatId, {
+      role: "user", content: "Hello", timestamp: now, messageId: "history-seed",
+    });
+    state.addOwnerCalendarEvent(chatId, {
+      title: "Past family dinner",
+      startAt: pastStartAt,
+      allDay: false,
+      evidence: { excerpt: "Past family dinner", timestamp: pastStartAt },
+    });
+
+    const persisted = JSON.parse(readFileSync(filePath, "utf8")) as {
+      memories: Record<string, { events: unknown[] }>;
+    };
+    const eventTimestamp = new Date(2027, 0, 1, 9).getTime();
+    persisted.memories[chatId]!.events.push(...Array.from({ length: 2_201 }, (_, index) => ({
+      id: `later-event-${index}`,
+      title: `Later event ${index}`,
+      startAt: eventTimestamp + index * 60 * 60_000,
+      endAt: eventTimestamp + (index + 1) * 60 * 60_000,
+      allDay: false,
+      status: "confirmed",
+      evidence: { excerpt: `Later event ${index}`, timestamp: eventTimestamp + index * 60 * 60_000 },
+      createdAt: now,
+      updatedAt: now,
+    })));
+    writeFileSync(filePath, JSON.stringify(persisted));
+
+    const reloaded = new AmirosState(filePath);
+    reloaded.rememberMessage(chatId, {
+      role: "user", content: "Just checking in", timestamp: now + 60_000, messageId: "history-follow-up",
+    });
+
+    expect(reloaded.listCalendarEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "Past family dinner", startAt: pastStartAt }),
+    ]));
+  });
+
   it("keeps automatic replies available by default", () => {
     const { state } = createState();
 
