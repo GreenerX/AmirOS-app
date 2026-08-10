@@ -57,6 +57,13 @@ import {
   todaysFocusIconCacheKey,
   todaysFocusIconPrompt,
 } from "./todays-focus-icons.js";
+import {
+  cachedGeneratedImage,
+  compactGeneratedImageToWebp,
+  generatedImageContentType,
+  generatedImageUrl,
+  type GeneratedImageFormat,
+} from "./image-cache.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -1623,34 +1630,42 @@ export function startAmirosDashboard(options: DashboardOptions) {
   const timeZoneBackgroundJobs = new Map<string, Promise<void>>();
   const todaysFocusIconRoot = resolve("work/todays-focus-icons");
   const todaysFocusIconJobs = new Map<string, Promise<void>>();
-  const timeZoneBackgroundUrls = (cityKey: string) => Object.fromEntries(
-    TIME_ZONE_BACKGROUND_PERIODS.map((period) => [period, `/api/timezones/backgrounds/${cityKey}/${period}.png`]),
-  ) as Record<(typeof TIME_ZONE_BACKGROUND_PERIODS)[number], string>;
+  const timeZoneBackgroundUrls = (cityKey: string, directory: string) => Object.fromEntries(
+    TIME_ZONE_BACKGROUND_PERIODS.flatMap((period) => {
+      const cached = cachedGeneratedImage(directory, period);
+      return cached ? [[period, generatedImageUrl(`/api/timezones/backgrounds/${cityKey}`, period, cached.format)]] : [];
+    }),
+  ) as Partial<Record<(typeof TIME_ZONE_BACKGROUND_PERIODS)[number], string>>;
   const ensureTimeZoneBackgrounds = async (city: TimeZoneCity) => {
     const cityKey = timeZoneCityCacheKey(city);
     const directory = join(timeZoneBackgroundRoot, cityKey);
-    const missing = TIME_ZONE_BACKGROUND_PERIODS.filter((period) => !existsSync(join(directory, `${period}.png`)));
+    const missingBackgrounds = () => TIME_ZONE_BACKGROUND_PERIODS.filter((period) => !cachedGeneratedImage(directory, period));
+    const missing = missingBackgrounds();
     if (missing.length > 0) {
       let job = timeZoneBackgroundJobs.get(cityKey);
       if (!job) {
         job = (async () => {
           mkdirSync(directory, { recursive: true, mode: 0o700 });
           // Run sequentially so the existing monthly spend guard is checked
-          // again before each premium GPT Image generation.
-          for (const period of missing) {
+          // again before each image generation. Any existing PNG stays valid;
+          // only periods with no cached image are generated as compact WebP.
+          for (const period of missingBackgrounds()) {
             const image = await ai.generateImage(timeZoneBackgroundPrompt(city, period), {
               model: "gpt-image-2",
               size: "1536x1024",
-              quality: "high",
+              quality: "medium",
+              outputFormat: "webp",
+              outputCompression: 76,
             });
-            writeFileSync(join(directory, `${period}.png`), image, { mode: 0o600 });
+            const compactImage = await compactGeneratedImageToWebp(image, { width: 640, quality: 76 });
+            writeFileSync(join(directory, `${period}.webp`), compactImage, { mode: 0o600 });
           }
         })().finally(() => timeZoneBackgroundJobs.delete(cityKey));
         timeZoneBackgroundJobs.set(cityKey, job);
       }
       await job;
     }
-    return { cityKey, backgrounds: timeZoneBackgroundUrls(cityKey), cached: missing.length === 0 };
+    return { cityKey, backgrounds: timeZoneBackgroundUrls(cityKey, directory), cached: missing.length === 0 };
   };
   let updateCheck: UpdateStatus | undefined;
   let updateCheckExpiresAt = 0;
@@ -1706,8 +1721,8 @@ export function startAmirosDashboard(options: DashboardOptions) {
           return;
         }
         const iconKey = todaysFocusIconCacheKey(item);
-        const iconPath = join(todaysFocusIconRoot, `${iconKey}.png`);
-        const cached = existsSync(iconPath);
+        const existingIcon = cachedGeneratedImage(todaysFocusIconRoot, iconKey);
+        const cached = Boolean(existingIcon);
         if (!cached) {
           let job = todaysFocusIconJobs.get(iconKey);
           if (!job) {
@@ -1716,42 +1731,49 @@ export function startAmirosDashboard(options: DashboardOptions) {
               const image = await ai.generateImage(todaysFocusIconPrompt(item), {
                 model: "gpt-image-1.5",
                 size: "1024x1024",
-                quality: "high",
+                quality: "low",
+                outputFormat: "webp",
+                outputCompression: 72,
               });
-              writeFileSync(iconPath, image, { mode: 0o600 });
+              const compactImage = await compactGeneratedImageToWebp(image, { width: 256, quality: 72 });
+              writeFileSync(join(todaysFocusIconRoot, `${iconKey}.webp`), compactImage, { mode: 0o600 });
             })().finally(() => todaysFocusIconJobs.delete(iconKey));
             todaysFocusIconJobs.set(iconKey, job);
           }
           await job;
         }
-        sendJson(response, 200, { url: `/api/todays-focus/icons/${iconKey}.png`, cached });
+        const icon = cachedGeneratedImage(todaysFocusIconRoot, iconKey);
+        if (!icon) throw new Error("Today’s Focus icon was not written to the cache");
+        sendJson(response, 200, { url: generatedImageUrl("/api/todays-focus/icons", iconKey, icon.format), cached });
         return;
       }
 
-      const todaysFocusIconMatch = pathname.match(/^\/api\/todays-focus\/icons\/([a-f0-9]{24})\.png$/u);
+      const todaysFocusIconMatch = pathname.match(/^\/api\/todays-focus\/icons\/([a-f0-9]{24})\.(png|webp)$/u);
       if (request.method === "GET" && todaysFocusIconMatch) {
-        const iconPath = join(todaysFocusIconRoot, `${todaysFocusIconMatch[1]}.png`);
+        const format = todaysFocusIconMatch[2] as GeneratedImageFormat;
+        const iconPath = join(todaysFocusIconRoot, `${todaysFocusIconMatch[1]}.${format}`);
         if (!existsSync(iconPath)) {
           sendJson(response, 404, { error: "Today’s Focus icon is not ready" });
           return;
         }
         response.writeHead(200, {
-          "content-type": "image/png",
+          "content-type": generatedImageContentType(format),
           "cache-control": "private, max-age=31536000, immutable",
         });
         createReadStream(iconPath).pipe(response);
         return;
       }
 
-      const timeZoneBackgroundMatch = pathname.match(/^\/api\/timezones\/backgrounds\/([a-z0-9-]{10,80})\/(morning|afternoon|night)\.png$/u);
+      const timeZoneBackgroundMatch = pathname.match(/^\/api\/timezones\/backgrounds\/([a-z0-9-]{10,80})\/(morning|afternoon|night)\.(png|webp)$/u);
       if (request.method === "GET" && timeZoneBackgroundMatch) {
-        const imagePath = join(timeZoneBackgroundRoot, timeZoneBackgroundMatch[1]!, `${timeZoneBackgroundMatch[2]}.png`);
+        const format = timeZoneBackgroundMatch[3] as GeneratedImageFormat;
+        const imagePath = join(timeZoneBackgroundRoot, timeZoneBackgroundMatch[1]!, `${timeZoneBackgroundMatch[2]}.${format}`);
         if (!existsSync(imagePath)) {
           sendJson(response, 404, { error: "City background is not ready" });
           return;
         }
         response.writeHead(200, {
-          "content-type": "image/png",
+          "content-type": generatedImageContentType(format),
           "cache-control": "private, max-age=31536000, immutable",
         });
         createReadStream(imagePath).pipe(response);

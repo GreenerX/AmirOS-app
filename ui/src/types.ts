@@ -138,6 +138,7 @@ export type DashboardData = {
       webTriggerPrefix: string;
       imageTriggerPrefix: string;
       modelsTriggerPrefix: string;
+      timeFormat: "12-hour" | "24-hour";
     };
     models?: { text: string; image: string; voice: string };
     ownerProfile: { displayName: string; avatarUrl: string };
@@ -212,6 +213,7 @@ export type MemoryEvidence = {
   excerpt: string;
   senderName?: string;
   timestamp: number;
+  source?: "whatsapp_bot";
 };
 
 export type ContactInsight = {
@@ -247,6 +249,7 @@ export type CalendarEvent = {
   endAt?: number;
   allDay: boolean;
   location?: string;
+  imageUrl?: string;
   status: "inferred" | "confirmed" | "dismissed";
   evidence: MemoryEvidence;
   createdAt: number;

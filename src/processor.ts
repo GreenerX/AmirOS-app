@@ -14,6 +14,15 @@ import { parseCommand, type BotCommand } from "./commands.js";
 import type { AppConfig } from "./config.js";
 import type { IntelligenceLearner } from "./intelligence-learner.js";
 import type { WritingStyleLearner } from "./writing-style.js";
+import {
+  authoritativeClockReply,
+  authoritativeScheduleReply,
+  formatLocalTime,
+  isOwnerClockQuery,
+  ownerScheduleRange,
+  parseOwnerActionRequest,
+} from "./owner-actions.js";
+import { presentTodo } from "./todo-presentation.js";
 
 const { MessageMedia } = whatsappWeb;
 
@@ -205,6 +214,7 @@ export class MessageProcessor {
     private readonly amiros?: AmirosState,
     private readonly writingStyleLearner?: WritingStyleLearner,
     private readonly intelligenceLearner?: IntelligenceLearner,
+    private readonly eventImageGenerator?: (title: string) => Promise<string>,
   ) {}
 
   async process(message: Message, isSelfChat = false): Promise<void> {
@@ -402,6 +412,9 @@ export class MessageProcessor {
       const currentMessageId = message.id?._serialized || message.id?.id;
       const currentMessageTimestamp = message.timestamp ? message.timestamp * 1_000 : Date.now();
       const isExplicitSelfChatCommand = message.fromMe && isSelfChat && resolved.explicit;
+      const ownerAction = message.fromMe
+        ? parseOwnerActionRequest(command.prompt, currentMessageTimestamp)
+        : undefined;
       if (message.fromMe && command.prompt.trim()) {
         this.amiros?.rememberMessage(chatId, {
           role: "user",
@@ -411,13 +424,43 @@ export class MessageProcessor {
           timestamp: currentMessageTimestamp,
           messageId: currentMessageId,
           countAsIncoming: false,
-          extractSignals: !isExplicitSelfChatCommand,
-          excludeFromAutomaticLearning: isExplicitSelfChatCommand,
+          extractSignals: !isExplicitSelfChatCommand && !ownerAction,
+          excludeFromAutomaticLearning: isExplicitSelfChatCommand || Boolean(ownerAction),
         });
-        if (!isExplicitSelfChatCommand) {
+        if (!isExplicitSelfChatCommand && !ownerAction) {
           void this.intelligenceLearner?.analyzeIncoming(chatId);
           await this.refreshWritingStyle(chatId);
         }
+      }
+      if (message.fromMe && ownerAction && this.amiros) {
+        const answer = await this.applyOwnerAction(
+          chatId,
+          ownerAction,
+          currentMessageId,
+          currentMessageTimestamp,
+          ownerName,
+        );
+        await this.sendAuthoritativeReply(message, chatId, answer);
+        return;
+      }
+      const timeFormat = this.amiros?.getSettings().assistant.timeFormat || "12-hour";
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "local time";
+      if (message.fromMe && isOwnerClockQuery(command.prompt)) {
+        await this.sendAuthoritativeReply(
+          message,
+          chatId,
+          authoritativeClockReply(currentMessageTimestamp, timeFormat, timeZone),
+        );
+        return;
+      }
+      const scheduleRange = message.fromMe ? ownerScheduleRange(command.prompt, currentMessageTimestamp) : undefined;
+      if (scheduleRange && this.amiros) {
+        await this.sendAuthoritativeReply(
+          message,
+          chatId,
+          authoritativeScheduleReply(this.amiros.listCalendarEvents(), scheduleRange, currentMessageTimestamp, timeFormat),
+        );
+        return;
       }
       const calendarCapture = this.amiros?.getCalendarCaptureResult(
         chatId,
@@ -494,6 +537,12 @@ export class MessageProcessor {
               .join("\n"),
           ),
           calendarCapture,
+          currentLocalDateTime: new Intl.DateTimeFormat("en-US", {
+            dateStyle: "full",
+            timeStyle: "long",
+            hour12: timeFormat === "12-hour",
+          }).format(new Date(currentMessageTimestamp)),
+          timeZone,
         },
       );
       if (
@@ -553,6 +602,95 @@ export class MessageProcessor {
         countAsIncoming: false,
       });
     }
+  }
+
+  private async applyOwnerAction(
+    chatId: string,
+    action: NonNullable<ReturnType<typeof parseOwnerActionRequest>>,
+    messageId: string | undefined,
+    timestamp: number,
+    ownerName: string,
+  ): Promise<string> {
+    if (!this.amiros) throw new Error("AmirOS storage is unavailable");
+    let title = action.title;
+    let todoPriority: "low" | "normal" | "high" = "normal";
+    if (action.kind === "todo") {
+      const fallback = presentTodo({ source: action.source, title: action.title });
+      try {
+        const generated = await this.ai.generateTodoPresentation({
+          source: action.source,
+          currentTitle: action.title,
+        });
+        const presentation = presentTodo({ source: action.source, ...generated });
+        title = presentation.title;
+        todoPriority = presentation.priority;
+      } catch (error) {
+        title = fallback.title;
+        todoPriority = fallback.priority;
+        console.warn("Owner to-do presentation generation failed; using the deterministic presentation", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else {
+      try {
+        title = await this.ai.generateOwnerActionTitle({
+          kind: action.kind,
+          source: action.source,
+          currentTitle: action.title,
+        });
+      } catch (error) {
+        console.warn("Owner action title generation failed; using the deterministic title", {
+          kind: action.kind,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const evidence = {
+      messageId,
+      excerpt: action.source,
+      senderName: ownerName,
+      timestamp,
+      source: "whatsapp_bot" as const,
+    };
+    const timeFormat = this.amiros.getSettings().assistant.timeFormat;
+    if (action.kind === "calendar") {
+      const result = this.amiros.addOwnerCalendarEvent(chatId, { ...action, title, evidence });
+      if (this.eventImageGenerator && !result.event.imageUrl) {
+        void this.eventImageGenerator(result.event.title)
+          .then((imageUrl) => this.amiros?.updateCalendarEvent(chatId, result.event.id, { imageUrl }))
+          .catch((error) => console.warn("WhatsApp calendar artwork generation failed", {
+            eventId: result.event.id,
+            error: error instanceof Error ? error.message : String(error),
+          }));
+      }
+      const date = new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+        .format(new Date(result.event.startAt));
+      const verb = result.created ? "Added to" : "Already in";
+      return `${verb} *AmirOS Calendar*: *${result.event.title}* — ${date} at ${formatLocalTime(result.event.startAt, timeFormat)}${result.event.location ? ` · ${result.event.location}` : ""}. 📅`;
+    }
+    if (action.kind === "todo") {
+      const result = this.amiros.addOwnerTodo(chatId, { title, priority: todoPriority, dueAt: action.dueAt, evidence });
+      return `${result.created ? "Added to" : "Already in"} *AmirOS To-dos*: *${result.task.title}*${result.task.dueAt ? ` — ${formatLocalTime(result.task.dueAt, timeFormat)}` : ""}. ✅`;
+    }
+    if (action.kind === "commitment") {
+      const result = this.amiros.addOwnerCommitment(chatId, { content: title, dueAt: action.dueAt, evidence });
+      return `${result.created ? "Added to" : "Already in"} *AmirOS Commitments*: *${result.commitment.content}*. 🤝`;
+    }
+    const result = this.amiros.addOwnerKnowledge(chatId, title);
+    return `${result.created ? "Saved to" : "Already in"} *AmirOS Knowledge*: *${result.item.content}*. 🧠`;
+  }
+
+  private async sendAuthoritativeReply(message: Message, chatId: string, answer: string): Promise<void> {
+    this.suppressOutput(chatId, "chat", answer);
+    await message.reply(answer, chatId);
+    this.amiros?.rememberMessage(chatId, {
+      role: "assistant",
+      author: "assistant",
+      content: answer,
+      timestamp: Date.now(),
+      countAsIncoming: false,
+    });
+    this.amiros?.addActivity("text", "WhatsApp Bot update", chatId);
   }
 
   private async getCommand(

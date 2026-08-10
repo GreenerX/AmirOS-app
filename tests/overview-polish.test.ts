@@ -94,10 +94,11 @@ describe("Overview polish", () => {
   });
 
   it("keeps the connection in the sidebar and scopes weather/timezones to the Overview header", async () => {
-    const [overview, header, sidebar] = await Promise.all([
+    const [overview, header, sidebar, styles] = await Promise.all([
       readFile(new URL("../ui/src/components/Overview.tsx", import.meta.url), "utf8"),
       readFile(new URL("../ui/src/components/OverviewHeaderExperience.tsx", import.meta.url), "utf8"),
       readFile(new URL("../ui/src/components/Sidebar.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../ui/src/styles.css", import.meta.url), "utf8"),
     ]);
     expect(overview).toContain("<OverviewHeaderExperience now={deviceTime} />");
     expect(overview).not.toContain("WhatsApp connected");
@@ -106,10 +107,18 @@ describe("Overview polish", () => {
     expect(sidebar).toContain("sidebar-collapse-icon");
     expect(sidebar).not.toContain("<span>{collapsed ? \"Expand\" : \"Collapse\"}</span>");
     expect(header).toContain("overview-timezone-cards");
+    expect(header).toContain("overview-timezone-spacer");
+    expect(header).toContain("data-art-tone={artTone}");
+    expect(header).toContain("useTimeZoneArtTone");
     expect(header).toContain("premium-weather-icon");
     expect(header).toContain('aria-label="Clock format"');
     expect(header).toContain('setTimeFormat("24-hour")');
     expect(header).toContain("Maximum 3 timezones");
     expect(header).not.toContain("Add timezone placeholder");
+    expect(styles).toContain(".overview-timezone-spacer { width: 100%; min-height: 112px; }");
+    expect(styles).toContain("--timezone-overlay-strong");
+    expect(styles).toContain('data-art-tone="bright"');
+    expect(styles).toContain("transparent 84%");
+    expect(styles).toContain("overview-timezone-weather-icon");
   });
 });

@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDueDateQuery, isWithinTemporalRange, resolveTemporalRange } from "./temporal-memory.js";
 import type { CachedReplyAssessment } from "./reply-needed.js";
+import { presentTodo } from "./todo-presentation.js";
 
 export type ReplyMode = "off" | "suggest" | "auto";
 export type OwnerTriggerAccess = "knowledge" | "calendar";
@@ -83,6 +84,8 @@ export type MemoryEvidence = {
   excerpt: string;
   senderName?: string;
   timestamp: number;
+  /** Identifies an authoritative write explicitly requested through WhatsApp. */
+  source?: "whatsapp_bot";
 };
 
 export type ContactInsight = {
@@ -149,6 +152,8 @@ export type CalendarEvent = {
   endAt?: number;
   allDay: boolean;
   location?: string;
+  /** Locally cached generated artwork used by Today’s Focus. */
+  imageUrl?: string;
   status: "inferred" | "confirmed" | "dismissed";
   evidence: MemoryEvidence;
   createdAt: number;
@@ -162,6 +167,7 @@ export type CalendarEventPatch = {
   endAt?: number;
   allDay?: boolean;
   location?: string;
+  imageUrl?: string;
 };
 
 export type CalendarCaptureResult = {
@@ -281,6 +287,7 @@ export type AssistantSettings = {
   webTriggerPrefix: string;
   imageTriggerPrefix: string;
   modelsTriggerPrefix: string;
+  timeFormat: "12-hour" | "24-hour";
 };
 
 export type AmirosDraft = {
@@ -403,6 +410,7 @@ const DEFAULT_STATE: PersistedState = {
     webTriggerPrefix: "!web",
     imageTriggerPrefix: "!image",
     modelsTriggerPrefix: "!models",
+    timeFormat: "12-hour",
   },
   ownerProfile: {
     // This is only used for a fresh install. Existing local profiles are
@@ -913,6 +921,7 @@ export class AmirosState {
                   excerpt: (item.evidence?.excerpt || item.content).replace(/\s+/g, " ").trim().slice(0, 600),
                   senderName: item.evidence?.senderName?.replace(/\s+/g, " ").trim().slice(0, 120),
                   timestamp: Number.isFinite(item.evidence?.timestamp) ? item.evidence.timestamp : Date.now(),
+                  source: item.evidence?.source === "whatsapp_bot" ? "whatsapp_bot" : undefined,
                 },
                 createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
                 updatedAt: Number.isFinite(item.updatedAt) ? item.updatedAt : Date.now(),
@@ -933,6 +942,7 @@ export class AmirosState {
                   excerpt: (item.evidence?.excerpt || item.content).replace(/\s+/g, " ").trim().slice(0, 600),
                   senderName: item.evidence?.senderName?.replace(/\s+/g, " ").trim().slice(0, 120),
                   timestamp: Number.isFinite(item.evidence?.timestamp) ? item.evidence.timestamp : Date.now(),
+                  source: item.evidence?.source === "whatsapp_bot" ? "whatsapp_bot" : undefined,
                 },
                 createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
                 updatedAt: Number.isFinite(item.updatedAt) ? item.updatedAt : Date.now(),
@@ -948,12 +958,14 @@ export class AmirosState {
                 endAt: Number.isFinite(item.endAt) ? item.endAt : undefined,
                 allDay: false,
                 location: item.location?.replace(/\s+/g, " ").trim().slice(0, 240) || undefined,
+                imageUrl: item.imageUrl?.startsWith("/api/todays-focus/icons/") ? item.imageUrl.slice(0, 240) : undefined,
                 status: item.status === "confirmed" || item.status === "dismissed" ? item.status : "inferred",
                 evidence: {
                   messageId: item.evidence?.messageId?.slice(0, 240),
                   excerpt: (item.evidence?.excerpt || item.title).replace(/\s+/g, " ").trim().slice(0, 600),
                   senderName: item.evidence?.senderName?.replace(/\s+/g, " ").trim().slice(0, 120),
                   timestamp: Number.isFinite(item.evidence?.timestamp) ? item.evidence.timestamp : Date.now(),
+                  source: item.evidence?.source === "whatsapp_bot" ? "whatsapp_bot" : undefined,
                 },
                 createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
                 updatedAt: Number.isFinite(item.updatedAt) ? item.updatedAt : Date.now(),
@@ -976,9 +988,20 @@ export class AmirosState {
               .slice(-400)
               .map((item): TodoTask => {
                 const legacy = item as LegacyTodoTask;
+                const rawTitle = (legacy.title || legacy.content || "").replace(/\s+/g, " ").trim().slice(0, 1_000);
+                const evidence = {
+                  messageId: legacy.evidence?.messageId?.slice(0, 240),
+                  excerpt: (legacy.evidence?.excerpt || rawTitle).replace(/\s+/g, " ").trim().slice(0, 600),
+                  senderName: legacy.evidence?.senderName?.replace(/\s+/g, " ").trim().slice(0, 120),
+                  timestamp: Number.isFinite(legacy.evidence?.timestamp) ? legacy.evidence.timestamp : Date.now(),
+                  source: legacy.evidence?.source === "whatsapp_bot" ? "whatsapp_bot" as const : undefined,
+                };
+                const presentation = rawTitle
+                  ? presentTodo({ source: evidence.excerpt, title: rawTitle, priority: legacy.priority })
+                  : undefined;
                 return {
                   id: typeof legacy.id === "string" ? legacy.id.slice(0, 120) : randomUUID(),
-                  title: (legacy.title || legacy.content || "").replace(/\s+/g, " ").trim().slice(0, 1_000),
+                  title: presentation?.title || "",
                   status: legacy.status === "open" || legacy.status === "done" || legacy.status === "dismissed"
                     ? legacy.status
                     : legacy.status === "confirmed"
@@ -986,7 +1009,7 @@ export class AmirosState {
                       : legacy.status === "completed"
                         ? "done"
                         : "inferred",
-                  priority: legacy.priority === "low" || legacy.priority === "high" ? legacy.priority : "normal",
+                  priority: presentation?.priority || "normal",
                   dueAt: Number.isFinite(legacy.dueAt) ? legacy.dueAt : undefined,
                   // Older releases did not record a dedicated completion
                   // timestamp. Their latest update is the best truthful
@@ -998,12 +1021,7 @@ export class AmirosState {
                         ? legacy.updatedAt
                         : Date.now()
                     : undefined,
-                  evidence: {
-                    messageId: legacy.evidence?.messageId?.slice(0, 240),
-                    excerpt: (legacy.evidence?.excerpt || legacy.title || legacy.content || "").replace(/\s+/g, " ").trim().slice(0, 600),
-                    senderName: legacy.evidence?.senderName?.replace(/\s+/g, " ").trim().slice(0, 120),
-                    timestamp: Number.isFinite(legacy.evidence?.timestamp) ? legacy.evidence.timestamp : Date.now(),
-                  },
+                  evidence,
                   createdAt: Number.isFinite(legacy.createdAt) ? legacy.createdAt : Date.now(),
                   updatedAt: Number.isFinite(legacy.updatedAt) ? legacy.updatedAt : Date.now(),
                 };
@@ -1124,6 +1142,7 @@ export class AmirosState {
         assistant: {
           ...DEFAULT_STATE.assistant,
           ...parsed.assistant,
+          timeFormat: parsed.assistant?.timeFormat === "24-hour" ? "24-hour" : "12-hour",
         },
         modelPreset:
           parsed.modelPreset === "economy" ||
@@ -1601,11 +1620,108 @@ export class AmirosState {
     if (patch.location !== undefined) {
       event.location = patch.location.replace(/\s+/g, " ").trim().slice(0, 240) || undefined;
     }
+    if (patch.imageUrl !== undefined && patch.imageUrl.startsWith("/api/todays-focus/icons/")) {
+      event.imageUrl = patch.imageUrl.slice(0, 240);
+    }
     event.allDay = false;
     event.updatedAt = Date.now();
     memory.updatedAt = event.updatedAt;
     this.save();
     return structuredClone(event);
+  }
+
+  addOwnerCalendarEvent(
+    chatId: string,
+    input: Pick<CalendarEvent, "title" | "startAt" | "allDay" | "location" | "evidence">,
+  ): { event: CalendarEvent; created: boolean } {
+    const memory = this.ensureMemory(chatId);
+    const title = input.title.replace(/\s+/g, " ").trim().slice(0, 240);
+    if (!title || !Number.isFinite(input.startAt)) throw new Error("A calendar title and time are required");
+    const existing = memory.events.find((event) => this.isSameCalendarEvent(event, input));
+    const now = Date.now();
+    if (existing) {
+      existing.status = "confirmed";
+      existing.title = title;
+      existing.startAt = input.startAt;
+      existing.allDay = input.allDay;
+      existing.location = input.location?.replace(/\s+/g, " ").trim().slice(0, 240) || undefined;
+      existing.evidence = this.cleanEvidence(input.evidence);
+      existing.updatedAt = now;
+      memory.updatedAt = now;
+      this.save();
+      return { event: structuredClone(existing), created: false };
+    }
+    const event: CalendarEvent = {
+      id: randomUUID(), title, startAt: input.startAt, endAt: input.startAt + 60 * 60_000,
+      allDay: input.allDay,
+      location: input.location?.replace(/\s+/g, " ").trim().slice(0, 240) || undefined,
+      status: "confirmed", evidence: this.cleanEvidence(input.evidence), createdAt: now, updatedAt: now,
+    };
+    memory.events.push(event);
+    memory.updatedAt = now;
+    this.save();
+    return { event: structuredClone(event), created: true };
+  }
+
+  addOwnerTodo(
+    chatId: string,
+    input: Pick<TodoTask, "title" | "dueAt" | "evidence"> & { priority?: TodoTask["priority"] },
+  ): { task: TodoTask; created: boolean } {
+    const memory = this.ensureMemory(chatId);
+    const title = input.title.replace(/\s+/g, " ").trim().slice(0, 1_000);
+    const priority = input.priority === "low" || input.priority === "high" ? input.priority : "normal";
+    if (!title) throw new Error("A to-do title is required");
+    const existing = memory.todos.find((task) => this.isDuplicateTodoTask(task, input));
+    const now = Date.now();
+    if (existing) {
+      if (existing.status !== "done") existing.status = "open";
+      existing.title = title;
+      existing.priority = priority;
+      existing.dueAt = input.dueAt;
+      existing.evidence = this.cleanEvidence(input.evidence);
+      existing.updatedAt = now;
+      memory.updatedAt = now;
+      this.save();
+      return { task: structuredClone(existing), created: false };
+    }
+    const task: TodoTask = {
+      id: randomUUID(), title, status: "open", priority, dueAt: input.dueAt,
+      evidence: this.cleanEvidence(input.evidence), createdAt: now, updatedAt: now,
+    };
+    memory.todos.push(task);
+    memory.updatedAt = now;
+    this.save();
+    return { task: structuredClone(task), created: true };
+  }
+
+  addOwnerCommitment(
+    chatId: string,
+    input: Pick<RelationshipCommitment, "content" | "dueAt" | "evidence">,
+  ): { commitment: RelationshipCommitment; created: boolean } {
+    const memory = this.ensureMemory(chatId);
+    const content = input.content.replace(/\s+/g, " ").trim().slice(0, 1_000);
+    if (!content) throw new Error("A commitment title is required");
+    const candidate = { ...input, content, owner: "me" as const };
+    const existing = memory.commitments.find((item) => this.isDuplicateCommitment(item, candidate));
+    const now = Date.now();
+    if (existing) {
+      if (existing.status !== "done") existing.status = "open";
+      existing.content = content;
+      existing.dueAt = input.dueAt;
+      existing.evidence = this.cleanEvidence(input.evidence);
+      existing.updatedAt = now;
+      memory.updatedAt = now;
+      this.save();
+      return { commitment: structuredClone(existing), created: false };
+    }
+    const commitment: RelationshipCommitment = {
+      id: randomUUID(), content, owner: "me", status: "open", dueAt: input.dueAt,
+      evidence: this.cleanEvidence(input.evidence), createdAt: now, updatedAt: now,
+    };
+    memory.commitments.push(commitment);
+    memory.updatedAt = now;
+    this.save();
+    return { commitment: structuredClone(commitment), created: true };
   }
 
   intelligenceQuestionHistory(limit = 12): IntelligenceQuestionHistoryItem[] {
@@ -1736,7 +1852,7 @@ export class AmirosState {
       insights: Array<Pick<ContactInsight, "kind" | "content" | "confidence" | "evidence"> & { subjectNames?: string[] }>;
       commitments: Array<Pick<RelationshipCommitment, "content" | "owner" | "assigneeName" | "dueAt" | "evidence">>;
       events?: Array<Pick<CalendarEvent, "title" | "startAt" | "allDay" | "location" | "evidence">>;
-      todos?: Array<Pick<TodoTask, "title" | "dueAt" | "evidence">>;
+      todos?: Array<Pick<TodoTask, "title" | "dueAt" | "evidence"> & { priority?: TodoTask["priority"] }>;
     },
   ): {
     source: { insights: ContactInsight[]; commitments: RelationshipCommitment[]; events: CalendarEvent[]; todos: TodoTask[] };
@@ -1871,7 +1987,7 @@ export class AmirosState {
       insights: Array<Pick<ContactInsight, "kind" | "content" | "confidence" | "evidence"> & Pick<ContactInsight, "clusterId" | "subjectChatIds" | "subjectNames">>;
       commitments: Array<Pick<RelationshipCommitment, "content" | "owner" | "assigneeName" | "dueAt" | "evidence">>;
       events?: Array<Pick<CalendarEvent, "title" | "startAt" | "allDay" | "location" | "evidence">>;
-      todos?: Array<Pick<TodoTask, "title" | "dueAt" | "evidence">>;
+      todos?: Array<Pick<TodoTask, "title" | "dueAt" | "evidence"> & { priority?: TodoTask["priority"] }>;
     },
   ): { insights: ContactInsight[]; commitments: RelationshipCommitment[]; events: CalendarEvent[]; todos: TodoTask[] } {
     const memory = this.persisted.memories[chatId] || {
@@ -1926,6 +2042,7 @@ export class AmirosState {
     }
     for (const candidate of (input.todos || []).slice(0, 40)) {
       const title = candidate.title.replace(/\s+/g, " ").trim().slice(0, 1_000);
+      const priority = candidate.priority === "low" || candidate.priority === "high" ? candidate.priority : "normal";
       const sourceEntry = candidate.evidence.messageId
         ? memory.entries.find((entry) => entry.messageId === candidate.evidence.messageId)
         : undefined;
@@ -1943,6 +2060,7 @@ export class AmirosState {
         // completed, or dismissed to-do.
         if (existing.status !== "inferred") continue;
         existing.title = title;
+        existing.priority = priority;
         existing.dueAt = Number.isFinite(candidate.dueAt) && candidate.dueAt! > 0 ? candidate.dueAt : undefined;
         existing.evidence = this.cleanEvidence(candidate.evidence);
         existing.updatedAt = now;
@@ -1952,7 +2070,7 @@ export class AmirosState {
         id: randomUUID(),
         title,
         status: "inferred",
-        priority: "normal",
+        priority,
         dueAt: Number.isFinite(candidate.dueAt) && candidate.dueAt! > 0 ? candidate.dueAt : undefined,
         evidence: this.cleanEvidence(candidate.evidence),
         createdAt: now,
@@ -2549,8 +2667,12 @@ export class AmirosState {
       .slice(0, 1_000);
     if (!title) return false;
     const now = Date.now();
-    const candidate: Pick<TodoTask, "title" | "dueAt" | "evidence"> = {
+    const presentation = presentTodo({
+      source: entry.content,
       title: title.charAt(0).toLocaleUpperCase() + title.slice(1),
+    });
+    const candidate: Pick<TodoTask, "title" | "dueAt" | "evidence"> = {
+      title: presentation.title,
       evidence: this.cleanEvidence({
         messageId: entry.messageId,
         excerpt: entry.content,
@@ -2563,7 +2685,7 @@ export class AmirosState {
       id: randomUUID(),
       title: candidate.title,
       status: "inferred",
-      priority: "normal",
+      priority: presentation.priority,
       evidence: candidate.evidence,
       createdAt: now,
       updatedAt: now,
@@ -2719,12 +2841,22 @@ export class AmirosState {
     return [...targetIds];
   }
 
+  private ensureMemory(chatId: string): ConversationMemory {
+    const memory = this.persisted.memories[chatId] || {
+      entries: [], manualItems: [], insights: [], commitments: [], events: [], todos: [],
+      incomingMessageCount: 0, updatedAt: 0,
+    };
+    this.persisted.memories[chatId] = memory;
+    return memory;
+  }
+
   private cleanEvidence(evidence: MemoryEvidence): MemoryEvidence {
     return {
       messageId: evidence.messageId?.trim().slice(0, 240) || undefined,
       excerpt: evidence.excerpt.replace(/\s+/g, " ").trim().slice(0, 600),
       senderName: evidence.senderName?.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
       timestamp: Number.isFinite(evidence.timestamp) ? evidence.timestamp : Date.now(),
+      source: evidence.source === "whatsapp_bot" ? "whatsapp_bot" : undefined,
     };
   }
 
@@ -3113,6 +3245,20 @@ export class AmirosState {
     this.persisted.memories[chatId] = memory;
     this.save();
     return structuredClone(item);
+  }
+
+  addOwnerKnowledge(chatId: string, content: string): { item: ContactMemoryItem; created: boolean } {
+    const normalized = content.replace(/\s+/g, " ").trim().slice(0, 1_000);
+    if (!normalized) throw new Error("Knowledge cannot be empty");
+    const memory = this.ensureMemory(chatId);
+    const existing = memory.manualItems.find((item) => this.isDuplicateKnowledgeText(item.content, normalized));
+    if (existing) return { item: structuredClone(existing), created: false };
+    const item = { id: randomUUID(), content: normalized, createdAt: Date.now() };
+    memory.manualItems.push(item);
+    memory.manualItems = memory.manualItems.slice(-100);
+    memory.updatedAt = Date.now();
+    this.save();
+    return { item: structuredClone(item), created: true };
   }
 
   removeManualMemory(chatId: string, itemId: string): boolean {

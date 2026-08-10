@@ -20,6 +20,12 @@ describe("AmirOS releases", () => {
     expect(RELEASE_HISTORY.every((release) => release.notes.length > 0)).toBe(true);
   });
 
+  it("keeps release notes within the viewport while their body can scroll", () => {
+    const styles = readFileSync("ui/src/styles.css", "utf8");
+    expect(styles).toContain(".release-notes-dialog { display: flex; flex-direction: column; max-height: min(760px, calc(100dvh - 44px)); }");
+    expect(styles).toContain(".release-notes-dialog .release-notes-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }");
+  });
+
   it("keeps the production build scoped to runtime code", () => {
     const config = JSON.parse(readFileSync("tsconfig.json", "utf8")) as { include?: string[] };
     expect(config.include).toContain("src/**/*.ts");

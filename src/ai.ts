@@ -18,6 +18,7 @@ import { cleanSourceUrl, formatWhatsAppText } from "./whatsapp-format.js";
 import { hasCalendarPlanIntent, isOwnerTodoSource } from "./amiros-state.js";
 import { relationshipLearningInstructions } from "./prompts/relationship-learning.js";
 import type { ReplyAssessmentContextEntry } from "./reply-needed.js";
+import { presentTodo } from "./todo-presentation.js";
 import type {
   ContactMemoryItem,
   ContactPreferences,
@@ -103,6 +104,9 @@ export type ReplyContext = {
   relationshipContext?: string[];
   currentMessageLanguage?: string;
   calendarCapture?: CalendarCaptureResult;
+  /** Authoritative device-local clock context supplied by the message processor. */
+  currentLocalDateTime?: string;
+  timeZone?: string;
 };
 
 export type RelationshipAnalysis = {
@@ -130,6 +134,7 @@ export type RelationshipAnalysis = {
   /** Owner-facing tasks that need a decision before entering the to-do list. */
   todos?: Array<{
     title: string;
+    priority?: "low" | "normal" | "high";
     dueAt?: number;
     evidence: { messageId?: string; excerpt: string; senderName?: string; timestamp: number };
   }>;
@@ -673,7 +678,8 @@ export class AiService {
       instructions:
         `${sanitizeApiText(this.options.instructions)}\n\n` +
         (personalizedInstructions ? `${personalizedInstructions}\n\n` : "") +
-        `Today's date is ${new Date().toISOString().slice(0, 10)}. ` +
+        `The authoritative local date and time is ${sanitizeApiText(context.currentLocalDateTime || new Date().toString())}` +
+        `${context.timeZone ? ` (${sanitizeApiText(context.timeZone)})` : ""}. Never infer a different current date or time. ` +
         "When answering current-events or news questions, distinguish events published today from older recent coverage, state important dates clearly, and prefer authoritative current sources.",
       reasoning: { effort: this.options.reasoningEffort },
       max_output_tokens: this.options.maxOutputTokens,
@@ -855,7 +861,13 @@ export class AiService {
       insights: Array<{ kind: RelationshipAnalysis["insights"][number]["kind"]; content: string; confidence: number; subjectNames: string[]; sourceIndex: number }>;
       commitments: Array<{ content: string; owner: RelationshipCommitment["owner"]; assigneeName: string; dueAt: number; sourceIndex: number }>;
       events: Array<{ title: string; startAt: number; allDay: boolean; location: string; sourceIndex: number }>;
-      todos: Array<{ title: string; dueAt: number; sourceIndex: number }>;
+      todos: Array<{
+        title: string;
+        priority: "low" | "normal" | "high";
+        emoji: string;
+        dueAt: number;
+        sourceIndex: number;
+      }>;
     }>({
       name: "relationship_intelligence",
       instructions: relationshipLearningInstructions(ownerName),
@@ -883,8 +895,8 @@ export class AiService {
             location: { type: "string" }, sourceIndex: { type: "integer" },
           }, required: ["title", "startAt", "allDay", "location", "sourceIndex"] } },
           todos: { type: "array", maxItems: 12, items: { type: "object", additionalProperties: false, properties: {
-            title: { type: "string" }, dueAt: { type: "number" }, sourceIndex: { type: "integer" },
-          }, required: ["title", "dueAt", "sourceIndex"] } },
+            title: { type: "string" }, priority: { type: "string", enum: ["low", "normal", "high"] }, emoji: { type: "string", maxLength: 16 }, dueAt: { type: "number" }, sourceIndex: { type: "integer" },
+          }, required: ["title", "priority", "emoji", "dueAt", "sourceIndex"] } },
         }, required: ["insights", "commitments", "events", "todos"],
       },
     });
@@ -929,11 +941,21 @@ export class AiService {
             ownerName,
           });
         })
-        .map((item) => ({
-          title: item.title,
-          dueAt: item.dueAt > 0 ? item.dueAt : undefined,
-          evidence: evidenceFor(item.sourceIndex),
-        })),
+        .map((item) => {
+          const evidence = evidenceFor(item.sourceIndex);
+          const presentation = presentTodo({
+            source: evidence.excerpt,
+            title: item.title,
+            priority: item.priority,
+            emoji: item.emoji,
+          });
+          return {
+            title: presentation.title,
+            priority: presentation.priority,
+            dueAt: item.dueAt > 0 ? item.dueAt : undefined,
+            evidence,
+          };
+        }),
     };
   }
 
@@ -1103,6 +1125,67 @@ export class AiService {
     return result.title.replace(/\s+/g, " ").trim().slice(0, 120) || input.currentTitle;
   }
 
+  async generateOwnerActionTitle(input: {
+    kind: "calendar" | "todo" | "knowledge" | "commitment";
+    source: string;
+    currentTitle: string;
+  }): Promise<string> {
+    this.assertAvailable();
+    const knowledge = input.kind === "knowledge";
+    const result = await this.structuredResponse<{ title: string }>({
+      name: "owner_authorized_item_title",
+      instructions: knowledge
+        ? "Rewrite the owner's requested memory as one concise factual sentence. Preserve every important fact, do not invent context, and omit command boilerplate."
+        : `Create one clear, natural ${input.kind} title of 2-7 words. Name the actual action or occasion and omit command boilerplate, dates, times, and punctuation at the end.`,
+      input: JSON.stringify(input),
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { title: { type: "string", minLength: 2, maxLength: knowledge ? 180 : 80 } },
+        required: ["title"],
+      },
+    });
+    return result.title.replace(/\s+/g, " ").trim().slice(0, knowledge ? 240 : 120) || input.currentTitle;
+  }
+
+  /**
+   * Gives owner-created tasks a useful short summary while keeping priority as
+   * structured data and an expressive emoji as a consistent trailing detail.
+   */
+  async generateTodoPresentation(input: {
+    source: string;
+    currentTitle: string;
+  }): Promise<{ title: string; priority: "low" | "normal" | "high"; emoji: string }> {
+    this.assertAvailable();
+    const result = await this.structuredResponse<{
+      title: string;
+      priority: "low" | "normal" | "high";
+      emoji: string;
+    }>({
+      name: "todo_presentation",
+      instructions: [
+        "Create a concise, natural owner-facing to-do summary of 2-7 words.",
+        "Keep the specific action and object, but remove command wording, dates, times, and priority wording.",
+        "Classify priority as high only for urgent or critical tasks, low only when explicitly low urgency, otherwise normal.",
+        "Return one fitting emoji by itself. Do not include an emoji, priority, or punctuation at the end of title.",
+        "Do not invent details.",
+      ].join(" "),
+      input: JSON.stringify(input),
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          title: { type: "string", minLength: 2, maxLength: 80 },
+          priority: { type: "string", enum: ["low", "normal", "high"] },
+          emoji: { type: "string", minLength: 1, maxLength: 16 },
+        },
+        required: ["title", "priority", "emoji"],
+      },
+      maxOutputTokens: 180,
+    });
+    return presentTodo({ source: input.source, ...result });
+  }
+
   private async structuredResponse<T>(input: {
     name: string;
     instructions: string;
@@ -1203,6 +1286,8 @@ export class AiService {
     model?: string;
     size?: "1024x1024" | "1536x1024" | "1024x1536";
     quality?: ImageQuality;
+    outputFormat?: "png" | "webp" | "jpeg";
+    outputCompression?: number;
   } = {}): Promise<Buffer> {
     this.assertAvailable();
     const model = overrides.model || this.options.imageModel;
@@ -1213,6 +1298,8 @@ export class AiService {
       n: 1,
       size: overrides.size || "1024x1024",
       quality,
+      ...(overrides.outputFormat ? { output_format: overrides.outputFormat } : {}),
+      ...(overrides.outputCompression !== undefined ? { output_compression: overrides.outputCompression } : {}),
     });
     const encoded = result.data?.[0]?.b64_json;
     if (!encoded) throw new Error("The image API returned no image data");

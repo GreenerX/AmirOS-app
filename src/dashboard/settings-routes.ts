@@ -312,6 +312,11 @@ export async function handleSettingsApiRoute(options: SettingsRouteOptions): Pro
       return true;
     }
     if (patch.assistant) {
+      if (patch.assistant.timeFormat !== undefined &&
+          patch.assistant.timeFormat !== "12-hour" && patch.assistant.timeFormat !== "24-hour") {
+        sendJson(response, 400, { error: "Choose a 12-hour or 24-hour clock" });
+        return true;
+      }
       for (const key of [
         "botTriggerPrefix",
         "webTriggerPrefix",
@@ -324,7 +329,8 @@ export async function handleSettingsApiRoute(options: SettingsRouteOptions): Pro
           return true;
         }
       }
-      Object.assign(config, patch.assistant);
+      const { timeFormat: _timeFormat, ...runtimeAssistantSettings } = patch.assistant;
+      Object.assign(config, runtimeAssistantSettings);
       ai.updateOptions({ webSearchEnabled: config.webSearchEnabled });
     }
     if (patch.models) {

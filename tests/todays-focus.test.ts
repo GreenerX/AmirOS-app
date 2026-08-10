@@ -50,12 +50,18 @@ describe("buildTodaysFocus", () => {
 
   it("includes confirmed calendar events happening today", () => {
     const value = data();
-    value.events.push({ id: "event", chatId: "dani", contactName: "Dani", title: "Dinner with Dani", startAt: at(0, 19), allDay: false, status: "confirmed", evidence, createdAt: at(-1), updatedAt: at(-1) });
+    value.events.push({
+      id: "event", chatId: "dani", contactName: "Dani", title: "Dinner with Dani", startAt: at(0, 19),
+      allDay: false, status: "confirmed", imageUrl: "/api/todays-focus/icons/dinner.png",
+      evidence: { ...evidence, source: "whatsapp_bot" }, createdAt: at(-1), updatedAt: at(-1),
+    });
 
     expect(buildTodaysFocus(value, now)).toEqual(expect.arrayContaining([expect.objectContaining({
       title: "Dinner with Dani",
       type: "calendar",
       detail: "Happening today",
+      imageUrl: "/api/todays-focus/icons/dinner.png",
+      source: "whatsapp_bot",
     })]));
   });
 

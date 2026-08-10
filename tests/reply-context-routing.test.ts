@@ -323,9 +323,6 @@ describe("AI reply context privacy routing", () => {
     } as unknown as AiService;
     const processor = new MessageProcessor(config, ai, state);
 
-    const dashboardTomorrow = state.searchIntelligence("What do I have tomorrow?", 80)
-      .filter((record) => record.kind === "calendar_event")
-      .map((record) => record.id);
     await processor.process(textMessage({
       id: "owner-tomorrow",
       chatId: "dani@c.us",
@@ -333,7 +330,9 @@ describe("AI reply context privacy routing", () => {
       body: "!bot What do I have tomorrow?",
       fromMe: true,
     }), false);
-    expect(contexts[0]?.ownerEvents?.map((event) => event.id)).toEqual(dashboardTomorrow);
+    // Exact schedule requests now use the deterministic calendar path instead
+    // of letting a model omit or shift events.
+    expect(contexts).toHaveLength(0);
 
     const dashboardYesterday = state.searchIntelligence("מה עשיתי אתמול", 80)
       .filter((record) => record.kind === "message")
@@ -345,7 +344,7 @@ describe("AI reply context privacy routing", () => {
       body: "!bot מה עשיתי אתמול",
       fromMe: true,
     }), false);
-    expect(contexts[1]?.ownerKnowledge?.filter((record) => record.kind === "message").map((record) => record.id))
+    expect(contexts[0]?.ownerKnowledge?.filter((record) => record.kind === "message").map((record) => record.id))
       .toEqual(dashboardYesterday);
   });
 

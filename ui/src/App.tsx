@@ -127,7 +127,7 @@ function preserveLocalMessageState(current: ChatMessage[], incoming: ChatMessage
 }
 
 export function App() {
-  const { timeFormat } = useTimeFormat();
+  const { timeFormat, setTimeFormat } = useTimeFormat();
   const [view, setView] = useState<ViewName>("overview");
   const [dashboard, setDashboard] = useState<DashboardData>();
   const [chats, setChats] = useState<ChatSummary[]>([]);
@@ -158,6 +158,14 @@ export function App() {
     queueFilter: "todo";
   }>();
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
+  const hydratedTimeFormat = useRef(false);
+  useEffect(() => {
+    const savedTimeFormat = dashboard?.settings.assistant.timeFormat;
+    if (!hydratedTimeFormat.current && savedTimeFormat) {
+      hydratedTimeFormat.current = true;
+      if (savedTimeFormat !== timeFormat) setTimeFormat(savedTimeFormat);
+    }
+  }, [dashboard?.settings.assistant.timeFormat, setTimeFormat, timeFormat]);
   const [updateStatus, setUpdateStatus] = useState<AmirOSUpdateStatus>();
   const mutationVersion = useRef(0);
 

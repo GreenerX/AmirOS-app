@@ -14,6 +14,8 @@ export type TodaysFocusItem = {
   timestamp: number;
   allDay?: boolean;
   location?: string;
+  imageUrl?: string;
+  source?: "whatsapp_bot";
   replyAssessment?: IntelligenceChat["replyAssessment"];
 };
 
@@ -100,6 +102,8 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
       timestamp: startAt,
       allDay: event.allDay,
       location: event.location,
+      imageUrl: event.imageUrl,
+      source: event.evidence.source,
     });
   }
 

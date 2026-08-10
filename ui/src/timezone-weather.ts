@@ -3,6 +3,7 @@ import type { TimeFormat } from "./time-format";
 
 export type TemperatureUnit = "celsius" | "fahrenheit";
 export type TimeZoneBackgroundPeriod = "morning" | "afternoon" | "night";
+export type TimeZoneBackgroundTone = "bright" | "dark";
 
 export type TimeZoneCity = {
   id: number;
@@ -87,6 +88,15 @@ export function weatherVisual(code: number): WeatherVisual {
   if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) return { condition: "Snow", kind: "snow" };
   if (code >= 95) return { condition: "Thunderstorms", kind: "storm" };
   return { condition: "Current conditions", kind: "partly-cloudy" };
+}
+
+/**
+ * Keep the text-area scrim responsive to the actual city artwork. The UI
+ * samples the selected background and uses this stable threshold to choose a
+ * stronger treatment only for brighter photos.
+ */
+export function timeZoneBackgroundTone(luminance: number): TimeZoneBackgroundTone {
+  return Number.isFinite(luminance) && luminance >= 142 ? "bright" : "dark";
 }
 
 function cityHour(now: Date, timezone: string): number {

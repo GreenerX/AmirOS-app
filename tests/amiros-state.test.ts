@@ -710,6 +710,33 @@ describe("AmirosState", () => {
     expect(new AmirosState(filePath).isKnownAssistantOutput(chatId, "I can help you with that.")).toBe(true);
   });
 
+  it("normalizes existing to-dos into a clean title, stored priority, and trailing emoji", () => {
+    const { filePath } = createState();
+    const timestamp = Date.now();
+    writeFileSync(filePath, JSON.stringify({
+      memories: {
+        "owner@c.us": {
+          entries: [], manualItems: [], insights: [], commitments: [], events: [],
+          todos: [{
+            id: "legacy-melon",
+            title: "Buy a melon with low priority",
+            status: "open",
+            priority: "normal",
+            evidence: { excerpt: "Add buy a melon with low priority to my todo list", timestamp },
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          }],
+          incomingMessageCount: 0,
+          updatedAt: timestamp,
+        },
+      },
+    }));
+
+    expect(new AmirosState(filePath).getTodoTasks("owner@c.us")).toEqual([
+      expect.objectContaining({ title: "Buy a melon 🍈", priority: "low", status: "open" }),
+    ]);
+  });
+
   it("deduplicates equivalent to-dos while preserving reviewed task decisions after a rescan", () => {
     const timestamp = Date.now();
     const dueAt = timestamp + 86_400_000;

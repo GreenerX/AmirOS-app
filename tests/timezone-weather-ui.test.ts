@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cityBackgroundPeriod, temperatureLabel, weatherVisual } from "../ui/src/timezone-weather.js";
+import { cityBackgroundPeriod, temperatureLabel, timeZoneBackgroundTone, weatherVisual } from "../ui/src/timezone-weather.js";
 
 describe("Overview timezone presentation", () => {
   it("converts temperatures without changing the stored Celsius value", () => {
@@ -18,5 +18,10 @@ describe("Overview timezone presentation", () => {
     expect(cityBackgroundPeriod(instant, "America/New_York")).toBe("morning");
     expect(cityBackgroundPeriod(instant, "Asia/Jerusalem")).toBe("afternoon");
     expect(cityBackgroundPeriod(instant, "Asia/Tokyo")).toBe("night");
+  });
+
+  it("uses a stronger text-area contrast treatment only for bright city art", () => {
+    expect(timeZoneBackgroundTone(190)).toBe("bright");
+    expect(timeZoneBackgroundTone(85)).toBe("dark");
   });
 });

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { readTimeFormat, saveTimeFormat, type TimeFormat } from "./time-format";
+import { updateSettings } from "./api";
 
 type TimeFormatContextValue = {
   timeFormat: TimeFormat;
@@ -14,6 +15,7 @@ export function TimeFormatProvider({ children }: { children: ReactNode }) {
   const setTimeFormat = useCallback((value: TimeFormat) => {
     saveTimeFormat(value);
     setStoredTimeFormat(value);
+    void updateSettings({ assistant: { timeFormat: value } }).catch(() => undefined);
   }, []);
   const context = useMemo(() => ({ timeFormat, setTimeFormat }), [setTimeFormat, timeFormat]);
   return <TimeFormatContext.Provider value={context}>{children}</TimeFormatContext.Provider>;

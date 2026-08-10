@@ -158,16 +158,27 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.8.0",
-    releasedAt: "2026-08-09",
-    headline: "A calmer, more useful daily command center",
+    version: "0.8.5",
+    releasedAt: "2026-08-10",
+    headline: "A more dependable, personal daily assistant",
     notes: [
-      { title: "A clearer Overview", detail: "Today’s Focus, the adaptive day Agenda, to-dos, Suggested action, activity, weather, clocks, and sidebar now work together in a cleaner daily layout." },
-      { title: "People feel personal", detail: "Favorites, hidden contacts, relationship summaries, contact profiles, and clearer follow-up and upcoming views make the People directory easier to use." },
-      { title: "Smarter follow-up guidance", detail: "AmirOS combines deterministic reply signals with cached AI review only for uncertain conversations, and shows confidence without overstating certainty." },
-      { title: "More durable knowledge", detail: "Approved or dismissed relationship knowledge stays reviewed instead of returning as a reworded suggestion." },
+      { title: "A polished daily header", detail: "Local weather, saved city clocks, time preferences, and city artwork are clearer, lighter, and more efficient to load." },
+      { title: "Smarter owner actions and to-dos", detail: "Clear WhatsApp commands save directly to AmirOS. New tasks get a concise summary, the right priority, and a fitting emoji." },
+      { title: "More reliable follow-up guidance", detail: "Suggested actions use deterministic reply signals first, with cached AI review only when a conversation is genuinely unclear." },
+      { title: "Release notes that always fit", detail: "What’s new now stays within your screen, with the release details scrolling while its controls remain available." },
     ],
     history: [
+      {
+        version: "0.8.5",
+        releasedAt: "2026-08-10",
+        headline: "A more dependable, personal daily assistant",
+        notes: [
+          { title: "A polished daily header", detail: "Local weather, saved city clocks, time preferences, and city artwork are clearer, lighter, and more efficient to load." },
+          { title: "Smarter owner actions and to-dos", detail: "Clear WhatsApp commands save directly to AmirOS. New tasks get a concise summary, the right priority, and a fitting emoji." },
+          { title: "More reliable follow-up guidance", detail: "Suggested actions use deterministic reply signals first, with cached AI review only when a conversation is genuinely unclear." },
+          { title: "Release notes that always fit", detail: "What’s new now stays within your screen, with the release details scrolling while its controls remain available." },
+        ],
+      },
       {
         version: "0.8.0",
         releasedAt: "2026-08-09",
@@ -374,6 +385,7 @@ export const demoDashboard: DashboardData = {
       webTriggerPrefix: "!web",
       imageTriggerPrefix: "!image",
       modelsTriggerPrefix: "!models",
+      timeFormat: "12-hour",
     },
     models: {
       text: "gpt-5.6-luna",
@@ -453,7 +465,7 @@ export function demoIntelligenceData(): IntelligenceData {
     allDay: false,
     status: "confirmed" as const,
     location: "Studio meeting room",
-    evidence: { messageId: "product-team@demo-incoming", excerpt: "Can we move tomorrow’s launch review to 3 PM?", senderName: "Sana Farooq", timestamp: hourAgo },
+    evidence: { messageId: "product-team@demo-incoming", excerpt: "Can we move tomorrow’s launch review to 3 PM?", senderName: "Sana Farooq", timestamp: hourAgo, source: "whatsapp_bot" as const },
     createdAt: hourAgo,
     updatedAt: hourAgo,
   };

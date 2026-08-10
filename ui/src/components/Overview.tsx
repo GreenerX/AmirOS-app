@@ -231,7 +231,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
       const isBirthday = item.action === "calendar" && /birthday/i.test(item.title);
       const isPersonFocus = isBirthday || item.type === "commitment" || item.action === "reply";
       const chat = isPersonFocus ? chats.find((candidate) => candidate.id === item.chatId) : undefined;
-      if ((isPersonFocus && chat?.avatarUrl) || todaysFocusIcons[item.id]
+      if ((isPersonFocus && chat?.avatarUrl) || item.imageUrl || todaysFocusIcons[item.id]
         || pendingTodaysFocusIcons.current.has(item.id) || failedTodaysFocusIcons.current.has(item.id)) continue;
       pendingTodaysFocusIcons.current.add(item.id);
       void ensureTodaysFocusIcon({ title: item.title, type: item.type })
@@ -426,14 +426,15 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
               </button>
               {isPersonFocus && chat?.avatarUrl
                 ? <ContactAvatar name={item.contactName} src={chat.avatarUrl} className="todays-focus-item-avatar" />
-                : todaysFocusIcons[item.id]
-                  ? <img className="todays-focus-item-icon todays-focus-generated-icon" src={todaysFocusIcons[item.id]} alt="" />
+                : item.imageUrl || todaysFocusIcons[item.id]
+                  ? <img className="todays-focus-item-icon todays-focus-generated-icon" src={item.imageUrl || todaysFocusIcons[item.id]} alt="" />
                 : <span className="todays-focus-item-icon" aria-hidden="true">{itemIcon}</span>}
               <div className="todays-focus-item-copy">
                 <small>{category}</small>
                 <span className="overview-reminder-copy">
                   <strong dir="auto">{item.title}</strong>
                   <span dir="auto">{context}</span>
+                  {item.source === "whatsapp_bot" ? <span className="whatsapp-origin"><Bot size={12} /> Added by WhatsApp Bot</span> : null}
                   {replyCopy ? <span className="reply-assessment-indicator">{replyCopy.text}</span> : null}
                 </span>
               </div>

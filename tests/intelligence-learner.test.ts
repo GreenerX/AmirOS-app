@@ -78,7 +78,8 @@ describe("IntelligenceLearner", () => {
       commitments: [],
       events: [],
       todos: [{
-        title: "Call the dentist about tomorrow's appointment",
+        title: "Call the dentist 📞",
+        priority: "high" as const,
         dueAt,
         evidence: {
           messageId: "todo-incoming-1",
@@ -94,7 +95,8 @@ describe("IntelligenceLearner", () => {
 
     expect(state.getTodoTasks(chatId)).toEqual([
       expect.objectContaining({
-        title: "Call the dentist about tomorrow's appointment",
+        title: "Call the dentist 📞",
+        priority: "high",
         status: "inferred",
         dueAt,
         evidence: expect.objectContaining({ messageId: "todo-incoming-1", senderName: "Dani" }),

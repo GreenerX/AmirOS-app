@@ -25,20 +25,22 @@ import {
   saveTemperatureUnit,
   saveTimeZoneCities,
   temperatureLabel,
+  timeZoneBackgroundTone,
   weatherVisual,
   type CurrentWeather,
   type SavedTimeZoneCity,
   type TemperatureUnit,
+  type TimeZoneBackgroundPeriod,
   type TimeZoneCity,
 } from "../timezone-weather";
 
 const WEATHER_REFRESH_MS = 10 * 60_000;
 
-function WeatherIcon({ weather, size = 34 }: { weather?: CurrentWeather; size?: number }) {
+function WeatherIcon({ weather, size = 34, className = "" }: { weather?: CurrentWeather; size?: number; className?: string }) {
   const visual = weather ? weatherVisual(weather.weatherCode) : { kind: "partly-cloudy" as const };
   const isDay = weather?.isDay ?? true;
   const iconSize = Math.round(size * .86);
-  return <span className={`premium-weather-icon weather-${visual.kind} ${isDay ? "is-day" : "is-night"}`} style={{ width: size, height: size }} aria-hidden="true">
+  return <span className={`premium-weather-icon weather-${visual.kind} ${isDay ? "is-day" : "is-night"} ${className}`} style={{ width: size, height: size }} aria-hidden="true">
     {visual.kind === "clear"
       ? isDay ? <Sun className="weather-layer weather-sun" size={iconSize} /> : <Moon className="weather-layer weather-moon" size={iconSize} />
       : visual.kind === "partly-cloudy"
@@ -53,6 +55,75 @@ function WeatherIcon({ weather, size = 34 }: { weather?: CurrentWeather; size?: 
                 ? <CloudSnow className="weather-layer weather-snow" size={iconSize} />
                 : <CloudLightning className="weather-layer weather-storm" size={iconSize} />}
   </span>;
+}
+
+function fallbackArtTone(period: TimeZoneBackgroundPeriod) {
+  return period === "night" ? "dark" : "bright";
+}
+
+function useTimeZoneArtTone(background: string | undefined, period: TimeZoneBackgroundPeriod) {
+  const [tone, setTone] = useState(() => fallbackArtTone(period));
+
+  useEffect(() => {
+    const fallback = fallbackArtTone(period);
+    setTone(fallback);
+    if (!background) return;
+
+    let active = true;
+    const image = new Image();
+    image.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = 24;
+        canvas.height = 14;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (!context) return;
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const pixels = context.getImageData(0, 0, Math.ceil(canvas.width * .65), canvas.height).data;
+        let totalLuminance = 0;
+        let samples = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+          if (pixels[index + 3] === 0) continue;
+          totalLuminance += pixels[index] * .2126 + pixels[index + 1] * .7152 + pixels[index + 2] * .0722;
+          samples += 1;
+        }
+        if (active && samples > 0) setTone(timeZoneBackgroundTone(totalLuminance / samples));
+      } catch {
+        // Keep the period-based contrast fallback if the browser cannot sample an image.
+      }
+    };
+    image.src = background;
+    return () => {
+      active = false;
+    };
+  }, [background, period]);
+
+  return tone;
+}
+
+type TimeZoneCardProps = {
+  city: SavedTimeZoneCity;
+  now: Date;
+  weather?: CurrentWeather;
+  unit: TemperatureUnit;
+  timeFormat: ReturnType<typeof useTimeFormat>["timeFormat"];
+  generating: boolean;
+  onRemove: (cityId: number) => void;
+};
+
+function TimeZoneCard({ city, now, weather, unit, timeFormat, generating, onRemove }: TimeZoneCardProps) {
+  const period = cityBackgroundPeriod(now, city.timezone);
+  const background = city.backgrounds?.[period];
+  const artTone = useTimeZoneArtTone(background, period);
+
+  return <article className={`overview-timezone-card period-${period} ${background ? "has-background" : ""}`} data-art-tone={artTone}>
+    <span className="overview-timezone-art" aria-hidden="true">{(["morning", "afternoon", "night"] as const).map((time) => city.backgrounds?.[time] ? <span className={time === period ? "active" : ""} style={{ backgroundImage: `url(${JSON.stringify(city.backgrounds[time])})` }} key={time} /> : null)}</span>
+    <button className="overview-timezone-remove" type="button" aria-label={`Remove ${city.name}`} title={`Remove ${city.name}`} onClick={() => onRemove(city.id)}><X size={14} /></button>
+    <span className="overview-timezone-city">{city.name}</span>
+    <time dateTime={now.toISOString()}>{cityTimeLabel(now, city.timezone, timeFormat)}</time>
+    <span className="overview-timezone-weather"><WeatherIcon weather={weather} size={22} className="overview-timezone-weather-icon" />{weather ? temperatureLabel(weather.temperatureC, unit) : "Updating…"}</span>
+    {!background && generating ? <span className="overview-timezone-generating"><LoaderCircle className="spin" size={12} />Creating city art</span> : null}
+  </article>;
 }
 
 function updateAndPersistCities(
@@ -243,20 +314,17 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
         </section>
       </div>
       {cities.length > 0 ? <section className="overview-timezone-cards" aria-label="Saved timezones">
-        {cities.map((city) => {
-          const weather = cityWeather[city.id];
-          const period = cityBackgroundPeriod(now, city.timezone);
-          const background = city.backgrounds?.[period];
-          return <article className={`overview-timezone-card period-${period} ${background ? "has-background" : ""}`} key={city.id}>
-            <span className="overview-timezone-art" aria-hidden="true">{(["morning", "afternoon", "night"] as const).map((time) => city.backgrounds?.[time] ? <span className={time === period ? "active" : ""} style={{ backgroundImage: `url(${JSON.stringify(city.backgrounds[time])})` }} key={time} /> : null)}</span>
-            <button className="overview-timezone-remove" type="button" aria-label={`Remove ${city.name}`} title={`Remove ${city.name}`} onClick={() => removeCity(city.id)}><X size={14} /></button>
-            <span className="overview-timezone-city">{city.name}</span>
-            <time dateTime={now.toISOString()}>{cityTimeLabel(now, city.timezone, timeFormat)}</time>
-            <span className="overview-timezone-weather"><WeatherIcon weather={weather} size={22} />{weather ? temperatureLabel(weather.temperatureC, unit) : "Updating…"}</span>
-            {!background && backgroundRequests.current.has(city.id) ? <span className="overview-timezone-generating"><LoaderCircle className="spin" size={12} />Creating city art</span> : null}
-          </article>;
-        })}
-      </section> : null}
+        {cities.map((city) => <TimeZoneCard
+          key={city.id}
+          city={city}
+          now={now}
+          weather={cityWeather[city.id]}
+          unit={unit}
+          timeFormat={timeFormat}
+          generating={backgroundRequests.current.has(city.id)}
+          onRemove={removeCity}
+        />)}
+      </section> : <div className="overview-timezone-spacer" aria-hidden="true" />}
     </div>
 
     {pickerOpen ? <div className="timezone-picker-backdrop" role="presentation" onClick={() => setPickerOpen(false)}>

@@ -29,24 +29,24 @@ export const AMIROS_VERSION = packageVersion();
 
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
-  releasedAt: "2026-08-09",
-  headline: "A calmer, more useful daily command center",
+  releasedAt: "2026-08-10",
+  headline: "A more dependable, personal daily assistant",
   notes: [
     {
-      title: "A clearer Overview",
-      detail: "Today’s Focus, the adaptive day Agenda, to-dos, Suggested action, activity, weather, clocks, and sidebar now work together in a cleaner daily layout.",
+      title: "A polished daily header",
+      detail: "Local weather, saved city clocks, time preferences, and city artwork are clearer, lighter, and more efficient to load.",
     },
     {
-      title: "People feel personal",
-      detail: "Favorites, hidden contacts, relationship summaries, contact profiles, and clearer follow-up and upcoming views make the People directory easier to use.",
+      title: "Smarter owner actions and to-dos",
+      detail: "Clear WhatsApp commands save directly to AmirOS. New tasks get a concise summary, the right priority, and a fitting emoji.",
     },
     {
-      title: "Smarter follow-up guidance",
-      detail: "AmirOS combines deterministic reply signals with cached AI review only for uncertain conversations, and shows confidence without overstating certainty.",
+      title: "More reliable follow-up guidance",
+      detail: "Suggested actions use deterministic reply signals first, with cached AI review only when a conversation is genuinely unclear.",
     },
     {
-      title: "More durable knowledge",
-      detail: "Approved or dismissed relationship knowledge stays reviewed instead of returning as a reworded suggestion.",
+      title: "Release notes that always fit",
+      detail: "What’s new now stays within your screen, with the release details scrolling while its controls remain available.",
     },
   ],
 };
@@ -57,6 +57,29 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.8.0",
+    releasedAt: "2026-08-09",
+    headline: "A calmer, more useful daily command center",
+    notes: [
+      {
+        title: "A clearer Overview",
+        detail: "Today’s Focus, the adaptive day Agenda, to-dos, Suggested action, activity, weather, clocks, and sidebar now work together in a cleaner daily layout.",
+      },
+      {
+        title: "People feel personal",
+        detail: "Favorites, hidden contacts, relationship summaries, contact profiles, and clearer follow-up and upcoming views make the People directory easier to use.",
+      },
+      {
+        title: "Smarter follow-up guidance",
+        detail: "AmirOS combines deterministic reply signals with cached AI review only for uncertain conversations, and shows confidence without overstating certainty.",
+      },
+      {
+        title: "More durable knowledge",
+        detail: "Approved or dismissed relationship knowledge stays reviewed instead of returning as a reworded suggestion.",
+      },
+    ],
+  },
   {
     version: "0.7.1",
     releasedAt: "2026-08-09",

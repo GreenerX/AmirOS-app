@@ -6,6 +6,12 @@ import { IntelligenceLearner } from "./intelligence-learner.js";
 import { WritingStyleLearner } from "./writing-style.js";
 import { MessageProcessor } from "./processor.js";
 import { createWhatsAppClient } from "./whatsapp.js";
+import { todaysFocusIconCacheKey, todaysFocusIconPrompt } from "./todays-focus-icons.js";
+import {
+  cachedGeneratedImage,
+  compactGeneratedImageToWebp,
+  generatedImageUrl,
+} from "./image-cache.js";
 
 const config = loadConfig();
 const amirosState = new AmirosState();
@@ -52,7 +58,39 @@ const ai = new AiService({
 });
 const writingStyleLearner = new WritingStyleLearner(amirosState, ai);
 const intelligenceLearner = new IntelligenceLearner(amirosState, ai);
-const processor = new MessageProcessor(config, ai, amirosState, writingStyleLearner, intelligenceLearner);
+const eventImageJobs = new Map<string, Promise<string>>();
+const generateEventImage = (title: string): Promise<string> => {
+  const item = { title, type: "calendar" as const };
+  const key = todaysFocusIconCacheKey(item);
+  const directory = resolve("work/todays-focus-icons");
+  const cached = cachedGeneratedImage(directory, key);
+  if (cached) return Promise.resolve(generatedImageUrl("/api/todays-focus/icons", key, cached.format));
+  const current = eventImageJobs.get(key);
+  if (current) return current;
+  const job = (async () => {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const image = await ai.generateImage(todaysFocusIconPrompt(item), {
+      model: "gpt-image-1.5",
+      size: "1024x1024",
+      quality: "low",
+      outputFormat: "webp",
+      outputCompression: 72,
+    });
+    const compactImage = await compactGeneratedImageToWebp(image, { width: 256, quality: 72 });
+    writeFileSync(resolve(directory, `${key}.webp`), compactImage, { mode: 0o600 });
+    return generatedImageUrl("/api/todays-focus/icons", key, "webp");
+  })().finally(() => eventImageJobs.delete(key));
+  eventImageJobs.set(key, job);
+  return job;
+};
+const processor = new MessageProcessor(
+  config,
+  ai,
+  amirosState,
+  writingStyleLearner,
+  intelligenceLearner,
+  generateEventImage,
+);
 const whatsapp = createWhatsAppClient(config, (message, isSelfChat) =>
   processor.process(message, isSelfChat),
   amirosState,
@@ -98,3 +136,5 @@ try {
   console.error("WhatsApp could not start; closing the local service cleanly.", error);
   await shutdown(1);
 }
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
