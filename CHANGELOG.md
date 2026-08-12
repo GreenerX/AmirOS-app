@@ -1,28 +1,117 @@
-# AmirOS release notes
+# Changelog
 
-## v0.3.0 — August 5, 2026
+## [0.9.0] - Upcoming
+
+### Added
+
+- Added a People-centered Contact Intelligence experience that uses existing AmirOS contacts, intelligence, calendar events, to-dos, commitments, and relationship summaries.
+- Added Contact Intelligence profile pages with relationship summaries, recent interaction, upcoming plans, open commitments, open to-dos, follow-ups, important topics, and conversation timeline.
+- Added a shared deterministic temporal classifier for owner/self-chat actions, covering calendar events, to-dos, commitments, due dates, start times, and clarification flows.
+- Added owner-action lifecycle commands for completing, cancelling, renaming, rescheduling, reprioritizing, and annotating existing AmirOS records.
+- Added an owner-action end-to-end QA harness that exercises incoming owner messages through persistence and confirmation.
+- Added canonical memory fields for current, historical, temporary, reinforced, replaced, and autonomously confirmed relationship knowledge.
+- Added automatic memory maintenance for type-aware freshness, repeated evidence, profile invalidation, and current-first retrieval.
+- Added backend and frontend build freshness checks so stale compiled backend or dashboard code is detected before runtime use.
+
+### Changed
+
+- Replaced the old Intelligence landing experience with People as the primary relationship directory while reusing the existing AmirOS intelligence model.
+- Changed owner/self-chat write requests so explicit commands can persist directly to Calendar, To-dos, Knowledge, and Commitments through verified write paths.
+- Changed generated contact profiles so stale profile prose is ignored when canonical knowledge has materially changed.
+- Changed Ask AmirOS and reply grounding to prefer current canonical knowledge and qualify stale or uncertain knowledge when it is still relevant.
+- Changed relationship-learning prompts to produce semantic topic titles, canonical keys, validity, and evolution metadata for new insights.
+- Changed startup and launch scripts to use freshness-aware build wrappers instead of directly launching potentially stale `dist` output.
+
+### Improved
+
+- Improved People and Contact Intelligence presentation with more readable cards, contact avatars, compact relationship summaries, favorites, hidden contacts, quick views, and removable relationship items.
+- Improved owner action reliability for dated to-dos, clarification replies, exact calendar times, duplicate protection, and truthful confirmations.
+- Improved to-do presentation with concise AI-assisted titles, priority extraction, and consistent trailing emoji handling.
+- Improved relationship commitment reconciliation so repeated or reworded obligations merge into one record with preserved evidence history.
+- Improved memory retrieval so current facts rank ahead of older or historical facts, while historical facts remain available for history-oriented questions.
+- Improved contact summaries so People can project newer canonical facts immediately, even before a full profile regeneration.
+- Improved dashboard diagnostics and health checks to verify that the browser receives the current stamped UI build.
+
+### Fixed
+
+- Fixed clarified owner actions that were understood but failed to persist or verify.
+- Fixed calendar event time preservation for explicit morning, afternoon, and evening times.
+- Fixed cases where completed to-dos were treated as already present instead of being reopened when the owner asked to add them again.
+- Fixed stale relationship knowledge returning as new pending suggestions after approval or dismissal.
+- Fixed outdated profile summaries contradicting newer canonical knowledge in People and Ask AmirOS context.
+- Fixed backend/dashboard mismatch cases where tests passed against TypeScript source while the live runtime used older compiled JavaScript.
+
+### Infrastructure
+
+- Added `scripts/build-backend.mjs`, `scripts/build-ui.mjs`, `scripts/build-freshness.mjs`, and `scripts/start-backend.mjs`.
+- Updated the watchdog, launcher, clean-release packaging, installer upgrade test, dashboard health check, and backend restart status handling for build freshness.
+- Added UI build fingerprint headers and cache-control behavior so stale dashboard assets are easier to detect.
+
+### Testing
+
+- Added focused tests for temporal classification, owner actions, lifecycle commands, memory evolution, build freshness, UI build runtime behavior, relationship learning prompts, and People presentation.
+- Added owner-action E2E tests for clarification, persistence, lifecycle mutations, ambiguity handling, duplicate protection, failed writes, and truthful confirmations.
+- Verified the current state with the full Vitest suite, backend typecheck, frontend typecheck, backend build, frontend build, and Git whitespace checks before committing.
+
+### Known Limitations
+
+- Live WhatsApp behavior still requires WhatsApp authentication and the configured local runtime.
+- Autonomous memory evolution is intentionally conservative for uncertain, sensitive, group-member, hearsay, and temporary claims.
+- Contact Intelligence still relies on the existing AmirOS intelligence data model; this release does not introduce a separate intelligence backend or approval system.
+
+## [0.8.5] - 2026-08
+
+- Improved overview layout, Today's Focus, Agenda, to-dos, weather, timezone cards, release notes sizing, and owner-created task/calendar behavior.
+- Preserved past calendar events instead of removing them from calendar history.
+- Improved owner to-do handling for completed items, priority ordering, duplicate checks, and reply guidance.
+
+## [0.8.0] - 2026-08
+
+- Added the redesigned Overview header with local weather, live clock, unit and time-format preferences, and saved timezone cards.
+- Added generated and cached city artwork for timezone cards.
+- Improved sidebar navigation, WhatsApp connection placement, Overview layout, Agenda sizing, and card alignment.
+
+## [0.7.1] - 2026-08
+
+- Fixed updater builds so customer updates compile the runtime service without test-only TypeScript failures.
+
+## [0.7.0] - 2026-08
+
+- Made People the primary relationship directory.
+- Added a Contact Intelligence flow over existing relationship data.
+- Improved crowded calendar days, Today's Focus empty states, and contact names in Intelligence.
+
+## [0.6.9] - 2026-08
+
+- Polished Today's Focus themes and Overview presentation.
+
+## [0.6.8] - 2026-08
+
+- Fixed release version identity and release history behavior.
+
+## [0.3.0] - 2026-08-05
 
 - Added a complete in-app setup flow: add an OpenAI API key, generate a WhatsApp QR code, and choose knowledge tracking before opening the dashboard.
 - Added a default knowledge-tracking choice for new chats, plus an approval area on the Overview page for chats that need a decision.
-- Added a simple version history inside the in-app “What’s new” window.
+- Added a simple version history inside the in-app "What's new" window.
 - Improved service startup recovery when an old background-service record remains after an interrupted session.
 
-## v0.2.2 — August 4, 2026
+## [0.2.2] - 2026-08-04
 
 - Made `stop-whatsapp-bot.command` reliably locate and stop AmirOS if its PID record is unavailable.
 - The recommended everyday controls are now `Open AmirOS.command` to launch and `stop-whatsapp-bot.command` to stop.
 
-## v0.2.1 — August 4, 2026
+## [0.2.1] - 2026-08-04
 
 - Fixed the Finder launcher so it finds Node.js from common Homebrew, Volta, and asdf locations.
 - Added a temporary developer-only fallback for this Mac while Node.js is being installed system-wide.
 
-## v0.2.0 — August 4, 2026
+## [0.2.0] - 2026-08-04
 
 - Added a first-run setup that introduces API-key, budget, and WhatsApp linking steps.
-- Added an in-app version button and a “What’s new” popup for each new release.
+- Added an in-app version button and a "What's new" popup for each new release.
 - The dashboard version now comes from the same `package.json` version used for Git releases.
 
-## v0.1.0
+## [0.1.0]
 
 - Initial clean AmirOS source release.
