@@ -2204,19 +2204,42 @@ export function startAmirosDashboard(options: DashboardOptions) {
           sendJson(response, 400, { error: "Choose at least one knowledge scope" });
           return;
         }
-        const records = state.searchIntelligence(`${query} ${followUp?.question || ""}`.trim(), 48, archived)
+        const retrievedRecords = state.searchIntelligence(`${query} ${followUp?.question || ""}`.trim(), 48, archived)
           .filter((record) => record.kind === "calendar_event" ? includeCalendar : includeKnowledge);
+        const relationship = includeKnowledge ? state.relationshipIntelligence(query) : { requested: false, briefs: [] };
+        if (relationship.disambiguation?.length) {
+          sendJson(response, 200, {
+            answer: `I know more than one contact named ${relationship.disambiguation[0]?.split(/\s+/u)[0] || "that"}. Which one do you mean: ${relationship.disambiguation.join(", ")}?`,
+            evidenceIds: [],
+            sources: [],
+          });
+          return;
+        }
+        const records = state.relationshipRecordsForQuestion(query, retrievedRecords, relationship);
+        const relationshipSourceIds = new Set(relationship.briefs.flatMap((brief) => brief.sourceIds));
+        const relationshipRecords = relationshipSourceIds.size
+          // Source IDs are selected by the deterministic relationship brief,
+          // so retrieve them directly instead of asking keyword ranking to
+          // rediscover an unrelated open commitment or upcoming plan.
+          ? state.searchIntelligence(relationship.temporalFocus === "historical" ? "historical events" : "", 80, archived)
+            .filter((record) => relationshipSourceIds.has(record.id))
+          : [];
+        const answerRecords = [...new Map([...records, ...relationshipRecords].map((record) => [record.id, record])).values()].slice(0, 60);
         const enriched = records.map((record) => ({
           ...record,
           content: `[Chat: ${chatNameCache.get(record.chatId) || "WhatsApp contact"}] ${record.content}`,
         }));
         const answer = await ai.answerNetworkQuestion(
           query,
-          enriched,
+          [...new Map([...enriched, ...relationshipRecords.map((record) => ({
+            ...record,
+            content: `[Chat: ${chatNameCache.get(record.chatId) || "WhatsApp contact"}] ${record.content}`,
+          }))].map((record) => [record.id, record])).values()],
           state.getSettings().ownerProfile.displayName,
           followUp,
+          relationship.briefs,
         );
-        const recordsById = new Map(records.map((record) => [record.id, record]));
+        const recordsById = new Map(answerRecords.map((record) => [record.id, record]));
         const sources = answer.evidenceIds
           .flatMap((id) => {
             const record = recordsById.get(id);

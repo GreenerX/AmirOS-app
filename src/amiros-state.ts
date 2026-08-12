@@ -8,6 +8,11 @@ import { presentTodo } from "./todo-presentation.js";
 import { assessKnowledgeFreshness, type KnowledgeFreshness } from "./memory-maintenance.js";
 import { explainContactInsight, type MemoryExplanation } from "./memory-explainability.js";
 import {
+  buildRelationshipIntelligence,
+  filterRelationshipRecordsForQuestion,
+  type RelationshipIntelligenceResult,
+} from "./relationship-intelligence.js";
+import {
   normalizeOwnerRecordReferences,
   normalizePendingOwnerLifecycleClarification,
   type OwnerRecordReference,
@@ -2194,6 +2199,35 @@ export class AmirosState {
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
+  /**
+   * Builds a bounded, read-only relationship projection for Ask AmirOS.
+   * It intentionally derives from the canonical memory/action records above
+   * instead of persisting generated relationship prose as another truth store.
+   */
+  relationshipIntelligence(query: string, now = Date.now()): RelationshipIntelligenceResult {
+    const chats = this.intelligenceSnapshot();
+    return buildRelationshipIntelligence(query, chats.map((chat) => ({
+      chatId: chat.chatId,
+      contactName: this.getChatName(chat.chatId),
+      isGroup: chat.chatId.endsWith("@g.us"),
+      insights: chat.insights,
+      commitments: chat.commitments,
+      todos: chat.todos,
+      events: chat.events,
+      needsReply: chat.needsReply,
+      lastInteraction: chat.lastInteraction,
+    })), now);
+  }
+
+  relationshipRecordsForQuestion(
+    query: string,
+    records: IntelligenceSearchRecord[],
+    relationship: RelationshipIntelligenceResult,
+    now = Date.now(),
+  ): IntelligenceSearchRecord[] {
+    return filterRelationshipRecordsForQuestion(records, relationship, now);
+  }
+
   getKnownKnowledgeSubjectNames(): string[] {
     const names = Object.values(this.persisted.memories)
       .map((memory) => memory.chatName?.replace(/\s+/g, " ").trim())
@@ -2573,7 +2607,7 @@ export class AmirosState {
           timestamp: item.dueAt || item.updatedAt,
         }, 12, dueDateQuery && item.dueAt ? item.dueAt : item.evidence.timestamp));
       memory.events
-        .filter((item) => item.status !== "dismissed" && (temporalRange || item.startAt >= now - 86_400_000))
+        .filter((item) => item.status !== "dismissed" && (temporalRange || historicalIntent || item.startAt >= now - 86_400_000))
         .forEach((item) => push({
           id: item.id,
           chatId,

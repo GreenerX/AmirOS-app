@@ -20,6 +20,7 @@ import { relationshipLearningInstructions } from "./prompts/relationship-learnin
 import type { ReplyAssessmentContextEntry } from "./reply-needed.js";
 import { presentTodo } from "./todo-presentation.js";
 import { assessKnowledgeFreshness } from "./memory-maintenance.js";
+import type { RelationshipBrief } from "./relationship-intelligence.js";
 import type {
   ContactMemoryItem,
   ContactPreferences,
@@ -166,6 +167,9 @@ export function buildNetworkAnswerInstructions(ownerName = "Amir"): string {
     "A record's contactName or [Chat: ...] label identifies the source conversation, not necessarily the speaker. Never call the source chat a person.",
     "For sourceAuthor contact or group_member, preserve the supplied sender attribution. Do not invent a speaker when it is unknown.",
     "Some memory records include an explanation object derived from canonical memory. Use it when the user asks why, how you know, whether something changed, whether you are sure, or asks about current versus historical truth.",
+    "A relationshipBrief is a bounded, read-only synthesis of canonical facts, plans, commitments, follow-ups, and interaction signals for a relationship question. Use it to organize the answer, but do not treat it as a source of new facts. Ground material claims in its linked records, distinguish a supported pattern from a direct fact, and preserve uncertainty or sensitive-information safeguards included in the brief.",
+    "For a relationship briefing, speak warmly and naturally, as someone helping the owner remember a person they know. Never say “supplied records,” “retrieved context,” “newer update,” “supporting data,” or similar database language. Say plainly what you know and what you do not know. For example, say “I don’t know whether there’s anything specific he wants to talk about,” not “the records don’t confirm.”",
+    "A current relationship briefing answers what the owner should know, not what the owner should do. Do not add behavioral coaching, emotional interpretation, or broad advice unless relationshipBrief.adviceRequested is true because the owner explicitly asked for advice. Even then, keep any advice modest and tied to confirmed current context. Never present past events as upcoming; use only the future plans in a current relationshipBrief. Historical relationship questions may discuss past plans as history.",
     "For ordinary factual questions, keep the answer clean and concise. For explanation questions, briefly mention the current fact, any historical replacement, confidence, reinforcement, and evidence origin in natural language.",
     "Never expose raw explanation field names, scores, IDs, or implementation terms. Say things like “direct message,” “older evidence,” “reinforced by later messages,” or “previously” instead.",
     "Be concise, distinguish facts from uncertainty, and keep the visible answer under 180 words. If evidence is insufficient, say specifically what is missing.",
@@ -1092,9 +1096,12 @@ export class AiService {
     records: IntelligenceSearchRecord[],
     ownerName = "Amir",
     followUp?: { question: string; answer: string },
+    relationshipBriefs: RelationshipBrief[] = [],
   ): Promise<NetworkAnswer> {
     this.assertAvailable();
-    if (records.length === 0) return { answer: "I couldn't find anything relevant in saved local chat memory yet.", evidenceIds: [] };
+    if (records.length === 0 && relationshipBriefs.length === 0) {
+      return { answer: "I couldn't find anything relevant in saved local chat memory yet.", evidenceIds: [] };
+    }
     const result = await this.structuredResponse<NetworkAnswer>({
       name: "network_answer",
       instructions: buildNetworkAnswerInstructions(ownerName),
@@ -1105,6 +1112,20 @@ export class AiService {
           answer: followUp.answer.slice(0, 2_000),
         } : undefined,
         records,
+        relationshipBriefs: relationshipBriefs.map((brief) => ({
+          contactName: brief.contactName,
+          currentContext: brief.currentContext,
+          recentChanges: brief.recentChanges,
+          recurringThemes: brief.recurringThemes,
+          attention: brief.attention,
+          upcoming: brief.upcoming,
+          interactionNote: brief.interactionNote,
+          confidence: brief.confidence,
+          uncertainty: brief.uncertainty,
+          focus: brief.focus,
+          adviceRequested: brief.adviceRequested,
+          sourceIds: brief.sourceIds,
+        })),
       }),
       schema: {
         type: "object", additionalProperties: false,
