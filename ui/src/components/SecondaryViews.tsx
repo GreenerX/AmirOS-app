@@ -610,7 +610,7 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
             {backendRestartState !== "idle" ? <small className={`backend-restart-notice ${backendRestartState}`} role="status" aria-live="polite">{backendRestartMessage}</small> : null}
           </div>
           <div className="system-diagnostics-actions">
-            <span className={`backend-status ${backendStatus}`}><i />{backendStatus === "running" ? "Running" : backendStatus === "restarting" ? "Restarting" : "Offline"}</span>
+            <span className={`backend-status ${backendStatus}`}><i />{backendStatus === "running" ? "Running" : backendStatus === "restarting" ? "Restarting" : backendStatus === "failed" ? "Build failed" : "Offline"}</span>
             <button className="button secondary" type="button" disabled={backendRestartState === "restarting"} onClick={() => void restartBackend()}><RefreshCw className={backendRestartState === "restarting" ? "spin" : ""} size={16} />{backendRestartState === "restarting" ? "Restarting…" : "Restart AmirOS backend"}</button>
           </div>
         </section>

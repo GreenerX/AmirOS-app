@@ -4,13 +4,14 @@ import { resolve } from "node:path";
 
 type SendJson = (response: ServerResponse, status: number, value: unknown) => void;
 
-export type BackendServiceStatus = "running" | "restarting" | "offline";
+export type BackendServiceStatus = "running" | "restarting" | "offline" | "failed";
 
 export type BackendRestartStatus = {
   status: BackendServiceStatus;
   updatedAt: number;
   requestedAt?: number;
   requestId?: string;
+  detail?: string;
 };
 
 const restartRequestFilename = "backend-restart-request.json";
@@ -32,13 +33,14 @@ export function backendRestartStatusPath(directory = workDirectory()): string {
 function parseStatus(value: string): BackendRestartStatus | undefined {
   try {
     const parsed = JSON.parse(value) as Partial<BackendRestartStatus>;
-    if ((parsed.status === "running" || parsed.status === "restarting" || parsed.status === "offline")
+    if ((parsed.status === "running" || parsed.status === "restarting" || parsed.status === "offline" || parsed.status === "failed")
       && typeof parsed.updatedAt === "number") {
       return {
         status: parsed.status,
         updatedAt: parsed.updatedAt,
         requestedAt: typeof parsed.requestedAt === "number" ? parsed.requestedAt : undefined,
         requestId: typeof parsed.requestId === "string" ? parsed.requestId : undefined,
+        detail: typeof parsed.detail === "string" ? parsed.detail : undefined,
       };
     }
   } catch {}

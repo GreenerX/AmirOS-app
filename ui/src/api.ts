@@ -132,7 +132,7 @@ export async function ensureTimeZoneBackgrounds(city: TimeZoneCity): Promise<{
 }
 
 export type BackendRestartStatus = {
-  status: "running" | "restarting" | "offline";
+  status: "running" | "restarting" | "offline" | "failed";
   updatedAt: number;
   requestedAt?: number;
 };

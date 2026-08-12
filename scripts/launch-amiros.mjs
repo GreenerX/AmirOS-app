@@ -9,9 +9,7 @@ const logPath = resolve(workDirectory, "bot.log");
 const pidPath = resolve(workDirectory, "amiros.pid");
 const watchdogPath = resolve(projectDirectory, "scripts/amiros-watchdog.mjs");
 
-if (!existsSync(watchdogPath) || !existsSync(resolve(projectDirectory, "dist/src/server.js"))) {
-  throw new Error("AmirOS has not been built yet. Run npm run build, then start it again.");
-}
+if (!existsSync(watchdogPath)) throw new Error("The AmirOS watchdog is missing. Reinstall AmirOS, then try again.");
 
 mkdirSync(workDirectory, { recursive: true });
 const log = openSync(logPath, "a", 0o600);

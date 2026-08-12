@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import type { Server } from "node:http";
 import { AmirosState } from "../src/amiros-state.js";
@@ -171,18 +171,29 @@ async function run(): Promise<void> {
     });
     await page.goto(`${origin}/?demo=1`, { waitUntil: "networkidle0", timeout: 20_000 });
 
-    await assertScreen(page, "Overview", "INBOX PULSE");
+    const servedBuild = await page.evaluate(async (dashboardOrigin) => {
+      const response = await fetch(`${dashboardOrigin}/`, { cache: "no-store" });
+      return {
+        fingerprint: response.headers.get("x-amiros-ui-build"),
+        cacheControl: response.headers.get("cache-control"),
+      };
+    }, origin);
+    const expectedBuild = JSON.parse(readFileSync(resolve("ui/dist/.amiros-ui-build.json"), "utf8")) as { sourceHash?: unknown };
+    assert.equal(servedBuild.fingerprint, expectedBuild.sourceHash, "Browser should receive the current stamped dashboard build.");
+    assert.match(servedBuild.cacheControl || "", /no-store/u, "The dashboard entry document must not remain stale in browser cache.");
+
+    await assertScreen(page, "Overview", "Suggested action");
     await clickButtonByLabel(page, "Inbox");
     await assertScreen(page, "Inbox", "Inbox");
-    await clickButtonByLabel(page, "Intelligence");
-    await assertScreen(page, "Intelligence", "Intelligence");
+    await clickButtonByLabel(page, "People");
+    await assertScreen(page, "People", "People");
     await clickButtonByLabel(page, "Open AmirOS tools");
     await clickButtonByLabel(page, "Settings");
     await assertScreen(page, "Settings", "Settings");
 
     assert.deepEqual(unexpectedRequests, [], `Safe mode attempted an external request: ${unexpectedRequests.join(" | ")}`);
     assert.deepEqual(pageErrors, [], `The dashboard logged a browser error: ${pageErrors.join(" | ")}`);
-    console.log("Dashboard health check passed: Overview, Inbox, Intelligence, and Settings all rendered safely.");
+    console.log("Dashboard health check passed: the current stamped UI rendered Overview, Inbox, People, and Settings safely.");
   } finally {
     await browser?.close();
     if (server) await closeServer(server);

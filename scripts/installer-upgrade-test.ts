@@ -73,10 +73,10 @@ case "\${3:-}" in
     exit 0
     ;;
   build)
-    exec "$AMIROS_INSTALL_TEST_NODE" "$AMIROS_INSTALL_TEST_SOURCE/node_modules/typescript/bin/tsc" -p tsconfig.json
+    exec "$AMIROS_INSTALL_TEST_NODE" scripts/build-backend.mjs
     ;;
   ui:build)
-    exec "$AMIROS_INSTALL_TEST_NODE" "$AMIROS_INSTALL_TEST_SOURCE/node_modules/vite/bin/vite.js" build --config ui/vite.config.ts
+    exec "$AMIROS_INSTALL_TEST_NODE" scripts/build-ui.mjs
     ;;
 esac
 echo "Unexpected test npx command: $*" >&2
@@ -144,7 +144,9 @@ async function stopInstalledAmiros(project: string): Promise<void> {
 
 function assertBuildAndRuntime(project: string): void {
   assert.ok(existsSync(resolve(project, "dist/src/server.js")), "Installer should build the backend before launch.");
+  assert.ok(existsSync(resolve(project, "dist/.amiros-backend-build.json")), "Installer should record a backend freshness stamp.");
   assert.ok(existsSync(resolve(project, "ui/dist/index.html")), "Installer should build the dashboard before launch.");
+  assert.ok(existsSync(resolve(project, "ui/dist/.amiros-ui-build.json")), "Installer should record a dashboard UI freshness stamp.");
   assert.ok(existsSync(resolve(project, "work")), "Installer should create the runtime work folder.");
   assert.ok(existsSync(resolve(project, "work/amiros.pid")), "Launcher should create a watchdog PID record.");
   assert.ok(existsSync(resolve(project, "work/bot.log")), "Launcher should create a runtime log file.");

@@ -2,6 +2,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, w
 import { execFileSync, spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureFreshBackendBuild, ensureFreshUiBuild, isBuildFreshnessError } from "./build-freshness.mjs";
 
 const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const configuredWorkDirectory = process.env.AMIROS_WATCHDOG_WORK_DIRECTORY;
@@ -57,7 +58,6 @@ const sessionLockGraceMs = positiveMilliseconds("AMIROS_WATCHDOG_SESSION_LOCK_GR
 const sessionTerminationGraceMs = positiveMilliseconds("AMIROS_WATCHDOG_SESSION_TERMINATION_GRACE_MS", 4_000);
 const sessionLockPollMs = positiveMilliseconds("AMIROS_WATCHDOG_SESSION_LOCK_POLL_MS", 150);
 
-if (!existsSync(serverPath)) throw new Error("AmirOS has not been built yet. Run npm run build, then start it again.");
 mkdirSync(workDirectory, { recursive: true });
 writeFileSync(pidPath, `${process.pid}\n`, { encoding: "utf8", mode: 0o600 });
 
@@ -272,6 +272,14 @@ async function startServer(reason, isRecovery = false) {
   if (stopping || child || startingServer) return;
   startingServer = true;
   try {
+    if (!configuredServerPath) {
+      const build = ensureFreshBackendBuild(projectDirectory, { log: logLine });
+      if (!build.rebuilt) logLine("Build preflight passed; compiled backend is current.");
+      const uiBuild = ensureFreshUiBuild(projectDirectory, { log: logLine });
+      if (!uiBuild.rebuilt) logLine("Build preflight passed; dashboard UI build is current.");
+    } else if (!existsSync(serverPath)) {
+      throw new Error(`The configured backend fixture does not exist: ${serverPath}`);
+    }
     const sessionReleased = await releaseWhatsAppSessionBrowser();
     if (!sessionReleased) throw new Error("The AmirOS WhatsApp browser session is still locked");
 
@@ -322,6 +330,17 @@ async function startServer(reason, isRecovery = false) {
   } catch (error) {
     if (!stopping) {
       recoveryInProgress = false;
+      if (isBuildFreshnessError(error)) {
+        const detail = error instanceof Error ? error.message : String(error);
+        logLine(`Backend launch blocked by build preflight: ${detail}`);
+        writeBackendStatus("failed", { detail });
+        stopping = true;
+        clearInterval(restartCommandTimer);
+        clearInterval(healthTimer);
+        try { unlinkSync(pidPath); } catch {}
+        process.exitCode = 1;
+        return;
+      }
       failures += 1;
       logLine(`Restart failed: unable to launch the backend (${error instanceof Error ? error.message : String(error)}).`);
       const wait = Math.min(retryMaximumDelayMs, retryBaseDelayMs * failures);

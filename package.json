@@ -7,13 +7,13 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/build-backend.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "diagnose": "tsx src/diagnose.ts",
     "diagnose:web": "tsx src/diagnose.ts --web",
     "dev": "tsx watch src/server.ts",
     "models": "tsx src/show-models.ts",
-    "start": "node dist/src/server.js",
+    "start": "node scripts/start-backend.mjs",
     "test": "vitest run",
     "test:dashboard-health": "npm run ui:build && tsx scripts/dashboard-health-check.ts",
     "test:backend-restart": "tsx scripts/backend-restart-test.ts",
@@ -21,7 +21,7 @@
     "test:whatsapp-session-recovery": "tsx scripts/whatsapp-session-recovery-test.ts",
     "test:installer-upgrade": "tsx scripts/installer-upgrade-test.ts",
     "ui:dev": "vite --config ui/vite.config.ts",
-    "ui:build": "vite build --config ui/vite.config.ts",
+    "ui:build": "node scripts/build-ui.mjs",
     "ui:check": "tsc -p ui/tsconfig.json --noEmit",
     "package:clean": "node scripts/create-clean-release.mjs"
   },

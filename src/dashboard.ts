@@ -36,6 +36,7 @@ import { checkForAmirosUpdate, type UpdateStatus } from "./update-check.js";
 import { handleAiUsageApiRoute } from "./dashboard/ai-usage-routes.js";
 import { handleSettingsApiRoute } from "./dashboard/settings-routes.js";
 import { handleSystemApiRoute } from "./dashboard/system-routes.js";
+import { uiAssetCacheControl, uiBuildFingerprint, uiBuildIsCurrent } from "./ui-build-runtime.js";
 import {
   assessDeterministicReplyNeed,
   replyAssessmentContextKey,
@@ -1599,9 +1600,20 @@ function serveStatic(response: ServerResponse, pathname: string): void {
   if (!existsSync(filePath) || statSync(filePath).isDirectory()) {
     filePath = join(root, "index.html");
   }
+  const fingerprint = uiBuildFingerprint(root);
+  if (filePath.endsWith("index.html") && !uiBuildIsCurrent(root)) {
+    response.writeHead(503, {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+      "x-amiros-ui-build": fingerprint || "unknown",
+    });
+    response.end("AmirOS dashboard assets are stale. Restart AmirOS or run pnpm ui:build, then reload this page.");
+    return;
+  }
   response.writeHead(200, {
     "content-type": CONTENT_TYPES[extname(filePath)] || "application/octet-stream",
-    "cache-control": filePath.endsWith("index.html") ? "no-cache" : "public, max-age=3600",
+    "cache-control": uiAssetCacheControl(root, filePath),
+    "x-amiros-ui-build": fingerprint || "unknown",
   });
   createReadStream(filePath).pipe(response);
 }
