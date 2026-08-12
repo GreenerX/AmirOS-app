@@ -2,7 +2,12 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AmirosState, inferCalendarEventFromMessage } from "../src/amiros-state.js";
+import {
+  AmirosState,
+  inferCalendarEventFromMessage,
+  relationshipCommitmentStatus,
+  RELATIONSHIP_REVIEW_WINDOW_MS,
+} from "../src/amiros-state.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -421,6 +426,370 @@ describe("AmirosState", () => {
         lastIncoming: expect.objectContaining({ content: "Are you going to the same event?" }),
       }),
     ]));
+  });
+
+  it("keeps latest human interaction independent from inbound reply state and later profile writes", () => {
+    const { state } = createState();
+    const chatId = "dani@c.us";
+
+    state.rememberMessage(chatId, { role: "user", author: "contact", content: "Can you send the photos?", messageId: "dani-question", timestamp: 2_000 });
+    state.rememberMessage(chatId, { role: "user", author: "owner", content: "I will send them this evening.", messageId: "owner-reply", timestamp: 3_000, countAsIncoming: false });
+    state.setContactProfile(chatId, "Dani is a close friend.");
+    // Simulates an older historical import arriving after newer live activity.
+    state.rememberMessage(chatId, { role: "user", author: "contact", content: "Older imported conversation.", messageId: "older-history", timestamp: 1_000 });
+
+    const snapshot = state.intelligenceSnapshot().find((item) => item.chatId === chatId);
+    expect(snapshot).toMatchObject({
+      needsReply: false,
+      lastIncoming: { messageId: "dani-question", timestamp: 2_000 },
+      lastInteraction: { messageId: "owner-reply", timestamp: 3_000 },
+    });
+  });
+
+  it("uses the newest incoming human message as both interaction and reply evidence", () => {
+    const { state } = createState();
+    const chatId = "family@g.us";
+
+    state.rememberMessage(chatId, { role: "user", author: "owner", content: "I can make it.", messageId: "owner-message", timestamp: 3_000, countAsIncoming: false });
+    state.rememberMessage(chatId, { role: "user", author: "group_member", senderName: "Dani", content: "Great, should we meet at seven?", messageId: "group-question", timestamp: 4_000 });
+
+    const snapshot = state.intelligenceSnapshot().find((item) => item.chatId === chatId);
+    expect(snapshot).toMatchObject({
+      needsReply: true,
+      lastIncoming: { messageId: "group-question", timestamp: 4_000 },
+      lastInteraction: { messageId: "group-question", timestamp: 4_000 },
+    });
+  });
+
+  it("reconciles equivalent commitments, revised due dates, and supporting evidence", () => {
+    const { state } = createState();
+    const chatId = "dani@c.us";
+    const firstDueAt = 1_786_000_000_000;
+    const revisedDueAt = firstDueAt + 2 * 86_400_000;
+
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [],
+      commitments: [{
+        content: "Send Dani the photos",
+        owner: "me",
+        dueAt: firstDueAt,
+        evidence: { messageId: "photos-request", excerpt: "Can you send me the photos?", timestamp: firstDueAt - 1_000 },
+      }],
+    });
+    const original = state.getCommitments(chatId)[0]!;
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [],
+      commitments: [{
+        content: "Send photos to Dani",
+        owner: "me",
+        dueAt: revisedDueAt,
+        evidence: { messageId: "photos-revised", excerpt: "Could you send Dani the photos by Wednesday?", timestamp: firstDueAt },
+      }],
+    });
+
+    expect(state.getCommitments(chatId)).toEqual([
+      expect.objectContaining({ id: original.id, status: "open", dueAt: revisedDueAt }),
+    ]);
+    expect(state.getCommitments(chatId)[0]?.evidenceHistory).toEqual(expect.arrayContaining([
+      expect.objectContaining({ messageId: "photos-request" }),
+      expect.objectContaining({ messageId: "photos-revised" }),
+    ]));
+  });
+
+  it("resolves a matching commitment when its owner clearly confirms completion", () => {
+    const { state } = createState();
+    const chatId = "dani@c.us";
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [],
+      commitments: [{
+        content: "Send Dani the photos",
+        owner: "me",
+        evidence: { messageId: "photos-request", excerpt: "Please send Dani the photos.", timestamp: 1_786_000_000_000 },
+      }],
+    });
+
+    state.rememberMessage(chatId, {
+      role: "user",
+      author: "owner",
+      content: "I sent the photos to Dani.",
+      messageId: "photos-completed",
+      timestamp: 1_786_000_100_000,
+      countAsIncoming: false,
+    });
+
+    expect(state.getCommitments(chatId)).toEqual([
+      expect.objectContaining({ status: "done", evidenceHistory: expect.arrayContaining([
+        expect.objectContaining({ messageId: "photos-request" }),
+        expect.objectContaining({ messageId: "photos-completed" }),
+      ]) }),
+    ]);
+  });
+
+  it("merges the same wake-up commitment across natural rewording", () => {
+    const { state } = createState();
+    const chatId = "dani@c.us";
+    const now = Date.now();
+
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [],
+      commitments: [{
+        content: "can you make sure I'm up at 11:15",
+        owner: "me",
+        assigneeName: "Dani",
+        evidence: {
+          messageId: "wake-request",
+          excerpt: "can you make sure I'm up at 11:15",
+          timestamp: now,
+        },
+      }],
+    });
+    const original = state.getCommitments(chatId)[0]!;
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [],
+      commitments: [{
+        content: "Wake Dani Faitelson at 11:15.",
+        owner: "me",
+        assigneeName: "Dani Faitelson",
+        evidence: {
+          messageId: "wake-summary",
+          excerpt: "Wake Dani Faitelson at 11:15.",
+          timestamp: now + 60_000,
+        },
+      }],
+    });
+
+    expect(state.getCommitments(chatId)).toEqual([
+      expect.objectContaining({
+        id: original.id,
+        content: "Wake Dani Faitelson at 11:15.",
+        status: "open",
+        evidenceHistory: expect.arrayContaining([
+          expect.objectContaining({ messageId: "wake-request" }),
+          expect.objectContaining({ messageId: "wake-summary" }),
+        ]),
+      }),
+    ]);
+  });
+
+  it("merges sandwich wording variants while preserving distinct delivery obligations", () => {
+    const { state } = createState();
+    const chatId = "sandwich@c.us";
+    const now = Date.now();
+
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [],
+      commitments: [{
+        content: "Bring Amir a sandwich when returning with the source to be specified.",
+        owner: "contact",
+        evidence: { messageId: "sandwich-short", excerpt: "Bring Amir a sandwich when returning with the source to be specified.", timestamp: now },
+      }],
+    });
+    const original = state.getCommitments(chatId)[0]!;
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [],
+      commitments: [{
+        content: "Bring Amir a sandwich when returning from any place on the way.",
+        owner: "contact",
+        evidence: { messageId: "sandwich-detail", excerpt: "Bring Amir a sandwich when returning from any place on the way.", timestamp: now + 1_000 },
+      }, {
+        content: "Bring Amir his laptop when returning.",
+        owner: "contact",
+        evidence: { messageId: "laptop-detail", excerpt: "Bring Amir his laptop when returning.", timestamp: now + 2_000 },
+      }],
+    });
+
+    expect(state.getCommitments(chatId)).toHaveLength(2);
+    expect(state.getCommitments(chatId)[0]).toMatchObject({
+      id: original.id,
+      content: "Bring Amir a sandwich when returning from any place on the way.",
+      evidenceHistory: expect.arrayContaining([
+        expect.objectContaining({ messageId: "sandwich-short" }),
+        expect.objectContaining({ messageId: "sandwich-detail" }),
+      ]),
+    });
+    expect(state.getCommitments(chatId)[1]?.content).toContain("laptop");
+  });
+
+  it("does not merge similar commitments with different actions or assignees", () => {
+    const { state } = createState();
+    const now = Date.now();
+
+    state.mergeAnalyzedIntelligence("dani@c.us", {
+      insights: [],
+      commitments: [{
+        content: "Send Dani the beach photos",
+        owner: "me",
+        assigneeName: "Dani",
+        evidence: { messageId: "send-photos", excerpt: "Send Dani the beach photos", timestamp: now },
+      }, {
+        content: "Send Dani the financial report",
+        owner: "me",
+        assigneeName: "Dani",
+        evidence: { messageId: "send-report", excerpt: "Send Dani the financial report", timestamp: now + 1_000 },
+      }],
+    });
+    state.mergeAnalyzedIntelligence("wakeups@g.us", {
+      insights: [],
+      commitments: [{
+        content: "Wake Dani at 11:15",
+        owner: "me",
+        assigneeName: "Dani",
+        evidence: { messageId: "wake-dani", excerpt: "Wake Dani at 11:15", timestamp: now },
+      }, {
+        content: "Wake Andrew at 11:15",
+        owner: "me",
+        assigneeName: "Andrew",
+        evidence: { messageId: "wake-andrew", excerpt: "Wake Andrew at 11:15", timestamp: now + 1_000 },
+      }],
+    });
+
+    expect(state.getCommitments("dani@c.us")).toHaveLength(2);
+    expect(state.getCommitments("wakeups@g.us")).toHaveLength(2);
+  });
+
+  it("marks old open commitments for review without deleting or closing them", () => {
+    const { state } = createState();
+    const now = Date.now();
+    const oldTimestamp = now - RELATIONSHIP_REVIEW_WINDOW_MS - 1_000;
+    const commitment = {
+      id: "old-follow-up",
+      content: "Send Dani the photos",
+      owner: "me" as const,
+      status: "open" as const,
+      evidence: { messageId: "old-request", excerpt: "Please send the photos", timestamp: oldTimestamp },
+      createdAt: oldTimestamp,
+      updatedAt: oldTimestamp,
+    };
+
+    expect(relationshipCommitmentStatus(commitment, now)).toBe("needs_review");
+    expect(relationshipCommitmentStatus({
+      ...commitment,
+      evidence: { ...commitment.evidence, timestamp: now - 1_000 },
+    }, now)).toBe("open");
+    expect(relationshipCommitmentStatus({ ...commitment, status: "done" }, now)).toBe("done");
+    expect(relationshipCommitmentStatus({ ...commitment, status: "dismissed" }, now)).toBe("dismissed");
+
+    state.mergeAnalyzedIntelligence("dani@c.us", {
+      insights: [],
+      commitments: [{
+        content: commitment.content,
+        owner: commitment.owner,
+        evidence: commitment.evidence,
+      }],
+    });
+
+    expect(state.getCommitments("dani@c.us")).toHaveLength(1);
+    expect(state.intelligenceSnapshot().find((item) => item.chatId === "dani@c.us")?.commitments).toEqual([
+      expect.objectContaining({ status: "needs_review" }),
+    ]);
+  });
+
+  it("allows clear completion evidence to resolve a needs-review commitment", () => {
+    const { state } = createState();
+    const chatId = "stale-dani@c.us";
+    const now = Date.now();
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [],
+      commitments: [{
+        content: "Send Dani the photos",
+        owner: "me",
+        evidence: {
+          messageId: "stale-photos",
+          excerpt: "Please send Dani the photos",
+          timestamp: now - RELATIONSHIP_REVIEW_WINDOW_MS - 1_000,
+        },
+      }],
+    });
+    expect(state.intelligenceSnapshot().find((item) => item.chatId === chatId)?.commitments[0]?.status).toBe("needs_review");
+
+    state.rememberMessage(chatId, {
+      role: "user",
+      author: "owner",
+      content: "I sent the photos to Dani.",
+      messageId: "stale-photos-completed",
+      timestamp: now,
+      countAsIncoming: false,
+    });
+
+    expect(state.getCommitments(chatId)).toEqual([
+      expect.objectContaining({ status: "done", evidenceHistory: expect.arrayContaining([
+        expect.objectContaining({ messageId: "stale-photos" }),
+        expect.objectContaining({ messageId: "stale-photos-completed" }),
+      ]) }),
+    ]);
+  });
+
+  it("returns a stale commitment to current after fresh evidence and still resolves it normally", () => {
+    const { state } = createState();
+    const chatId = "dani@c.us";
+    const now = Date.now();
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [],
+      commitments: [{
+        content: "Send Dani the photos",
+        owner: "me",
+        evidence: {
+          messageId: "old-photos-request",
+          excerpt: "Please send the photos",
+          timestamp: now - RELATIONSHIP_REVIEW_WINDOW_MS - 1_000,
+        },
+      }],
+    });
+    expect(state.intelligenceSnapshot().find((item) => item.chatId === chatId)?.commitments[0]?.status).toBe("needs_review");
+
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [],
+      commitments: [{
+        content: "Send Dani the photos",
+        owner: "me",
+        evidence: { messageId: "fresh-photos-request", excerpt: "Please send the photos", timestamp: now },
+      }],
+    });
+    expect(state.intelligenceSnapshot().find((item) => item.chatId === chatId)?.commitments[0]?.status).toBe("open");
+
+    state.rememberMessage(chatId, {
+      role: "user",
+      author: "owner",
+      content: "I sent the photos to Dani.",
+      messageId: "photos-finished",
+      timestamp: now + 1_000,
+      countAsIncoming: false,
+    });
+    expect(state.getCommitments(chatId)).toEqual([
+      expect.objectContaining({ status: "done" }),
+    ]);
+  });
+
+  it("merges equivalent important topics without losing original evidence", () => {
+    const { state } = createState();
+    const chatId = "dani@c.us";
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [{
+        kind: "preference",
+        content: "Dani likes Italian food.",
+        topicTitle: "Italian Food",
+        topicTitleConfidence: 0.91,
+        confidence: 0.8,
+        evidence: { messageId: "italian-1", excerpt: "I like Italian food.", timestamp: 1_786_000_000_000 },
+      }],
+      commitments: [],
+    });
+    state.mergeAnalyzedIntelligence(chatId, {
+      insights: [{
+        kind: "preference",
+        content: "Dani loves Italian food.",
+        confidence: 0.9,
+        evidence: { messageId: "italian-2", excerpt: "I love Italian food.", timestamp: 1_786_000_100_000 },
+      }],
+      commitments: [],
+    });
+
+    expect(state.getInsights(chatId)).toEqual([
+      expect.objectContaining({ content: "Dani likes Italian food.", topicTitle: "Italian Food", topicTitleConfidence: 0.91, createdAt: expect.any(Number), updatedAt: expect.any(Number), evidence: expect.objectContaining({ messageId: "italian-1", timestamp: 1_786_000_000_000, excerpt: "I like Italian food." }), evidenceHistory: expect.arrayContaining([
+        expect.objectContaining({ messageId: "italian-1", timestamp: 1_786_000_000_000 }),
+        expect.objectContaining({ messageId: "italian-2", timestamp: 1_786_000_100_000 }),
+      ]) }),
+    ]);
   });
 
   it("supports reviewing intelligence and searching across isolated chats", () => {

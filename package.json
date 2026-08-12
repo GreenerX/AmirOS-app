@@ -15,6 +15,7 @@
     "models": "tsx src/show-models.ts",
     "start": "node scripts/start-backend.mjs",
     "test": "vitest run",
+    "test:owner-actions:e2e": "vitest run tests/owner-actions.e2e.test.ts tests/owner-lifecycle.e2e.test.ts",
     "test:dashboard-health": "npm run ui:build && tsx scripts/dashboard-health-check.ts",
     "test:backend-restart": "tsx scripts/backend-restart-test.ts",
     "test:runtime-recovery": "tsx scripts/runtime-recovery-test.ts",

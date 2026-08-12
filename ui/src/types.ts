@@ -206,6 +206,10 @@ export type ContactProfile = {
   summary: string;
   updatedAt: number;
   sourceMessageCount: number;
+  sourceKnowledgeUpdatedAt?: number;
+  sourceKnowledgeVersion?: string;
+  staleAt?: number;
+  staleReason?: "canonical_knowledge_changed";
 };
 
 export type MemoryEvidence = {
@@ -223,8 +227,23 @@ export type ContactInsight = {
   subjectNames?: string[];
   kind: "fact" | "preference" | "relationship_change" | "important_date";
   content: string;
+  topicTitle?: string;
+  topicTitleConfidence?: number;
+  canonicalKey?: string;
+  validity?: "current" | "historical" | "temporary";
+  evolution?: "reinforce" | "replace" | "append";
+  supersededById?: string;
+  supersededAt?: number;
+  reinforcementCount?: number;
+  lastReinforcedAt?: number;
+  autonomouslyConfirmedAt?: number;
+  autonomousConfirmationReason?: "direct_owner_statement" | "direct_contact_statement";
+  maintenanceConfirmedAt?: number;
+  maintenanceConfirmationReason?: "repeated_direct_evidence";
+  freshness?: "timeless" | "fresh" | "aging" | "stale" | "historical" | "uncertain";
   status: "inferred" | "confirmed" | "outdated";
   confidence: number;
+  evidenceHistory?: MemoryEvidence[];
   evidence: MemoryEvidence;
   createdAt: number;
   updatedAt: number;
@@ -235,10 +254,12 @@ export type RelationshipCommitment = {
   content: string;
   owner: "me" | "contact" | "group_member";
   assigneeName?: string;
-  status: "open" | "done" | "dismissed";
+  status: "open" | "needs_review" | "done" | "dismissed";
   dueAt?: number;
+  note?: string;
   evidence: MemoryEvidence;
   createdAt: number;
+  evidenceHistory?: MemoryEvidence[];
   updatedAt: number;
 };
 
@@ -249,8 +270,10 @@ export type CalendarEvent = {
   endAt?: number;
   allDay: boolean;
   location?: string;
+  note?: string;
   imageUrl?: string;
-  status: "inferred" | "confirmed" | "dismissed";
+  status: "inferred" | "confirmed" | "completed" | "dismissed";
+  completedAt?: number;
   evidence: MemoryEvidence;
   createdAt: number;
   updatedAt: number;
@@ -303,6 +326,8 @@ export type IntelligenceChat = {
     reason: string;
   };
   lastIncoming?: ChatMemoryEntry;
+  /** Latest human message in either direction; separate from reply-oriented inbound activity. */
+  lastInteraction?: ChatMemoryEntry;
   updatedAt: number;
 };
 
@@ -314,6 +339,7 @@ export type TodoTask = {
   status: "inferred" | "open" | "done" | "dismissed";
   priority: "low" | "normal" | "high";
   dueAt?: number;
+  note?: string;
   completedAt?: number;
   evidence: MemoryEvidence;
   createdAt: number;

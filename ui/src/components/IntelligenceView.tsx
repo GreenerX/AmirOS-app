@@ -69,7 +69,8 @@ type IntelligenceViewProps = {
   onCalendarStatus: (chatId: string, eventId: string, patch: { status?: CalendarEvent["status"]; title?: string; startAt?: number; endAt?: number; allDay?: boolean; location?: string }) => Promise<void>;
   onRegenerateCalendarTitle: (chatId: string, eventId: string) => Promise<string>;
   onInsightStatus: (chatId: string, insightId: string, status: ContactInsight["status"]) => Promise<void>;
-  onTodoStatus?: (chatId: string, todoId: string, status: TodoTask["status"]) => Promise<void>;
+  onCommitmentStatus: (chatId: string, commitmentId: string, status: "dismissed") => Promise<void>;
+  onTodoStatus: (chatId: string, todoId: string, status: TodoTask["status"]) => Promise<void>;
   onTodoUpdate?: (chatId: string, todoId: string, patch: { status?: TodoTask["status"]; title?: string; dueAt?: number | null; priority?: TodoTask["priority"] }) => Promise<void>;
   onDeleteQuestion: (id: string) => Promise<void>;
   navigationRequest?: {
@@ -289,7 +290,7 @@ function PeopleMetricModal({
 }) {
   const { metric, avatarUrl } = selection;
   const [knowledgeFilter, setKnowledgeFilter] = useState<KnowledgeFilter>("all");
-  const knowledge = person.insights.filter((item) => item.status === "confirmed");
+  const knowledge = person.insights.filter((item) => item.status === "confirmed" && (item.validity || "current") !== "historical");
   const knowledgeFilters = ["all", "fact", "preference", "relationship_change", "important_date"] as const;
   const knowledgeCounts = Object.fromEntries(knowledgeFilters.map((filter) => [
     filter,
@@ -355,7 +356,7 @@ function PeopleMetricModal({
 
 export function IntelligenceView({
   data, chats, contacts, ownerName, loading, onRefresh, onOpenChat, onOpenCalendar, onContactChange,
-  onGenerateSummary, onCalendarStatus, onRegenerateCalendarTitle, onInsightStatus, onTodoStatus, onTodoUpdate, onDeleteQuestion, navigationRequest,
+  onGenerateSummary, onCalendarStatus, onRegenerateCalendarTitle, onInsightStatus, onCommitmentStatus, onTodoStatus, onTodoUpdate, onDeleteQuestion, navigationRequest,
 }: IntelligenceViewProps) {
   const [activeTab, setActiveTab] = useState<IntelligenceTab>(() => navigationRequest?.tab || initialIntelligenceTab());
   const [queueFilter, setQueueFilter] = useState<QueueFilter>(() => navigationRequest?.queueFilter || "all");
@@ -679,7 +680,7 @@ export function IntelligenceView({
   const renderPersonCard = (person: IntelligenceChat, index: number) => {
     const chat = chatById.get(person.chatId);
     const prefs = contacts[person.chatId];
-    const known = person.insights.filter((item) => item.status === "confirmed").length;
+    const known = person.insights.filter((item) => item.status === "confirmed" && (item.validity || "current") !== "historical").length;
     const plans = relationshipPlansByChatId.get(person.chatId)?.length || 0;
     const summaryRecord = person.isGroup ? person.groupSummary : person.profile;
     const summary = summaryRecord?.summary;
@@ -728,6 +729,10 @@ export function IntelligenceView({
     onOpenCalendar={onOpenCalendar}
     onContactChange={onContactChange}
     onGenerateSummary={onGenerateSummary}
+    onCalendarStatus={(chatId, eventId, status) => onCalendarStatus(chatId, eventId, { status })}
+    onCommitmentStatus={onCommitmentStatus}
+    onInsightStatus={onInsightStatus}
+    onTodoStatus={onTodoStatus}
   />;
 
   return <main className="main-content intelligence-page intelligence-command">

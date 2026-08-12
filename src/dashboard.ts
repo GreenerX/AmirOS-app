@@ -2105,7 +2105,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
           return { ...chat, needsReply: replyAssessment.needsReply, replyAssessment };
         }));
         const commitments = chats.flatMap((item) => item.commitments
-          .filter((commitment) => commitment.status === "open")
+          .filter((commitment) => commitment.status === "open" || commitment.status === "needs_review")
           .map((commitment) => ({ ...commitment, chatId: item.chatId, contactName: item.contactName })))
           .sort((a, b) => b.updatedAt - a.updatedAt);
         const events = chats.flatMap((item) => item.events
@@ -2122,7 +2122,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
           subjectChatIds: string[];
         }>();
         for (const chat of chats) {
-          for (const insight of chat.insights.filter((item) => item.status === "inferred")) {
+          for (const insight of chat.insights.filter((item) => item.status === "inferred" && (item.validity || "current") !== "historical")) {
             const clusterKey = insight.clusterId || `${chat.chatId}:${insight.id}`;
             const current = changesByCluster.get(clusterKey);
             const subjectChatIds = [...new Set([...(current?.subjectChatIds || []), ...(insight.subjectChatIds || [chat.chatId])])];
@@ -2651,7 +2651,9 @@ export function startAmirosDashboard(options: DashboardOptions) {
           manualMemory,
           memory,
           insights: state.getInsights(chatId),
-          previousSummary: state.getContactProfile(chatId)?.summary,
+          previousSummary: state.getContactProfile(chatId)?.staleAt
+            ? undefined
+            : state.getContactProfile(chatId)?.summary,
         });
         const profile = state.setContactProfile(chatId, summary);
         ai.clearConversation(chatId);

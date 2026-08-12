@@ -45,7 +45,7 @@ type OverviewProps = {
   onOpenTodoReview: () => void;
   onTodoStatus: (chatId: string, todoId: string, status: TodoTask["status"]) => Promise<void>;
   onTodoUpdate: (chatId: string, todoId: string, patch: { title?: string; dueAt?: number | null; priority?: TodoTask["priority"] }) => Promise<void>;
-  onCalendarStatus: (chatId: string, eventId: string, patch: { status?: "inferred" | "confirmed" | "dismissed" }) => Promise<void>;
+  onCalendarStatus: (chatId: string, eventId: string, patch: { status?: "inferred" | "confirmed" | "completed" | "dismissed" }) => Promise<void>;
   onInsightStatus: (chatId: string, insightId: string, status: "confirmed" | "outdated") => Promise<void>;
   onDismissNextBestAction: (action: NextBestAction) => Promise<void>;
 };

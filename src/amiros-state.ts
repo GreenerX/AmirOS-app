@@ -1,9 +1,17 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDueDateQuery, isWithinTemporalRange, resolveTemporalRange } from "./temporal-memory.js";
+import { parseExplicitClockTime, stripExplicitClockTime } from "./temporal-classifier.js";
 import type { CachedReplyAssessment } from "./reply-needed.js";
 import { presentTodo } from "./todo-presentation.js";
+import { assessKnowledgeFreshness, type KnowledgeFreshness } from "./memory-maintenance.js";
+import {
+  normalizeOwnerRecordReferences,
+  normalizePendingOwnerLifecycleClarification,
+  type OwnerRecordReference,
+  type PendingOwnerLifecycleClarification,
+} from "./owner-lifecycle.js";
 
 export type ReplyMode = "off" | "suggest" | "auto";
 export type OwnerTriggerAccess = "knowledge" | "calendar";
@@ -77,6 +85,12 @@ export type ContactProfile = {
   summary: string;
   updatedAt: number;
   sourceMessageCount: number;
+  /** The newest canonical fact included when this derived prose was generated. */
+  sourceKnowledgeUpdatedAt?: number;
+  sourceKnowledgeVersion?: string;
+  /** Derived prose is ignored once canonical truth materially changes. */
+  staleAt?: number;
+  staleReason?: "canonical_knowledge_changed";
 };
 
 export type MemoryEvidence = {
@@ -95,24 +109,86 @@ export type ContactInsight = {
   subjectNames?: string[];
   kind: "fact" | "preference" | "relationship_change" | "important_date";
   content: string;
+  /** AI-authored display projection; content remains the canonical insight. */
+  topicTitle?: string;
+  topicTitleConfidence?: number;
+  /** Stable semantic identity used to evolve one fact instead of accumulating rewordings. */
+  canonicalKey?: string;
+  /** Current facts drive People/Ask AmirOS; historical facts remain retrievable when relevant. */
+  validity?: "current" | "historical" | "temporary";
+  /** How new evidence relates to other facts sharing the canonical key. */
+  evolution?: "reinforce" | "replace" | "append";
+  supersededById?: string;
+  supersededAt?: number;
+  reinforcementCount?: number;
+  lastReinforcedAt?: number;
+  /** Audit trail for high-confidence facts AmirOS accepted without a review card. */
+  autonomouslyConfirmedAt?: number;
+  autonomousConfirmationReason?: "direct_owner_statement" | "direct_contact_statement";
+  /** Audit trail for maintenance promotion based on repeated independent evidence. */
+  maintenanceConfirmedAt?: number;
+  maintenanceConfirmationReason?: "repeated_direct_evidence";
+  /** Computed projection used by UI/API responses; never replaces validity. */
+  freshness?: KnowledgeFreshness;
   status: "inferred" | "confirmed" | "outdated";
   confidence: number;
   evidence: MemoryEvidence;
+  /** Every source message that supports this canonical insight. */
+  evidenceHistory?: MemoryEvidence[];
   createdAt: number;
   updatedAt: number;
 };
+
+type AnalyzedInsight = Pick<ContactInsight, "kind" | "content" | "confidence" | "evidence"> &
+  Partial<Pick<ContactInsight,
+    "topicTitle" | "topicTitleConfidence" | "canonicalKey" | "validity" | "evolution" |
+    "status" | "autonomouslyConfirmedAt" | "autonomousConfirmationReason"
+  >>;
+
+/**
+ * A model score alone is not trustworthy enough to rewrite long-term memory.
+ * This threshold is intentionally paired with direct-source and uncertainty
+ * checks in `autonomousConfirmationFor`, rather than used on its own.
+ */
+export const AUTONOMOUS_KNOWLEDGE_CONFIDENCE = 0.94;
 
 export type RelationshipCommitment = {
   id: string;
   content: string;
   owner: "me" | "contact" | "group_member";
   assigneeName?: string;
-  status: "open" | "done" | "dismissed";
+  status: "open" | "needs_review" | "done" | "dismissed";
   dueAt?: number;
+  note?: string;
   evidence: MemoryEvidence;
+  /** Every source message that supports this canonical commitment. */
+  evidenceHistory?: MemoryEvidence[];
   createdAt: number;
   updatedAt: number;
 };
+
+export type RelationshipCommitmentPatch = {
+  status?: RelationshipCommitment["status"];
+  content?: string;
+  dueAt?: number | null;
+  note?: string;
+};
+
+/** Product review window for unresolved relationship obligations; deliberately reversible. */
+export const RELATIONSHIP_REVIEW_WINDOW_MS = 5 * 24 * 60 * 60 * 1_000;
+
+export function relationshipCommitmentStatus(
+  commitment: RelationshipCommitment,
+  now = Date.now(),
+): RelationshipCommitment["status"] {
+  if (commitment.status !== "open" && commitment.status !== "needs_review") return commitment.status;
+  const toMilliseconds = (value: number) => value > 0 && value < 10_000_000_000 ? value * 1_000 : value;
+  const evidenceAt = [commitment.evidence, ...(commitment.evidenceHistory || [])]
+    .reduce((latest, item) => Math.max(latest, toMilliseconds(item.timestamp)), 0);
+  const dueAt = commitment.dueAt ? toMilliseconds(commitment.dueAt) : 0;
+  const relevantAt = Math.max(evidenceAt, dueAt);
+  return relevantAt > 0 && now - relevantAt > RELATIONSHIP_REVIEW_WINDOW_MS ? "needs_review" : "open";
+}
 
 /**
  * A personal action for the owner. Unlike a commitment, this is deliberately
@@ -131,6 +207,7 @@ export type TodoTask = {
   /** The owner's preferred ordering for an accepted to-do. */
   priority: "low" | "normal" | "high";
   dueAt?: number;
+  note?: string;
   /** Set when the owner checks the task off; completed tasks are never deleted. */
   completedAt?: number;
   evidence: MemoryEvidence;
@@ -143,6 +220,7 @@ export type TodoTaskPatch = {
   title?: string;
   dueAt?: number | null;
   priority?: TodoTask["priority"];
+  note?: string;
 };
 
 export type CalendarEvent = {
@@ -152,9 +230,11 @@ export type CalendarEvent = {
   endAt?: number;
   allDay: boolean;
   location?: string;
+  note?: string;
   /** Locally cached generated artwork used by Today’s Focus. */
   imageUrl?: string;
-  status: "inferred" | "confirmed" | "dismissed";
+  status: "inferred" | "confirmed" | "completed" | "dismissed";
+  completedAt?: number;
   evidence: MemoryEvidence;
   createdAt: number;
   updatedAt: number;
@@ -168,6 +248,7 @@ export type CalendarEventPatch = {
   allDay?: boolean;
   location?: string;
   imageUrl?: string;
+  note?: string;
 };
 
 export type CalendarCaptureResult = {
@@ -215,6 +296,9 @@ type ConversationMemory = {
   commitments: RelationshipCommitment[];
   events: CalendarEvent[];
   todos: TodoTask[];
+  pendingOwnerActionClarification?: PendingOwnerActionClarification;
+  pendingOwnerLifecycleClarification?: PendingOwnerLifecycleClarification;
+  ownerRecordReferences?: OwnerRecordReference[];
   styleProfile?: WritingStyleProfile;
   groupSummary?: GroupConversationSummary;
   /** Cursor for automatic relationship analysis, so old messages are never re-scanned. */
@@ -223,6 +307,19 @@ type ConversationMemory = {
   incomingMessageCount: number;
   updatedAt: number;
 };
+
+export type PendingOwnerActionClarification = {
+  kind: "todo";
+  source: string;
+  title: string;
+  dueAt: number;
+  needsTimeClarification: true;
+  messageId?: string;
+  sourceTimestamp: number;
+  createdAt: number;
+};
+
+const OWNER_ACTION_CLARIFICATION_TTL_MS = 30 * 60_000;
 
 export type IntelligenceSearchRecord = {
   id: string;
@@ -233,6 +330,9 @@ export type IntelligenceSearchRecord = {
   senderName?: string;
   sourceAuthor?: "owner" | "contact" | "group_member";
   status?: string;
+  knowledgeValidity?: ContactInsight["validity"];
+  knowledgeFreshness?: KnowledgeFreshness;
+  knowledgeNeedsQualification?: boolean;
   timestamp: number;
   score: number;
 };
@@ -265,6 +365,8 @@ export type IntelligenceChatSnapshot = {
   groupSummary?: GroupConversationSummary;
   needsReply: boolean;
   lastIncoming?: ConversationMemoryEntry;
+  /** Latest human message in either direction; independent of intelligence record updates. */
+  lastInteraction?: ConversationMemoryEntry;
   updatedAt: number;
 };
 
@@ -489,21 +591,9 @@ function impliedEventHour(content: string): number | undefined {
   return undefined;
 }
 
-function explicitCalendarTime(content: string): { hour: number; minute: number } | undefined {
-  const match = content.toLocaleLowerCase().match(/\b(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\b(?:at\s*)?(\d{1,2}):(\d{2})\b/iu);
-  if (!match) return undefined;
-  let hour = Number(match[1] || match[4]);
-  const minute = Number(match[2] || match[5] || 0);
-  const period = match[3]?.toLocaleLowerCase();
-  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour > 23 || minute > 59) return undefined;
-  if (period === "pm" && hour < 12) hour += 12;
-  if (period === "am" && hour === 12) hour = 0;
-  return { hour, minute };
-}
-
 function normalizeTimedEventStart(timestamp: number, evidence: string, legacyAllDay = false): number {
   const date = new Date(timestamp);
-  const explicitTime = explicitCalendarTime(evidence);
+  const explicitTime = parseExplicitClockTime(evidence);
   // WhatsApp message text is the source of truth for a time the sender wrote.
   // This corrects occasional model timezone shifts such as "12pm" becoming 1pm.
   if (explicitTime) {
@@ -611,7 +701,7 @@ function isKeepBothCalendarFollowUp(content: string): boolean {
 }
 
 function hasExplicitCalendarTime(content: string): boolean {
-  return /\b(?:at\s*)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:at\s*)?\d{1,2}:\d{2}\b|(?:בשעה\s*)\d{1,2}(?::\d{2})?/iu.test(content);
+  return Boolean(parseExplicitClockTime(content));
 }
 
 export function inferCalendarEventFromMessage(
@@ -711,7 +801,7 @@ export function inferCalendarEventFromMessage(
     inferredFromTimeOnly = true;
   }
   if (!date) return undefined;
-  const time = explicitCalendarTime(lower);
+  const time = parseExplicitClockTime(lower);
   if (time) {
     date.setHours(time.hour, time.minute, 0, 0);
     if (inferredFromTimeOnly && date.getTime() < base.getTime() - 5 * 60_000) {
@@ -734,8 +824,8 @@ export function inferCalendarEventFromMessage(
     .replace(/\b(?:on\s+)?20\d{2}-\d{1,2}-\d{1,2}\b|\b(?:on\s+)?\d{1,2}[/.\-]\d{1,2}(?:[/.\-](?:\d{2}|\d{4}))?\b/iu, "")
     .replace(new RegExp(`\\b(?:on\\s+)?(?:(?:next|this)\\s+)?(?:${ENGLISH_WEEKDAY_PATTERN})(?:\\s*,?\\s*(?:the\\s+)?\\d{1,2}(?:st|nd|rd|th)?)?\\b|\\b(?:on\\s+)?(?:the\\s+)?\\d{1,2}(?:st|nd|rd|th)\\b`, "iu"), "")
     .replace(new RegExp(`(?:(?:ב?יום\\s*)|ב)(?:${HEBREW_WEEKDAY_PATTERN})(?!\\p{L})|(?<!\\p{L})שבת(?!\\p{L})`, "iu"), "")
-    .replace(/\b(?:day after tomorrow|tomorrow|today|tonight)\b|מחרתיים|מחר|היום|הערב/iu, "")
-    .replace(/\b(?:at\s*)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:at\s*)?\d{1,2}:\d{2}\b/iu, "")
+    .replace(/\b(?:day after tomorrow|tomorrow|today|tonight)\b|מחרתיים|מחר|היום|הערב/iu, "");
+  title = stripExplicitClockTime(title)
     .replace(/(?:^|\s)בשעה\s*(?=$|[,;:–—-])/iu, " ")
     .replace(/\b(?:on|at|for)\s*$/iu, "")
     .replace(/\b(?:is|will be|happens|happening|takes place)\s*$/iu, "")
@@ -793,7 +883,8 @@ export class AmirosState {
     const dedupedCommitments = this.dedupeCommitmentsAcrossMemories();
     const dedupedTodos = this.dedupeTodoTasksAcrossMemories();
     const clusteredKnowledge = this.clusterKnowledgeInsightsAcrossMemories();
-    if (migratedKnowledgeTracking || dedupedKnowledge || dedupedCommitments || dedupedTodos || clusteredKnowledge) this.save();
+    const maintainedKnowledge = this.maintainKnowledge(Date.now(), false).changed;
+    if (migratedKnowledgeTracking || dedupedKnowledge || dedupedCommitments || dedupedTodos || clusteredKnowledge || maintainedKnowledge) this.save();
     this.backfillCalendarEvents();
   }
 
@@ -898,6 +989,16 @@ export class AmirosState {
                   sourceMessageCount: Number.isFinite(memory.profile.sourceMessageCount)
                     ? Math.max(0, memory.profile.sourceMessageCount)
                     : 0,
+                  sourceKnowledgeUpdatedAt: Number.isFinite(memory.profile.sourceKnowledgeUpdatedAt)
+                    ? Number(memory.profile.sourceKnowledgeUpdatedAt)
+                    : undefined,
+                  sourceKnowledgeVersion: typeof memory.profile.sourceKnowledgeVersion === "string"
+                    ? memory.profile.sourceKnowledgeVersion.slice(0, 64)
+                    : undefined,
+                  staleAt: Number.isFinite(memory.profile.staleAt) ? Number(memory.profile.staleAt) : undefined,
+                  staleReason: memory.profile.staleReason === "canonical_knowledge_changed"
+                    ? memory.profile.staleReason
+                    : undefined,
                 }
               : undefined;
             const insights = (Array.isArray(memory.insights) ? memory.insights : [])
@@ -914,15 +1015,27 @@ export class AmirosState {
                   : undefined,
                 kind: item.kind === "preference" || item.kind === "relationship_change" || item.kind === "important_date" ? item.kind : "fact",
                 content: item.content.replace(/\s+/g, " ").trim().slice(0, 1_000),
+                topicTitle: typeof item.topicTitle === "string" ? item.topicTitle.replace(/\s+/g, " ").trim().slice(0, 80) || undefined : undefined,
+                topicTitleConfidence: Number.isFinite(item.topicTitleConfidence) ? Math.max(0, Math.min(1, Number(item.topicTitleConfidence))) : undefined,
+                canonicalKey: typeof item.canonicalKey === "string" ? this.normalizeCanonicalKnowledgeKey(item.canonicalKey) : undefined,
+                validity: item.validity === "historical" || item.validity === "temporary" ? item.validity : "current",
+                evolution: item.evolution === "replace" || item.evolution === "reinforce" ? item.evolution : "append",
+                supersededById: typeof item.supersededById === "string" ? item.supersededById.slice(0, 120) : undefined,
+                supersededAt: Number.isFinite(item.supersededAt) ? Number(item.supersededAt) : undefined,
+                reinforcementCount: Number.isFinite(item.reinforcementCount) ? Math.max(1, Math.floor(Number(item.reinforcementCount))) : 1,
+                lastReinforcedAt: Number.isFinite(item.lastReinforcedAt) ? Number(item.lastReinforcedAt) : undefined,
+                autonomouslyConfirmedAt: Number.isFinite(item.autonomouslyConfirmedAt) ? Number(item.autonomouslyConfirmedAt) : undefined,
+                autonomousConfirmationReason: item.autonomousConfirmationReason === "direct_owner_statement" || item.autonomousConfirmationReason === "direct_contact_statement"
+                  ? item.autonomousConfirmationReason
+                  : undefined,
+                maintenanceConfirmedAt: Number.isFinite(item.maintenanceConfirmedAt) ? Number(item.maintenanceConfirmedAt) : undefined,
+                maintenanceConfirmationReason: item.maintenanceConfirmationReason === "repeated_direct_evidence"
+                  ? item.maintenanceConfirmationReason
+                  : undefined,
                 status: item.status === "confirmed" || item.status === "outdated" ? item.status : "inferred",
                 confidence: Math.max(0, Math.min(1, Number(item.confidence) || 0.5)),
-                evidence: {
-                  messageId: item.evidence?.messageId?.slice(0, 240),
-                  excerpt: (item.evidence?.excerpt || item.content).replace(/\s+/g, " ").trim().slice(0, 600),
-                  senderName: item.evidence?.senderName?.replace(/\s+/g, " ").trim().slice(0, 120),
-                  timestamp: Number.isFinite(item.evidence?.timestamp) ? item.evidence.timestamp : Date.now(),
-                  source: item.evidence?.source === "whatsapp_bot" ? "whatsapp_bot" : undefined,
-                },
+                evidence: this.cleanEvidence(item.evidence || { excerpt: item.content, timestamp: Date.now() }),
+                evidenceHistory: this.cleanEvidenceHistory(item.evidenceHistory, item.evidence || { excerpt: item.content, timestamp: Date.now() }),
                 createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
                 updatedAt: Number.isFinite(item.updatedAt) ? item.updatedAt : Date.now(),
               }))
@@ -935,15 +1048,11 @@ export class AmirosState {
                 content: item.content.replace(/\s+/g, " ").trim().slice(0, 1_000),
                 owner: item.owner === "contact" || item.owner === "group_member" ? item.owner : "me",
                 assigneeName: item.assigneeName?.replace(/\s+/g, " ").trim().slice(0, 120),
-                status: item.status === "done" || item.status === "dismissed" ? item.status : "open",
+                status: item.status === "done" || item.status === "dismissed" || item.status === "needs_review" ? item.status : "open",
                 dueAt: Number.isFinite(item.dueAt) ? item.dueAt : undefined,
-                evidence: {
-                  messageId: item.evidence?.messageId?.slice(0, 240),
-                  excerpt: (item.evidence?.excerpt || item.content).replace(/\s+/g, " ").trim().slice(0, 600),
-                  senderName: item.evidence?.senderName?.replace(/\s+/g, " ").trim().slice(0, 120),
-                  timestamp: Number.isFinite(item.evidence?.timestamp) ? item.evidence.timestamp : Date.now(),
-                  source: item.evidence?.source === "whatsapp_bot" ? "whatsapp_bot" : undefined,
-                },
+                note: typeof item.note === "string" ? item.note.replace(/\s+/g, " ").trim().slice(0, 1_000) || undefined : undefined,
+                evidence: this.cleanEvidence(item.evidence || { excerpt: item.content, timestamp: Date.now() }),
+                evidenceHistory: this.cleanEvidenceHistory(item.evidenceHistory, item.evidence || { excerpt: item.content, timestamp: Date.now() }),
                 createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
                 updatedAt: Number.isFinite(item.updatedAt) ? item.updatedAt : Date.now(),
               }))
@@ -959,8 +1068,12 @@ export class AmirosState {
                 endAt: Number.isFinite(item.endAt) ? item.endAt : undefined,
                 allDay: false,
                 location: item.location?.replace(/\s+/g, " ").trim().slice(0, 240) || undefined,
+                note: typeof item.note === "string" ? item.note.replace(/\s+/g, " ").trim().slice(0, 1_000) || undefined : undefined,
                 imageUrl: item.imageUrl?.startsWith("/api/todays-focus/icons/") ? item.imageUrl.slice(0, 240) : undefined,
-                status: item.status === "confirmed" || item.status === "dismissed" ? item.status : "inferred",
+                status: item.status === "confirmed" || item.status === "completed" || item.status === "dismissed" ? item.status : "inferred",
+                completedAt: item.status === "completed"
+                  ? Number.isFinite(item.completedAt) ? item.completedAt : Number.isFinite(item.updatedAt) ? item.updatedAt : Date.now()
+                  : undefined,
                 evidence: {
                   messageId: item.evidence?.messageId?.slice(0, 240),
                   excerpt: (item.evidence?.excerpt || item.title).replace(/\s+/g, " ").trim().slice(0, 600),
@@ -1012,6 +1125,7 @@ export class AmirosState {
                         : "inferred",
                   priority: presentation?.priority || "normal",
                   dueAt: Number.isFinite(legacy.dueAt) ? legacy.dueAt : undefined,
+                  note: typeof legacy.note === "string" ? legacy.note.replace(/\s+/g, " ").trim().slice(0, 1_000) || undefined : undefined,
                   // Older releases did not record a dedicated completion
                   // timestamp. Their latest update is the best truthful
                   // completion time we have, so preserve it for the history.
@@ -1028,6 +1142,26 @@ export class AmirosState {
                 };
               })
               .filter((item) => item.title.length > 0);
+            const pendingRaw = memory.pendingOwnerActionClarification as Partial<PendingOwnerActionClarification> | undefined;
+            const pendingOwnerActionClarification = pendingRaw?.kind === "todo"
+              && typeof pendingRaw.source === "string"
+              && typeof pendingRaw.title === "string"
+              && Number.isFinite(pendingRaw.dueAt)
+              && Number.isFinite(pendingRaw.sourceTimestamp)
+              && Number.isFinite(pendingRaw.createdAt)
+              ? {
+                  kind: "todo" as const,
+                  source: pendingRaw.source.replace(/\s+/g, " ").trim().slice(0, 600),
+                  title: pendingRaw.title.replace(/\s+/g, " ").trim().slice(0, 240),
+                  dueAt: Number(pendingRaw.dueAt),
+                  needsTimeClarification: true as const,
+                  messageId: pendingRaw.messageId?.trim().slice(0, 240) || undefined,
+                  sourceTimestamp: Number(pendingRaw.sourceTimestamp),
+                  createdAt: Number(pendingRaw.createdAt),
+                }
+              : undefined;
+            const pendingOwnerLifecycleClarification = normalizePendingOwnerLifecycleClarification(memory.pendingOwnerLifecycleClarification);
+            const ownerRecordReferences = normalizeOwnerRecordReferences(memory.ownerRecordReferences);
             const styleProfile = memory.styleProfile && typeof memory.styleProfile.summary === "string"
               ? {
                   summary: memory.styleProfile.summary.trim().slice(0, 4_000),
@@ -1053,7 +1187,7 @@ export class AmirosState {
                   sourceMessageCount: Number.isFinite(memory.groupSummary.sourceMessageCount) ? memory.groupSummary.sourceMessageCount : 0,
                 }
               : undefined;
-            return entries.length > 0 || manualItems.length > 0 || profile || insights.length > 0 || commitments.length > 0 || events.length > 0 || todos.length > 0 || styleProfile || groupSummary
+            return entries.length > 0 || manualItems.length > 0 || profile || insights.length > 0 || commitments.length > 0 || events.length > 0 || todos.length > 0 || pendingOwnerActionClarification || pendingOwnerLifecycleClarification || ownerRecordReferences.length > 0 || styleProfile || groupSummary
               ? [[chatId, {
                   chatName: memory.chatName?.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
                   entries,
@@ -1063,6 +1197,9 @@ export class AmirosState {
                   commitments,
                   events,
                   todos,
+                  pendingOwnerActionClarification,
+                  pendingOwnerLifecycleClarification,
+                  ownerRecordReferences,
                   styleProfile,
                   groupSummary,
                   // Legacy histories have already been reviewed. Starting the
@@ -1403,6 +1540,101 @@ export class AmirosState {
     return structuredClone(this.persisted.memories[chatId]?.insights || []);
   }
 
+  /**
+   * Repairs canonical memory in place without deleting facts or evidence.
+   * It is safe to run after every learner batch and again at startup.
+   */
+  maintainKnowledge(now = Date.now(), persist = true): {
+    changed: boolean;
+    promoted: number;
+    historicized: number;
+    invalidatedProfiles: number;
+  } {
+    let changed = false;
+    let promoted = 0;
+    let historicized = 0;
+    let invalidatedProfiles = 0;
+
+    for (const [chatId, memory] of Object.entries(this.persisted.memories)) {
+      const beforeLength = memory.insights.length;
+      memory.insights = this.dedupeKnowledgeInsights(memory.insights);
+      if (memory.insights.length !== beforeLength) changed = true;
+
+      for (const insight of memory.insights) {
+        if (!this.canMaintenancePromote(chatId, insight)) continue;
+        insight.status = "confirmed";
+        insight.maintenanceConfirmedAt = now;
+        insight.maintenanceConfirmationReason = "repeated_direct_evidence";
+        insight.updatedAt = Math.max(insight.updatedAt, now);
+        this.reconcileConfirmedCanonicalInsight(chatId, insight, now);
+        promoted += 1;
+        changed = true;
+      }
+
+      const currentByKey = new Map<string, ContactInsight[]>();
+      for (const insight of memory.insights) {
+        const canonicalKey = this.normalizeCanonicalKnowledgeKey(insight.canonicalKey) ||
+          this.inferredCanonicalKnowledgeKey(insight.content, insight.kind);
+        if (!canonicalKey || insight.status !== "confirmed" || (insight.validity || "current") !== "current" || insight.evolution !== "replace") continue;
+        const key = `${insight.kind}:${canonicalKey}`;
+        const items = currentByKey.get(key) || [];
+        items.push(insight);
+        currentByKey.set(key, items);
+      }
+      for (const items of currentByKey.values()) {
+        if (items.length < 2) continue;
+        const winner = [...items].sort((left, right) =>
+          this.latestKnowledgeEvidenceAt(right) - this.latestKnowledgeEvidenceAt(left) ||
+          right.confidence - left.confidence ||
+          (right.reinforcementCount || 1) - (left.reinforcementCount || 1),
+        )[0]!;
+        for (const prior of items) {
+          if (prior.id === winner.id) continue;
+          prior.validity = "historical";
+          prior.supersededById = winner.id;
+          prior.supersededAt = now;
+          prior.updatedAt = Math.max(prior.updatedAt, now);
+          historicized += 1;
+          changed = true;
+        }
+      }
+
+      const newestCanonicalUpdate = memory.insights
+        .filter((item) => item.status === "confirmed" && (item.validity || "current") !== "historical")
+        .reduce((latest, item) => Math.max(latest, item.updatedAt), 0);
+      const canonicalVersion = this.canonicalKnowledgeVersion(memory.insights);
+      if (
+        memory.profile && !memory.profile.staleAt && (
+          memory.profile.sourceKnowledgeVersion
+            ? memory.profile.sourceKnowledgeVersion !== canonicalVersion
+            : newestCanonicalUpdate > (memory.profile.sourceKnowledgeUpdatedAt || memory.profile.updatedAt) + 1_000
+        )
+      ) {
+        memory.profile.staleAt = now;
+        memory.profile.staleReason = "canonical_knowledge_changed";
+        invalidatedProfiles += 1;
+        changed = true;
+      }
+    }
+
+    if (changed && persist) this.save();
+    return { changed, promoted, historicized, invalidatedProfiles };
+  }
+
+  private canonicalKnowledgeVersion(insights: ContactInsight[]): string {
+    const canonical = insights
+      .filter((item) => item.status === "confirmed" && (item.validity || "current") !== "historical")
+      .map((item) => [
+        item.id,
+        item.canonicalKey || "",
+        item.validity || "current",
+        item.content,
+      ].join("\u001f"))
+      .sort()
+      .join("\u001e");
+    return createHash("sha256").update(canonical).digest("hex").slice(0, 24);
+  }
+
   getCommitments(chatId: string): RelationshipCommitment[] {
     if (!this.getContact(chatId).memoryEnabled) return [];
     return structuredClone(this.persisted.memories[chatId]?.commitments || []);
@@ -1416,6 +1648,99 @@ export class AmirosState {
   getTodoTasks(chatId: string): TodoTask[] {
     if (!this.getContact(chatId).memoryEnabled) return [];
     return structuredClone(this.persisted.memories[chatId]?.todos || []);
+  }
+
+  getPendingOwnerActionClarification(chatId: string, now = Date.now()): PendingOwnerActionClarification | undefined {
+    const memory = this.persisted.memories[chatId];
+    const pending = memory?.pendingOwnerActionClarification;
+    if (!pending) return undefined;
+    if (now - pending.createdAt > OWNER_ACTION_CLARIFICATION_TTL_MS) {
+      delete memory.pendingOwnerActionClarification;
+      this.save();
+      return undefined;
+    }
+    return structuredClone(pending);
+  }
+
+  setPendingOwnerActionClarification(
+    chatId: string,
+    input: Omit<PendingOwnerActionClarification, "createdAt"> & { createdAt?: number },
+  ): PendingOwnerActionClarification {
+    const memory = this.ensureMemory(chatId);
+    const pending: PendingOwnerActionClarification = {
+      kind: "todo",
+      source: input.source.replace(/\s+/g, " ").trim().slice(0, 600),
+      title: input.title.replace(/\s+/g, " ").trim().slice(0, 240),
+      dueAt: input.dueAt,
+      needsTimeClarification: true,
+      messageId: input.messageId?.trim().slice(0, 240) || undefined,
+      sourceTimestamp: input.sourceTimestamp,
+      createdAt: input.createdAt || Date.now(),
+    };
+    memory.pendingOwnerActionClarification = pending;
+    memory.updatedAt = pending.createdAt;
+    this.save();
+    return structuredClone(pending);
+  }
+
+  clearPendingOwnerActionClarification(chatId: string): boolean {
+    const memory = this.persisted.memories[chatId];
+    if (!memory?.pendingOwnerActionClarification) return false;
+    delete memory.pendingOwnerActionClarification;
+    this.save();
+    return true;
+  }
+
+  getPendingOwnerLifecycleClarification(chatId: string, now = Date.now()): PendingOwnerLifecycleClarification | undefined {
+    const memory = this.persisted.memories[chatId];
+    const pending = memory?.pendingOwnerLifecycleClarification;
+    if (!pending) return undefined;
+    if (now - pending.createdAt > OWNER_ACTION_CLARIFICATION_TTL_MS) {
+      delete memory.pendingOwnerLifecycleClarification;
+      this.save();
+      return undefined;
+    }
+    return structuredClone(pending);
+  }
+
+  setPendingOwnerLifecycleClarification(
+    chatId: string,
+    pending: PendingOwnerLifecycleClarification,
+  ): PendingOwnerLifecycleClarification {
+    const normalized = normalizePendingOwnerLifecycleClarification(pending);
+    if (!normalized) throw new Error("A lifecycle clarification requires at least two valid candidates");
+    const memory = this.ensureMemory(chatId);
+    memory.pendingOwnerLifecycleClarification = normalized;
+    memory.updatedAt = normalized.createdAt;
+    this.save();
+    return structuredClone(normalized);
+  }
+
+  clearPendingOwnerLifecycleClarification(chatId: string): boolean {
+    const memory = this.persisted.memories[chatId];
+    if (!memory?.pendingOwnerLifecycleClarification) return false;
+    delete memory.pendingOwnerLifecycleClarification;
+    this.save();
+    return true;
+  }
+
+  rememberOwnerRecordReference(ownerChatId: string, reference: OwnerRecordReference): OwnerRecordReference[] {
+    const memory = this.ensureMemory(ownerChatId);
+    const normalized = normalizeOwnerRecordReferences([reference]);
+    if (normalized.length !== 1) throw new Error("A valid owner record reference is required");
+    const item = normalized[0]!;
+    memory.ownerRecordReferences = [
+      ...(memory.ownerRecordReferences || []).filter((existing) =>
+        existing.kind !== item.kind || existing.chatId !== item.chatId || existing.id !== item.id),
+      item,
+    ].slice(-12);
+    memory.updatedAt = item.referencedAt;
+    this.save();
+    return structuredClone(memory.ownerRecordReferences);
+  }
+
+  getOwnerRecordReferences(ownerChatId: string): OwnerRecordReference[] {
+    return structuredClone(this.persisted.memories[ownerChatId]?.ownerRecordReferences || []);
   }
 
   listTodoTasks(): Array<TodoTask & { chatId: string; contactName?: string }> {
@@ -1443,6 +1768,16 @@ export class AmirosState {
         .filter((event) => event.status !== "dismissed")
         .map((event) => ({ ...structuredClone(event), chatId })))
       .sort((a, b) => a.startAt - b.startAt);
+  }
+
+  listCommitments(): Array<RelationshipCommitment & { chatId: string; contactName?: string }> {
+    return Object.entries(this.persisted.memories)
+      .flatMap(([chatId, memory]) => memory.commitments.map((commitment) => ({
+        ...structuredClone(commitment),
+        chatId,
+        contactName: memory.chatName || this.persisted.chatNames[chatId],
+      })))
+      .sort((left, right) => right.updatedAt - left.updatedAt);
   }
 
   getCalendarCaptureResult(
@@ -1624,9 +1959,12 @@ export class AmirosState {
     if (patch.location !== undefined) {
       event.location = patch.location.replace(/\s+/g, " ").trim().slice(0, 240) || undefined;
     }
+    if (patch.note !== undefined) event.note = patch.note.replace(/\s+/g, " ").trim().slice(0, 1_000) || undefined;
     if (patch.imageUrl !== undefined && patch.imageUrl.startsWith("/api/todays-focus/icons/")) {
       event.imageUrl = patch.imageUrl.slice(0, 240);
     }
+    if (patch.status === "completed") event.completedAt ||= Date.now();
+    else if (patch.status === "confirmed" || patch.status === "inferred") event.completedAt = undefined;
     event.allDay = false;
     event.updatedAt = Date.now();
     memory.updatedAt = event.updatedAt;
@@ -1711,27 +2049,10 @@ export class AmirosState {
     const memory = this.ensureMemory(chatId);
     const content = input.content.replace(/\s+/g, " ").trim().slice(0, 1_000);
     if (!content) throw new Error("A commitment title is required");
-    const candidate = { ...input, content, owner: "me" as const };
-    const existing = memory.commitments.find((item) => this.isDuplicateCommitment(item, candidate));
-    const now = Date.now();
-    if (existing) {
-      if (existing.status !== "done") existing.status = "open";
-      existing.content = content;
-      existing.dueAt = input.dueAt;
-      existing.evidence = this.cleanEvidence(input.evidence);
-      existing.updatedAt = now;
-      memory.updatedAt = now;
-      this.save();
-      return { commitment: structuredClone(existing), created: false };
-    }
-    const commitment: RelationshipCommitment = {
-      id: randomUUID(), content, owner: "me", status: "open", dueAt: input.dueAt,
-      evidence: this.cleanEvidence(input.evidence), createdAt: now, updatedAt: now,
-    };
-    memory.commitments.push(commitment);
-    memory.updatedAt = now;
+    const reconciled = this.upsertCommitment(memory.commitments, { ...input, content, owner: "me" }, Date.now());
+    memory.updatedAt = reconciled.commitment.updatedAt;
     this.save();
-    return { commitment: structuredClone(commitment), created: true };
+    return { commitment: structuredClone(reconciled.commitment), created: reconciled.created };
   }
 
   intelligenceQuestionHistory(limit = 12): IntelligenceQuestionHistoryItem[] {
@@ -1814,11 +2135,17 @@ export class AmirosState {
   intelligenceSnapshot(): IntelligenceChatSnapshot[] {
     return Object.entries(this.persisted.memories)
       .map(([chatId, memory]) => {
-        let lastIncomingIndex = -1;
-        let lastOutgoingIndex = -1;
-        for (let index = memory.entries.length - 1; index >= 0; index -= 1) {
-          const entry = memory.entries[index];
-          if (!entry) continue;
+        type IndexedEntry = { entry: ConversationMemoryEntry; index: number };
+        const timestampOf = (entry: ConversationMemoryEntry) =>
+          entry.timestamp > 0 && entry.timestamp < 10_000_000_000 ? entry.timestamp * 1_000 : entry.timestamp;
+        const isMoreRecent = (candidate: IndexedEntry, current: IndexedEntry | undefined) =>
+          !current || timestampOf(candidate.entry) > timestampOf(current.entry) || (
+            timestampOf(candidate.entry) === timestampOf(current.entry) && candidate.index > current.index
+          );
+        let lastIncoming: IndexedEntry | undefined;
+        let lastOutgoing: IndexedEntry | undefined;
+        let lastInteraction: IndexedEntry | undefined;
+        memory.entries.forEach((entry, index) => {
 
           // A WhatsApp message authored by the owner is stored with role
           // "user" so it can inform the assistant, but it is still an
@@ -1827,21 +2154,29 @@ export class AmirosState {
           // action for the other person.
           const isOutgoing = entry.role === "assistant" || entry.author === "owner";
           const isIncoming = entry.role === "user" && !isOutgoing;
-          if (lastIncomingIndex < 0 && isIncoming) lastIncomingIndex = index;
-          if (lastOutgoingIndex < 0 && isOutgoing) lastOutgoingIndex = index;
-          if (lastIncomingIndex >= 0 && lastOutgoingIndex >= 0) break;
-        }
+          const isHumanInteraction = entry.author === "owner" || entry.author === "contact" || entry.author === "group_member" || (
+            entry.role === "user" && entry.author !== "assistant"
+          );
+          const candidate = { entry, index };
+          if (isIncoming && isMoreRecent(candidate, lastIncoming)) lastIncoming = candidate;
+          if (isOutgoing && isMoreRecent(candidate, lastOutgoing)) lastOutgoing = candidate;
+          if (isHumanInteraction && isMoreRecent(candidate, lastInteraction)) lastInteraction = candidate;
+        });
         return {
           chatId,
-          insights: structuredClone(memory.insights || []),
-          commitments: structuredClone(memory.commitments || []),
+          insights: structuredClone((memory.insights || []).map((item) => ({
+            ...item,
+            freshness: assessKnowledgeFreshness(item).state,
+          }))),
+          commitments: structuredClone((memory.commitments || []).map((item) => ({ ...item, status: relationshipCommitmentStatus(item) }))),
           events: structuredClone(memory.events || []),
           todos: structuredClone(memory.todos || []),
           profile: memory.profile ? structuredClone(memory.profile) : undefined,
           styleProfile: memory.styleProfile ? structuredClone(memory.styleProfile) : undefined,
           groupSummary: memory.groupSummary ? structuredClone(memory.groupSummary) : undefined,
-          needsReply: lastIncomingIndex >= 0 && lastIncomingIndex > lastOutgoingIndex,
-          lastIncoming: lastIncomingIndex >= 0 ? structuredClone(memory.entries[lastIncomingIndex]) : undefined,
+          needsReply: Boolean(lastIncoming && (!lastOutgoing || isMoreRecent(lastIncoming, lastOutgoing))),
+          lastInteraction: lastInteraction ? structuredClone(lastInteraction.entry) : undefined,
+          lastIncoming: lastIncoming ? structuredClone(lastIncoming.entry) : undefined,
           updatedAt: memory.updatedAt,
         };
       })
@@ -1859,7 +2194,7 @@ export class AmirosState {
   mergeRoutedAnalyzedIntelligence(
     sourceChatId: string,
     input: {
-      insights: Array<Pick<ContactInsight, "kind" | "content" | "confidence" | "evidence"> & { subjectNames?: string[] }>;
+      insights: Array<AnalyzedInsight & { subjectNames?: string[] }>;
       commitments: Array<Pick<RelationshipCommitment, "content" | "owner" | "assigneeName" | "dueAt" | "evidence">>;
       events?: Array<Pick<CalendarEvent, "title" | "startAt" | "allDay" | "location" | "evidence">>;
       todos?: Array<Pick<TodoTask, "title" | "dueAt" | "evidence"> & { priority?: TodoTask["priority"] }>;
@@ -1872,7 +2207,7 @@ export class AmirosState {
     const routedInsights = new Map<string, RoutedInsight[]>();
     for (const insight of input.insights) {
       const targets = this.resolveKnowledgeTargetChatIds(sourceChatId, insight.subjectNames || []);
-      const existing = this.findKnowledgeInsightAcrossChats(insight.content, targets);
+      const existing = this.findKnowledgeInsightAcrossChats(insight.content, targets, insight.validity || "current");
       const subjectChatIds = [...new Set([...(existing?.subjectChatIds || []), ...targets])];
       const subjectNames = [...new Set([
         ...(existing?.subjectNames || []),
@@ -1881,9 +2216,15 @@ export class AmirosState {
       ])];
       // A reviewed decision is a durable tombstone. Re-analysis may find the
       // same fact in another message, but it must not reopen the suggestion.
-      if (existing && existing.status !== "inferred") continue;
+      if (existing?.status === "outdated") continue;
+      const autonomousConfirmation = this.autonomousConfirmationFor(sourceChatId, insight);
       const routed: RoutedInsight = {
         ...insight,
+        ...(autonomousConfirmation ? {
+          status: "confirmed" as const,
+          autonomouslyConfirmedAt: autonomousConfirmation.at,
+          autonomousConfirmationReason: autonomousConfirmation.reason,
+        } : {}),
         clusterId: existing?.clusterId || randomUUID(),
         subjectChatIds,
         subjectNames,
@@ -1922,20 +2263,22 @@ export class AmirosState {
     const targets = Object.entries(this.persisted.memories).flatMap(([targetChatId, candidate]) => candidate.insights
       .filter((item) =>
         Boolean(clusterId && item.clusterId === clusterId) ||
-        (item.kind === insight.kind && this.isDuplicateKnowledgeText(item.content, insight.content)),
+        (item.kind === insight.kind && (item.validity || "current") === (insight.validity || "current") && this.isDuplicateKnowledgeText(item.content, insight.content)),
       )
       .map((item) => ({ chatId: targetChatId, insight: item })));
     const affectedChatIds = new Set(targets.map((target) => target.chatId));
-    for (const { insight: target } of targets) {
+    for (const { chatId: targetChatId, insight: target } of targets) {
       if (patch.status) target.status = patch.status;
       if (patch.content?.trim()) target.content = patch.content.replace(/\s+/g, " ").trim().slice(0, 1_000);
       target.updatedAt = updatedAt;
+      if (target.status === "confirmed") this.reconcileConfirmedCanonicalInsight(targetChatId, target, updatedAt);
     }
     for (const [candidateChatId, candidate] of Object.entries(this.persisted.memories)) {
       candidate.insights = this.dedupeKnowledgeInsights(candidate.insights);
       if (affectedChatIds.has(candidateChatId)) candidate.updatedAt = updatedAt;
     }
     memory.updatedAt = updatedAt;
+    this.maintainKnowledge(updatedAt, false);
     this.save();
     return structuredClone(insight);
   }
@@ -1943,12 +2286,19 @@ export class AmirosState {
   updateCommitment(
     chatId: string,
     commitmentId: string,
-    status: RelationshipCommitment["status"],
+    update: RelationshipCommitment["status"] | RelationshipCommitmentPatch,
   ): RelationshipCommitment | undefined {
     const memory = this.persisted.memories[chatId];
     const commitment = memory?.commitments.find((item) => item.id === commitmentId);
     if (!memory || !commitment) return undefined;
-    commitment.status = status;
+    const patch = typeof update === "string" ? { status: update } : update;
+    if (patch.status) commitment.status = patch.status;
+    if (patch.content !== undefined) {
+      const content = patch.content.replace(/\s+/g, " ").trim().slice(0, 1_000);
+      if (content) commitment.content = content;
+    }
+    if (patch.dueAt !== undefined) commitment.dueAt = Number.isFinite(patch.dueAt) && patch.dueAt! > 0 ? patch.dueAt! : undefined;
+    if (patch.note !== undefined) commitment.note = patch.note.replace(/\s+/g, " ").trim().slice(0, 1_000) || undefined;
     commitment.updatedAt = Date.now();
     memory.updatedAt = commitment.updatedAt;
     this.save();
@@ -1976,6 +2326,7 @@ export class AmirosState {
       task.dueAt = Number.isFinite(patch.dueAt) && patch.dueAt! > 0 ? patch.dueAt! : undefined;
     }
     if (patch.priority) task.priority = patch.priority;
+    if (patch.note !== undefined) task.note = patch.note.replace(/\s+/g, " ").trim().slice(0, 1_000) || undefined;
     task.updatedAt = Date.now();
     memory.updatedAt = task.updatedAt;
     memory.todos = this.dedupeTodoTasks(memory.todos);
@@ -1994,7 +2345,7 @@ export class AmirosState {
   mergeAnalyzedIntelligence(
     chatId: string,
     input: {
-      insights: Array<Pick<ContactInsight, "kind" | "content" | "confidence" | "evidence"> & Pick<ContactInsight, "clusterId" | "subjectChatIds" | "subjectNames">>;
+      insights: Array<AnalyzedInsight & Pick<ContactInsight, "clusterId" | "subjectChatIds" | "subjectNames">>;
       commitments: Array<Pick<RelationshipCommitment, "content" | "owner" | "assigneeName" | "dueAt" | "evidence">>;
       events?: Array<Pick<CalendarEvent, "title" | "startAt" | "allDay" | "location" | "evidence">>;
       todos?: Array<Pick<TodoTask, "title" | "dueAt" | "evidence"> & { priority?: TodoTask["priority"] }>;
@@ -2006,49 +2357,21 @@ export class AmirosState {
     const now = Date.now();
     for (const candidate of input.insights.slice(0, 40)) {
       const content = candidate.content.replace(/\s+/g, " ").trim().slice(0, 1_000);
-      if (!content) continue;
-      if (memory.manualItems.some((item) => this.isDuplicateKnowledgeText(item.content, content))) continue;
-      const existing = memory.insights.find((item) =>
-        (candidate.clusterId && item.clusterId === candidate.clusterId) || this.isDuplicateKnowledgeText(item.content, content) || (
-          item.kind === candidate.kind &&
-          Boolean(candidate.evidence.messageId) &&
-          item.evidence.messageId === candidate.evidence.messageId &&
-          this.hasKnowledgeSubsetOverlap(item.content, content)
-        ),
-      );
-      if (existing) {
-        existing.confidence = Math.max(existing.confidence, Math.max(0, Math.min(1, candidate.confidence)));
-        // Replace the lightweight local extraction with the richer AI wording, but
-        // never silently rewrite knowledge that the user has already reviewed.
-        if (existing.status === "inferred" && this.similarText(existing.content, existing.evidence.excerpt)) {
-          existing.content = content;
-          existing.evidence = this.cleanEvidence(candidate.evidence);
-          existing.updatedAt = now;
-        }
-      } else {
-        memory.insights.push({
-          id: randomUUID(), clusterId: candidate.clusterId || randomUUID(),
-          subjectChatIds: candidate.subjectChatIds ? [...new Set(candidate.subjectChatIds)] : [chatId],
-          subjectNames: candidate.subjectNames ? [...new Set(candidate.subjectNames)] : undefined,
-          kind: candidate.kind, content, status: "inferred",
-          confidence: Math.max(0, Math.min(1, candidate.confidence)),
-          evidence: this.cleanEvidence(candidate.evidence), createdAt: now, updatedAt: now,
-        });
-      }
+      if (!content || memory.manualItems.some((item) => this.isDuplicateKnowledgeText(item.content, content))) continue;
+      const result = this.upsertInsight(memory.insights, { ...candidate, content }, now, chatId);
+      if (result.insight.status === "confirmed") this.reconcileConfirmedCanonicalInsight(chatId, result.insight, now);
     }
     for (const candidate of input.commitments.slice(0, 40)) {
       const content = candidate.content.replace(/\s+/g, " ").trim().slice(0, 1_000);
       const sourceEntry = candidate.evidence.messageId
         ? memory.entries.find((entry) => entry.messageId === candidate.evidence.messageId)
         : undefined;
-      if (sourceEntry?.excludeFromAutomaticLearning) continue;
-      if (!content || memory.commitments.some((item) => this.isDuplicateCommitment(item, candidate))) continue;
-      memory.commitments.push({
-        id: randomUUID(), content, owner: candidate.owner,
+      if (sourceEntry?.excludeFromAutomaticLearning || !content) continue;
+      this.upsertCommitment(memory.commitments, {
+        ...candidate,
+        content,
         assigneeName: candidate.assigneeName?.replace(/\s+/g, " ").trim().slice(0, 120),
-        status: "open", dueAt: candidate.dueAt,
-        evidence: this.cleanEvidence(candidate.evidence), createdAt: now, updatedAt: now,
-      });
+      }, now);
     }
     for (const candidate of (input.todos || []).slice(0, 40)) {
       const title = candidate.title.replace(/\s+/g, " ").trim().slice(0, 1_000);
@@ -2123,6 +2446,7 @@ export class AmirosState {
     memory.todos = this.dedupeTodoTasks(memory.todos).slice(-400);
     memory.updatedAt = now;
     this.persisted.memories[chatId] = memory;
+    this.maintainKnowledge(now, false);
     this.dedupeCalendarEventsAcrossChats();
     this.save();
     return {
@@ -2161,6 +2485,7 @@ export class AmirosState {
     const terms = this.searchTerms(query);
     const temporalRange = resolveTemporalRange(query, now);
     const dueDateQuery = isDueDateQuery(query);
+    const historicalIntent = /\b(?:previously|formerly|before|past|history|historical|used to|lived|worked|old)\b/iu.test(query);
     const calendarIntent = /\b(schedule|calendar|agenda|plan|plans|event|events|appointment|week|today|tomorrow|upcoming|doing)\b|(?:לוח שנה|יומן|תוכניות|השבוע|מחר)/iu.test(query);
     const records: IntelligenceSearchRecord[] = [];
     for (const [chatId, memory] of Object.entries(this.persisted.memories)) {
@@ -2199,15 +2524,26 @@ export class AmirosState {
         status: "confirmed",
         timestamp: item.createdAt,
       }, 18, item.createdAt));
-      memory.insights.filter((item) => item.status !== "outdated").forEach((item) => push({
+      memory.insights.filter((item) => item.status !== "outdated").forEach((item) => {
+        const freshness = assessKnowledgeFreshness(item, now);
+        const baseBoost = (item.validity || "current") === "historical"
+          ? historicalIntent ? 18 : 1
+          : item.status === "confirmed"
+            ? (historicalIntent ? 4 : 20) + Math.round(item.confidence * 4)
+            : 3 + Math.round(item.confidence * 2);
+        push({
         id: item.id,
         chatId,
         kind: "insight",
         content: item.content,
         senderName: item.evidence.senderName,
         status: item.status,
-        timestamp: item.updatedAt,
-      }, item.status === "confirmed" ? 20 : 3, item.evidence.timestamp));
+        knowledgeValidity: item.validity || "current",
+        knowledgeFreshness: freshness.state,
+        knowledgeNeedsQualification: freshness.qualify,
+        timestamp: item.lastReinforcedAt || item.updatedAt,
+        }, Math.max(0, baseBoost * freshness.scoreMultiplier), item.evidence.timestamp);
+      });
       memory.commitments.filter((item) => item.status === "open").forEach((item) => push(
         { id: item.id, chatId, kind: "commitment", content: item.content, senderName: item.assigneeName, status: item.status, timestamp: item.updatedAt },
         0,
@@ -2235,7 +2571,9 @@ export class AmirosState {
           status: item.status,
           timestamp: item.startAt,
         }, calendarIntent ? 24 : 0, item.startAt));
-      if (memory.profile && !temporalRange) push({ id: `${chatId}-profile`, chatId, kind: "profile", content: memory.profile.summary, status: "confirmed", timestamp: memory.profile.updatedAt }, 16);
+      if (memory.profile && !memory.profile.staleAt && !temporalRange) {
+        push({ id: `${chatId}-profile`, chatId, kind: "profile", content: memory.profile.summary, status: "confirmed", timestamp: memory.profile.updatedAt }, 16);
+      }
     }
     const hasMatches = records.some((record) => record.score >= 3);
     return records
@@ -2549,6 +2887,19 @@ export class AmirosState {
       });
       if (
         entry.role === "user" &&
+        entry.excludeFromAutomaticLearning !== true &&
+        this.getContact(chatId).knowledgeTracking === "enabled"
+      ) {
+        this.reconcileCommitmentLifecycle(memory, {
+          content,
+          author: entry.author,
+          senderName: entry.senderName,
+          timestamp,
+          messageId,
+        });
+      }
+      if (
+        entry.role === "user" &&
         this.getContact(chatId).knowledgeTracking === "enabled" &&
         (entry.countAsIncoming !== false || entry.extractSignals === true)
       ) {
@@ -2606,15 +2957,10 @@ export class AmirosState {
       timestamp: entry.timestamp,
     });
     const addInsight = (kind: ContactInsight["kind"], confidence: number) => {
-      // The immediate extractor runs before the fuller AI pass. It must honor
-      // reviewed knowledge just as the AI merge does, or a small paraphrase of
-      // an approved/dismissed detail becomes a new pending suggestion.
-      if (memory.insights.some((item) => this.isDuplicateKnowledgeText(item.content, text))) return;
-      const now = Date.now();
-      memory.insights.push({
-        id: randomUUID(), kind, content: text, status: "inferred", confidence,
-        evidence, createdAt: now, updatedAt: now,
-      });
+      // The immediate extractor and the fuller AI pass share the same canonical
+      // record, so a paraphrase only adds supporting evidence rather than a new topic.
+      if (memory.manualItems.some((item) => this.isDuplicateKnowledgeText(item.content, text))) return;
+      this.upsertInsight(memory.insights, { kind, content: text, confidence, evidence }, Date.now(), chatId);
     };
     if (/\b(i (?:really )?(?:like|love|prefer|hate|don't like)|my favou?rite)\b|אני (?:אוהב|אוהבת|מעדיף|מעדיפה|שונא|שונאת)/iu.test(lower)) {
       addInsight("preference", 0.76);
@@ -2628,17 +2974,15 @@ export class AmirosState {
     } else if (/\b(i['’]?ll|i will|let me|i can send|i can do)\b|(?:אני א|אני יכול|אני יכולה)/iu.test(lower)) {
       owner = entry.senderName ? "group_member" : "contact";
     }
-    if (owner && !memory.commitments.some((item) => item.status === "open" && this.similarText(item.content, text))) {
-      const now = Date.now();
-      memory.commitments.push({
-        id: randomUUID(), content: text, owner, assigneeName: entry.senderName,
-        status: "open", evidence, createdAt: now, updatedAt: now,
-      });
+    if (owner) {
+      this.upsertCommitment(memory.commitments, {
+        content: text, owner, assigneeName: entry.senderName, evidence,
+      }, Date.now());
     }
     this.addCalendarSignal(memory, entry);
     this.addTodoSignal(chatId, memory, entry);
-    memory.insights = memory.insights.slice(-200);
-    memory.commitments = memory.commitments.slice(-200);
+    memory.insights = this.dedupeKnowledgeInsights(memory.insights).slice(-200);
+    memory.commitments = this.dedupeCommitments(memory.commitments).slice(-200);
     memory.todos = this.dedupeTodoTasks(memory.todos).slice(-400);
   }
 
@@ -2778,7 +3122,7 @@ export class AmirosState {
     const removed = new Set<string>();
     const key = (chatId: string, eventId: string) => `${chatId}\u001f${eventId}`;
     const priority = (event: CalendarEvent) =>
-      (event.status === "confirmed" ? 30 : event.status === "dismissed" ? 20 : 10)
+      (event.status === "completed" ? 40 : event.status === "confirmed" ? 30 : event.status === "dismissed" ? 20 : 10)
       + (event.evidence.messageId ? 2 : 0)
       + Math.min(1, Math.max(0, event.updatedAt / 10_000_000_000_000));
     for (let leftIndex = 0; leftIndex < references.length; leftIndex += 1) {
@@ -2867,6 +3211,28 @@ export class AmirosState {
     };
   }
 
+  private cleanEvidenceHistory(history: unknown, primary: MemoryEvidence): MemoryEvidence[] | undefined {
+    const candidates = [primary, ...(Array.isArray(history) ? history : [])]
+      .filter((item): item is MemoryEvidence => Boolean(item) && typeof item === "object" && typeof (item as MemoryEvidence).excerpt === "string")
+      .map((item) => this.cleanEvidence(item));
+    const unique = new Map<string, MemoryEvidence>();
+    for (const item of candidates) {
+      const key = item.messageId || item.timestamp + ":" + item.excerpt.toLocaleLowerCase();
+      if (!unique.has(key)) unique.set(key, item);
+    }
+    const cleaned = [...unique.values()].sort((left, right) => left.timestamp - right.timestamp).slice(-12);
+    return cleaned.length > 1 ? cleaned : undefined;
+  }
+
+  private mergeEvidenceHistory(
+    primary: MemoryEvidence,
+    history: MemoryEvidence[] | undefined,
+    additional: MemoryEvidence,
+    additionalHistory?: MemoryEvidence[],
+  ): MemoryEvidence[] | undefined {
+    return this.cleanEvidenceHistory([...(history || []), ...(additionalHistory || []), additional], primary);
+  }
+
   private similarText(left: string, right: string): boolean {
     const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
     const a = normalize(left);
@@ -2944,6 +3310,127 @@ export class AmirosState {
     return this.similarText(left, right) || this.hasMeaningfulKnowledgeOverlap(left, right);
   }
 
+  private normalizeCanonicalKnowledgeKey(value: string | undefined): string | undefined {
+    const normalized = value?.normalize("NFKD").toLocaleLowerCase().replace(/\p{M}/gu, "")
+      .replace(/[^\p{L}\p{N}]+/gu, "_").replace(/^_+|_+$/gu, "").slice(0, 80);
+    return normalized || undefined;
+  }
+
+  /**
+   * Confirms only direct, high-confidence, current facts from a private
+   * conversation. The AI still decides the canonical property and whether the
+   * statement replaces or reinforces it; this gate decides whether that
+   * proposal is safe to make authoritative without a review card.
+   */
+  private autonomousConfirmationFor(
+    sourceChatId: string,
+    insight: AnalyzedInsight,
+  ): { at: number; reason: NonNullable<ContactInsight["autonomousConfirmationReason"]> } | undefined {
+    if (
+      insight.confidence < AUTONOMOUS_KNOWLEDGE_CONFIDENCE ||
+      insight.kind === "relationship_change" ||
+      (insight.validity || "current") !== "current" ||
+      !this.normalizeCanonicalKnowledgeKey(insight.canonicalKey) ||
+      sourceChatId.endsWith("@g.us")
+    ) return undefined;
+
+    const source = insight.evidence.messageId
+      ? this.persisted.memories[sourceChatId]?.entries.find((entry) => entry.messageId === insight.evidence.messageId)
+      : undefined;
+    if (
+      !source ||
+      source.role !== "user" ||
+      source.excludeFromAutomaticLearning ||
+      (source.author !== "owner" && source.author !== "contact")
+    ) return undefined;
+
+    const statement = source.content.replace(/\s+/g, " ").trim();
+    if (!statement || this.isUncertainKnowledgeStatement(statement) || this.isSensitiveKnowledgeStatement(statement, insight.content)) {
+      return undefined;
+    }
+
+    if (source.author === "owner") {
+      return { at: Date.now(), reason: "direct_owner_statement" };
+    }
+    if (!this.isDirectFirstPersonKnowledgeStatement(statement)) return undefined;
+    return { at: Date.now(), reason: "direct_contact_statement" };
+  }
+
+  private isDirectFirstPersonKnowledgeStatement(value: string): boolean {
+    return /(?:^|[.!?]\s+)(?:i(?:\s+(?:am|work|live|reside|moved|joined|left|started|became|prefer|love|like)|['’](?:m|ve))\b|my\s+(?:new\s+)?(?:home|apartment|place|job|office|employer|neighborhood|neighbourhood|favorite|favourite|diet)\b|אני\b|עברתי\b|הצטרפתי\b|עזבתי\b|התחלתי\b|נהייתי\b|גר(?:ה|ים|ות)?\b)/iu.test(value);
+  }
+
+  private isUncertainKnowledgeStatement(value: string): boolean {
+    return /\b(?:might|may|maybe|perhaps|possibly|probably|thinking about|considering|hope to|want to|plan to|would like|could)\b|(?:אולי|חושב(?:ת|ים|ות)?|שוקל(?:ת|ים|ות)?|מתכננ(?:ת|ים|ות)?|מקווה)/iu.test(value);
+  }
+
+  private isSensitiveKnowledgeStatement(...values: string[]): boolean {
+    return /\b(?:diagnos(?:is|ed)|medical|health condition|pregnan(?:t|cy)|religion|religious|politic(?:s|al)|ethnic(?:ity)?|sexual(?:ity| orientation))\b|(?:אבחנ|רפוא|בריאות|היריו|דת|פוליטי|מוצא|מיני)/iu.test(values.join(" "));
+  }
+
+  private inferredCanonicalKnowledgeKey(content: string, kind: ContactInsight["kind"]): string | undefined {
+    const text = content.toLocaleLowerCase();
+    if (/\b(?:live|lives|lived|living|reside|resides|moved|home is|based in)\b/iu.test(text)) return "residence";
+    if (/\b(?:work|works|worked|working|job|employer|joined|left)\b/iu.test(text)) return "employer";
+    if (/\b(?:vegetarian|vegan|diet|kosher|gluten|allerg)\b/iu.test(text)) return "diet";
+    if (/\b(?:favorite|favourite)\s+restaurant\b/iu.test(text)) return "favorite_restaurant";
+    if (/\b(?:birthday|born)\b/iu.test(text)) return "birthday";
+    if (kind === "relationship_change" && /\b(?:partner|wife|husband|girlfriend|boyfriend|married|divorced)\b/iu.test(text)) return "partner";
+    return undefined;
+  }
+
+  private latestKnowledgeEvidenceAt(insight: ContactInsight): number {
+    const toMilliseconds = (value: number) => value > 0 && value < 10_000_000_000 ? value * 1_000 : value;
+    return [insight.updatedAt, insight.lastReinforcedAt || 0, insight.evidence.timestamp, ...(insight.evidenceHistory || []).map((item) => item.timestamp)]
+      .reduce((latest, value) => Math.max(latest, toMilliseconds(value)), 0);
+  }
+
+  private canMaintenancePromote(chatId: string, insight: ContactInsight): boolean {
+    if (
+      insight.status !== "inferred" ||
+      (insight.validity || "current") !== "current" ||
+      insight.kind === "relationship_change" ||
+      insight.confidence < .88 ||
+      chatId.endsWith("@g.us") ||
+      !this.normalizeCanonicalKnowledgeKey(insight.canonicalKey) ||
+      this.isSensitiveKnowledgeStatement(insight.content)
+    ) return false;
+
+    const memory = this.persisted.memories[chatId];
+    if (!memory) return false;
+    const distinct = new Map<string, ConversationMemoryEntry>();
+    for (const evidence of [insight.evidence, ...(insight.evidenceHistory || [])]) {
+      const source = evidence.messageId
+        ? memory.entries.find((entry) => entry.messageId === evidence.messageId)
+        : undefined;
+      if (
+        !source || source.role !== "user" || source.excludeFromAutomaticLearning ||
+        (source.author !== "owner" && source.author !== "contact") ||
+        this.isUncertainKnowledgeStatement(source.content) ||
+        this.isSensitiveKnowledgeStatement(source.content, insight.content)
+      ) continue;
+      if (source.author === "contact" && !this.isDirectFirstPersonKnowledgeStatement(source.content)) continue;
+      distinct.set(source.messageId || `${source.timestamp}:${source.content}`, source);
+    }
+    return distinct.size >= 2;
+  }
+
+  private reconcileConfirmedCanonicalInsight(chatId: string, insight: ContactInsight, now: number): void {
+    const canonicalKey = this.normalizeCanonicalKnowledgeKey(insight.canonicalKey);
+    if (!canonicalKey || (insight.validity || "current") !== "current" || insight.evolution !== "replace") return;
+    const memory = this.persisted.memories[chatId];
+    if (!memory) return;
+    for (const prior of memory.insights) {
+      if (prior.id === insight.id || prior.clusterId === insight.clusterId || prior.kind !== insight.kind ||
+        (prior.validity || "current") !== "current" ||
+        (this.normalizeCanonicalKnowledgeKey(prior.canonicalKey) || this.inferredCanonicalKnowledgeKey(prior.content, prior.kind)) !== canonicalKey) continue;
+      prior.validity = "historical";
+      prior.supersededById = insight.id;
+      prior.supersededAt = now;
+      prior.updatedAt = Math.max(prior.updatedAt, now);
+    }
+  }
+
   private dedupeKnowledgeInsights(insights: ContactInsight[]): ContactInsight[] {
     const withoutReplacedLocalExtractions = insights.filter((insight) => {
       if (insight.status !== "inferred" || !insight.evidence.messageId ||
@@ -2962,7 +3449,11 @@ export class AmirosState {
     for (const insight of withoutReplacedLocalExtractions) {
       const duplicateIndex = kept.findIndex((item) =>
         Boolean(item.clusterId && insight.clusterId && item.clusterId === insight.clusterId) ||
-        this.isDuplicateKnowledgeText(item.content, insight.content),
+        ((item.validity || "current") === (insight.validity || "current") &&
+          (item.canonicalKey && insight.canonicalKey && item.canonicalKey === insight.canonicalKey &&
+            (item.evolution === "append" || insight.evolution === "append")
+            ? this.similarText(item.content, insight.content)
+            : this.isDuplicateKnowledgeText(item.content, insight.content))),
       );
       if (duplicateIndex < 0) {
         kept.push(insight);
@@ -2971,6 +3462,17 @@ export class AmirosState {
       const current = kept[duplicateIndex]!;
       const replacement = statusPriority(insight.status) > statusPriority(current.status) ? insight : current;
       replacement.confidence = Math.max(current.confidence, insight.confidence);
+      replacement.canonicalKey ||= current.canonicalKey || insight.canonicalKey;
+      replacement.validity ||= current.validity || insight.validity || "current";
+      replacement.evolution ||= current.evolution || insight.evolution || "append";
+      replacement.reinforcementCount = Math.max(1, current.reinforcementCount || 1) + Math.max(1, insight.reinforcementCount || 1);
+      replacement.lastReinforcedAt = Math.max(current.lastReinforcedAt || current.evidence.timestamp, insight.lastReinforcedAt || insight.evidence.timestamp);
+      const originalEvidence = current.evidence.timestamp <= insight.evidence.timestamp ? current.evidence : insight.evidence;
+      replacement.evidence = originalEvidence;
+      replacement.evidenceHistory = this.cleanEvidenceHistory(
+        [...(current.evidenceHistory || []), ...(insight.evidenceHistory || []), current.evidence, insight.evidence],
+        originalEvidence,
+      );
       replacement.createdAt = Math.min(current.createdAt, insight.createdAt);
       replacement.updatedAt = Math.max(current.updatedAt, insight.updatedAt);
       replacement.clusterId ||= current.clusterId || insight.clusterId;
@@ -3033,57 +3535,269 @@ export class AmirosState {
     return changed;
   }
 
-  private findKnowledgeInsightAcrossChats(content: string, targetChatIds: string[]): ContactInsight | undefined {
+  private findKnowledgeInsightAcrossChats(
+    content: string,
+    targetChatIds: string[],
+    validity: NonNullable<ContactInsight["validity"]> = "current",
+  ): ContactInsight | undefined {
     const targets = new Set(targetChatIds);
     return Object.entries(this.persisted.memories)
       .filter(([chatId]) => targets.has(chatId))
       .flatMap(([, memory]) => memory.insights)
-      .find((insight) => this.isDuplicateKnowledgeText(insight.content, content));
+      .find((insight) => (insight.validity || "current") === validity && this.isDuplicateKnowledgeText(insight.content, content));
   }
 
   private isDuplicateCommitment(
     existing: RelationshipCommitment,
-    candidate: Pick<RelationshipCommitment, "content" | "owner" | "assigneeName" | "dueAt">,
+    candidate: Pick<RelationshipCommitment, "content" | "owner" | "assigneeName" | "dueAt" | "evidence">,
   ): boolean {
     if (existing.owner !== candidate.owner) return false;
-    const assignee = (value?: string) => value?.normalize("NFKC").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim() || "";
-    if (assignee(existing.assigneeName) && assignee(candidate.assigneeName) && assignee(existing.assigneeName) !== assignee(candidate.assigneeName)) return false;
-    if (existing.dueAt && candidate.dueAt && Math.abs(existing.dueAt - candidate.dueAt) > 12 * 3_600_000) return false;
-    if (this.similarText(existing.content, candidate.content) || this.hasMeaningfulKnowledgeOverlap(existing.content, candidate.content)) return true;
+    if (existing.assigneeName && candidate.assigneeName && !this.samePersonName(existing.assigneeName, candidate.assigneeName)) return false;
+    const intent = (value: string) => {
+      const normalized = value.toLocaleLowerCase();
+      if (/\b(?:wake|alarm|get (?:me|him|her|them)?\s*up|make sure .{0,50}\bup)\b/iu.test(normalized)) return "wake";
+      if (/\b(?:bring|deliver|drop off)\b/iu.test(normalized)) return "bring";
+      if (/\b(?:send|sent|forward|share)\b/iu.test(normalized)) return "send";
+      if (/\b(?:call|phone|ring)\b/iu.test(normalized)) return "call";
+      if (/\b(?:book|reserve|schedule)\b/iu.test(normalized)) return "book";
+      if (/\b(?:pay|paid|payment)\b/iu.test(normalized)) return "pay";
+      if (/\b(?:buy|purchase|order)\b/iu.test(normalized)) return "buy";
+      if (/\b(?:remind|remember)\b/iu.test(normalized)) return "remind";
+      return undefined;
+    };
+    const existingIntent = intent(existing.content + " " + existing.evidence.excerpt);
+    const candidateIntent = intent(candidate.content + " " + candidate.evidence.excerpt);
+    // Shared conversational framing (for example, “I promised Dani I would”)
+    // must not merge distinct actions such as sending photos and making a
+    // phone call merely because they have the same due date.
+    if (existingIntent && candidateIntent && existingIntent !== candidateIntent) return false;
+    if (this.similarText(existing.content, candidate.content)) return true;
+
+    const clockTimes = (value: string) => new Set(value.match(/(?<!\d)(?:[01]?\d|2[0-3]):[0-5]\d(?!\d)/gu) || []);
+    const existingTimes = clockTimes(existing.content + " " + existing.evidence.excerpt);
+    const candidateTimes = clockTimes(candidate.content + " " + candidate.evidence.excerpt);
+    const sameClockTime = existingTimes.size > 0 && candidateTimes.size > 0 && [...existingTimes].some((value) => candidateTimes.has(value));
+    const sameDueWindow = Boolean(existing.dueAt && candidate.dueAt && Math.abs(existing.dueAt - candidate.dueAt) <= 12 * 3_600_000);
+    const toMilliseconds = (value: number) => value > 0 && value < 10_000_000_000 ? value * 1_000 : value;
+    const existingEvidenceAt = [existing.evidence, ...(existing.evidenceHistory || [])]
+      .reduce((latest, item) => Math.max(latest, toMilliseconds(item.timestamp)), 0);
+    const evidenceWindow = Math.abs(
+      existingEvidenceAt - toMilliseconds(candidate.evidence.timestamp),
+    ) <= RELATIONSHIP_REVIEW_WINDOW_MS;
+    if (existingIntent && existingIntent === candidateIntent && (sameClockTime || sameDueWindow) && evidenceWindow) return true;
+
+    const ignored = new Set([
+      "the", "and", "for", "about", "into", "look", "looking", "contact", "reach", "will", "part", "time", "role",
+      "job", "position", "need", "needs", "keep", "promise", "can", "could", "would", "make", "sure", "please", "send",
+      "call", "book", "pay", "buy", "bring", "deliver", "remind", "remember", "wake", "schedule", "message", "text", "email",
+      "when", "return", "returning", "back", "from", "any", "place", "with", "source", "specified", "way", "work",
+    ]);
     const meaningfulTokens = (value: string) => new Set(value
       .normalize("NFKC")
       .toLocaleLowerCase()
       .replace(/[^\p{L}\p{N}]+/gu, " ")
       .split(/\s+/u)
-      .filter((token) => token.length >= 3 && !new Set([
-        "the", "and", "for", "about", "into", "look", "looking", "contact", "reach", "will",
-        "part", "time", "role", "job", "position", "need", "needs", "keep", "promise",
-      ]).has(token))
+      .filter((token) => token.length >= 3 && !/^\d+$/u.test(token) && !ignored.has(token))
       .map((token) => token.replace(/(?:ing|ers?|ed|s)$/u, ""))
       .filter((token) => token.length >= 3));
     const leftTokens = meaningfulTokens(existing.content);
     const rightTokens = meaningfulTokens(candidate.content);
     if (leftTokens.size === 0 || rightTokens.size === 0) return false;
     const shared = [...leftTokens].filter((token) => rightTokens.has(token)).length;
-    return shared >= 2 && shared / Math.min(leftTokens.size, rightTokens.size) >= 0.6;
+    return shared >= 2 && shared / Math.min(leftTokens.size, rightTokens.size) >= 0.7;
+  }
+
+  private upsertInsight(
+    insights: ContactInsight[],
+    candidate: Pick<ContactInsight, "kind" | "content" | "confidence" | "evidence"> & Partial<Pick<ContactInsight, "id" | "clusterId" | "subjectChatIds" | "subjectNames" | "topicTitle" | "topicTitleConfidence" | "canonicalKey" | "validity" | "evolution" | "status" | "evidenceHistory" | "autonomouslyConfirmedAt" | "autonomousConfirmationReason" | "createdAt" | "updatedAt">>,
+    now: number,
+    chatId: string,
+  ): { insight: ContactInsight; created: boolean } {
+    const content = candidate.content.replace(/\s+/g, " ").trim().slice(0, 1_000);
+    const evidence = this.cleanEvidence(candidate.evidence);
+    const validity = candidate.validity === "historical" || candidate.validity === "temporary" ? candidate.validity : "current";
+    const evolution = candidate.evolution === "replace" || candidate.evolution === "reinforce" ? candidate.evolution : "append";
+    const suppliedCanonicalKey = this.normalizeCanonicalKnowledgeKey(candidate.canonicalKey);
+    const canonicalKey = suppliedCanonicalKey;
+    const duplicate = insights.find((item) =>
+      (candidate.clusterId && item.clusterId === candidate.clusterId) ||
+      ((item.validity || "current") === validity && (suppliedCanonicalKey && evolution === "append"
+        ? this.similarText(item.content, content)
+        : this.isDuplicateKnowledgeText(item.content, content))) ||
+      (item.kind === candidate.kind && Boolean(candidate.evidence.messageId) && item.evidence.messageId === candidate.evidence.messageId && this.hasKnowledgeSubsetOverlap(item.content, content)),
+    );
+    const existing = duplicate || (canonicalKey && validity === "current" && evolution === "reinforce"
+      ? insights.find((item) => item.kind === candidate.kind && item.status !== "outdated" &&
+        (item.validity || "current") === "current" &&
+        (this.normalizeCanonicalKnowledgeKey(item.canonicalKey) || this.inferredCanonicalKnowledgeKey(item.content, item.kind)) === canonicalKey)
+      : undefined);
+    if (!existing) {
+      const insight: ContactInsight = {
+        id: candidate.id || randomUUID(),
+        clusterId: candidate.clusterId || randomUUID(),
+        subjectChatIds: candidate.subjectChatIds ? [...new Set(candidate.subjectChatIds)] : [chatId],
+        subjectNames: candidate.subjectNames ? [...new Set(candidate.subjectNames)] : undefined,
+        kind: candidate.kind,
+        content,
+        topicTitle: candidate.topicTitle?.replace(/\s+/g, " ").trim().slice(0, 80) || undefined,
+        topicTitleConfidence: Number.isFinite(candidate.topicTitleConfidence) ? Math.max(0, Math.min(1, candidate.topicTitleConfidence!)) : undefined,
+        canonicalKey,
+        validity,
+        evolution,
+        status: candidate.status || "inferred",
+        confidence: Math.max(0, Math.min(1, candidate.confidence)),
+        evidence,
+        evidenceHistory: this.cleanEvidenceHistory(candidate.evidenceHistory, evidence),
+        reinforcementCount: 1,
+        lastReinforcedAt: evidence.timestamp,
+        autonomouslyConfirmedAt: candidate.autonomouslyConfirmedAt,
+        autonomousConfirmationReason: candidate.autonomousConfirmationReason,
+        createdAt: Number.isFinite(candidate.createdAt) ? candidate.createdAt! : now,
+        updatedAt: Number.isFinite(candidate.updatedAt) ? candidate.updatedAt! : now,
+      };
+      if (canonicalKey && validity === "current" && evolution === "replace") {
+        for (const prior of insights) {
+          if (prior.kind !== candidate.kind || (prior.validity || "current") !== "current" ||
+            (this.normalizeCanonicalKnowledgeKey(prior.canonicalKey) || this.inferredCanonicalKnowledgeKey(prior.content, prior.kind)) !== canonicalKey || prior.status === "confirmed") continue;
+          prior.validity = "historical";
+          prior.supersededById = insight.id;
+          prior.supersededAt = now;
+        }
+      }
+      insights.push(insight);
+      return { insight, created: true };
+    }
+    const candidateConfidence = Math.max(0, Math.min(1, candidate.confidence));
+    existing.confidence = Math.min(.99, 1 - (1 - existing.confidence) * (1 - candidateConfidence * .35));
+    existing.evidenceHistory = this.mergeEvidenceHistory(existing.evidence, existing.evidenceHistory, evidence, candidate.evidenceHistory);
+    existing.reinforcementCount = Math.max(1, existing.reinforcementCount || 1) + 1;
+    existing.lastReinforcedAt = Math.max(existing.lastReinforcedAt || existing.evidence.timestamp, evidence.timestamp);
+    existing.canonicalKey ||= canonicalKey;
+    existing.validity ||= validity;
+    existing.evolution ||= evolution;
+    existing.clusterId ||= candidate.clusterId || randomUUID();
+    existing.subjectChatIds = [...new Set([...(existing.subjectChatIds || [chatId]), ...(candidate.subjectChatIds || [])])];
+    existing.subjectNames = [...new Set([...(existing.subjectNames || []), ...(candidate.subjectNames || [])])];
+    if (candidate.status === "confirmed" && candidate.autonomouslyConfirmedAt && existing.status === "inferred") {
+      existing.status = "confirmed";
+      existing.autonomouslyConfirmedAt = candidate.autonomouslyConfirmedAt;
+      existing.autonomousConfirmationReason = candidate.autonomousConfirmationReason;
+    }
+    if ((candidate.topicTitleConfidence || 0) > (existing.topicTitleConfidence || 0)) {
+      existing.topicTitle = candidate.topicTitle?.replace(/\s+/g, " ").trim().slice(0, 80) || existing.topicTitle;
+      existing.topicTitleConfidence = candidate.topicTitleConfidence;
+    }
+    // Explicit review decisions remain durable. Inferred wording can improve,
+    // but the original evidence continues to anchor the canonical topic.
+    if ((existing.status === "inferred" && this.similarText(existing.content, existing.evidence.excerpt)) ||
+      (evolution === "reinforce" && content.length > existing.content.length && evidence.timestamp >= existing.evidence.timestamp)) {
+      existing.content = content;
+    }
+    existing.updatedAt = Math.max(existing.updatedAt, now);
+    return { insight: existing, created: false };
+  }
+
+  private reconcileCommitmentLifecycle(
+    memory: ConversationMemory,
+    entry: Pick<ConversationMemoryEntry, "content" | "author" | "senderName" | "timestamp" | "messageId">,
+  ): void {
+    const text = entry.content.toLocaleLowerCase();
+    const completed = /\b(?:i(?:'ve| have)?\s+(?:done|finished|completed|sent|called|booked|paid|handled)|it(?:'s| is) done|all set|taken care of|confirmed)\b/iu.test(text);
+    const cancelled = /\b(?:cancel(?:led)?|called off|never mind|no longer need|don['’]?t (?:need|worry))\b/iu.test(text);
+    if (!completed && !cancelled) return;
+
+    const owner = entry.author === "owner"
+      ? "me"
+      : entry.author === "group_member"
+        ? "group_member"
+        : entry.author === "contact"
+          ? "contact"
+          : undefined;
+    const candidates = memory.commitments.filter((item) =>
+      (item.status === "open" || item.status === "needs_review") && (cancelled || item.owner === owner),
+    );
+    const matching = candidates.filter((item) => this.commitmentMatchesMessage(item, entry.content));
+    // Pronouns such as “I sent it” are only safe to reconcile when there is
+    // one open obligation for that speaker; otherwise leave it untouched.
+    const referential = /\b(?:it|that|this)\b/iu.test(entry.content);
+    const target = matching.length === 1
+      ? matching[0]
+      : matching.length === 0 && referential && candidates.length === 1
+        ? candidates[0]
+        : undefined;
+    if (!target) return;
+
+    const evidence = this.cleanEvidence({
+      messageId: entry.messageId,
+      excerpt: entry.content,
+      senderName: entry.senderName,
+      timestamp: entry.timestamp,
+    });
+    this.upsertCommitment(memory.commitments, {
+      ...target,
+      status: cancelled ? "dismissed" : "done",
+      evidence,
+    }, Date.now());
+  }
+
+  private commitmentMatchesMessage(commitment: RelationshipCommitment, message: string): boolean {
+    const normalizeAction = (value: string) => value
+      .toLocaleLowerCase()
+      .replace(/\b(?:sent|sending)\b/gu, "send")
+      .replace(/\b(?:called|calling)\b/gu, "call")
+      .replace(/\b(?:booked|booking)\b/gu, "book")
+      .replace(/\b(?:paid|paying)\b/gu, "pay")
+      .replace(/\b(?:finished|finishing|completed|completing)\b/gu, "complete");
+    const normalizedMessage = normalizeAction(message);
+    const normalizedCommitment = normalizeAction(commitment.content);
+    return this.similarText(normalizedCommitment, normalizedMessage) ||
+      this.hasMeaningfulKnowledgeOverlap(normalizedCommitment, normalizedMessage);
+  }
+
+  private upsertCommitment(
+    commitments: RelationshipCommitment[],
+    candidate: Pick<RelationshipCommitment, "content" | "owner" | "assigneeName" | "dueAt" | "evidence"> & Partial<Pick<RelationshipCommitment, "id" | "status" | "evidenceHistory" | "createdAt" | "updatedAt">>,
+    now: number,
+  ): { commitment: RelationshipCommitment; created: boolean } {
+    const content = candidate.content.replace(/\s+/g, " ").trim().slice(0, 1_000);
+    const evidence = this.cleanEvidence(candidate.evidence);
+    const existing = commitments.find((item) => this.isDuplicateCommitment(item, { ...candidate, content }));
+    if (!existing) {
+      const commitment: RelationshipCommitment = {
+        id: candidate.id || randomUUID(), content, owner: candidate.owner,
+        assigneeName: candidate.assigneeName?.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
+        status: candidate.status || "open",
+        dueAt: Number.isFinite(candidate.dueAt) ? candidate.dueAt : undefined,
+        evidence,
+        evidenceHistory: this.cleanEvidenceHistory(candidate.evidenceHistory, evidence),
+        createdAt: Number.isFinite(candidate.createdAt) ? candidate.createdAt! : now,
+        updatedAt: Number.isFinite(candidate.updatedAt) ? candidate.updatedAt! : now,
+      };
+      commitments.push(commitment);
+      return { commitment, created: true };
+    }
+
+    existing.evidenceHistory = this.mergeEvidenceHistory(existing.evidence, existing.evidenceHistory, evidence, candidate.evidenceHistory);
+    // A reviewed lifecycle decision is durable. New evidence may refine its
+    // wording or date, but cannot silently reopen a completed/dismissed item.
+    if (existing.status === "open" || existing.status === "needs_review") {
+      existing.content = content;
+      if (candidate.status === "done" || candidate.status === "dismissed") existing.status = candidate.status;
+      else existing.status = "open";
+      if (Number.isFinite(candidate.dueAt)) existing.dueAt = candidate.dueAt;
+      if (candidate.assigneeName?.trim()) existing.assigneeName = candidate.assigneeName.replace(/\s+/g, " ").trim().slice(0, 120);
+    }
+    existing.createdAt = Math.min(existing.createdAt, now);
+    existing.updatedAt = Math.max(existing.updatedAt, now);
+    return { commitment: existing, created: false };
   }
 
   private dedupeCommitments(commitments: RelationshipCommitment[]): RelationshipCommitment[] {
-    const kept: RelationshipCommitment[] = [];
-    const priority = (status: RelationshipCommitment["status"]) => status === "done" ? 3 : status === "dismissed" ? 2 : 1;
+    const canonical: RelationshipCommitment[] = [];
     for (const commitment of commitments) {
-      const index = kept.findIndex((existing) => this.isDuplicateCommitment(existing, commitment));
-      if (index < 0) {
-        kept.push(commitment);
-        continue;
-      }
-      const current = kept[index]!;
-      const replacement = priority(commitment.status) > priority(current.status) ? commitment : current;
-      replacement.createdAt = Math.min(current.createdAt, commitment.createdAt);
-      replacement.updatedAt = Math.max(current.updatedAt, commitment.updatedAt);
-      kept[index] = replacement;
+      this.upsertCommitment(canonical, commitment, commitment.updatedAt);
     }
-    return kept;
+    return canonical;
   }
 
   private dedupeCommitmentsAcrossMemories(): boolean {
@@ -3296,6 +4010,10 @@ export class AmirosState {
       summary: normalized,
       updatedAt: Date.now(),
       sourceMessageCount: memory.incomingMessageCount,
+      sourceKnowledgeUpdatedAt: memory.insights
+        .filter((item) => item.status === "confirmed" && (item.validity || "current") !== "historical")
+        .reduce((latest, item) => Math.max(latest, item.updatedAt), 0),
+      sourceKnowledgeVersion: this.canonicalKnowledgeVersion(memory.insights),
     };
     memory.profile = profile;
     memory.updatedAt = profile.updatedAt;

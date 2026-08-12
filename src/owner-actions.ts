@@ -1,5 +1,6 @@
 import type { CalendarEvent } from "./amiros-state.js";
 import { hasTodoTaskIntent, inferCalendarEventFromMessage } from "./amiros-state.js";
+import { classifyTemporalRequest } from "./temporal-classifier.js";
 import { resolveTemporalRange, type TemporalRange } from "./temporal-memory.js";
 
 export type TimeFormatPreference = "12-hour" | "24-hour";
@@ -13,15 +14,18 @@ export type OwnerActionRequest =
       allDay: boolean;
       location?: string;
     }
-  | { kind: "todo"; source: string; title: string; dueAt?: number }
+  | {
+      kind: "todo";
+      source: string;
+      title: string;
+      dueAt?: number;
+      needsTimeClarification?: boolean;
+      preserveTitle?: boolean;
+    }
   | { kind: "knowledge"; source: string; title: string }
   | { kind: "commitment"; source: string; title: string; dueAt?: number };
 
-const TEMPORAL_CUE = /\b(?:today|tonight|tomorrow|morning|afternoon|evening|night|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2}|20\d{2}-\d{1,2}-\d{1,2}|\d{1,2}[/.\-]\d{1,2})\b|(?:היום|הערב|מחר|בוקר|צהריים|לילה|יום\s+(?:ראשון|שני|שלישי|רביעי|חמישי|שישי)|שבת|בשעה\s*\d{1,2})/iu;
-const EXPLICIT_CALENDAR_TARGET = /\b(?:calendar|agenda|appointment|event)\b|(?:יומן|לוח שנה|אירוע|תור)/iu;
-const EXPLICIT_TODO_TARGET = /\b(?:to[ -]?do|task)(?:\s+list)?\b|(?:משימה|מטלה|רשימת משימות)/iu;
 const EXPLICIT_KNOWLEDGE_TARGET = /\b(?:knowledge|memory|remember that|save that)\b|(?:ידע|זיכרון|תזכור(?:י)? ש|שמור(?:י)? ש)/iu;
-const EXPLICIT_COMMITMENT_TARGET = /\b(?:commitment|promise)\b|(?:התחייבות|הבטחה)/iu;
 
 function compact(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
@@ -50,15 +54,10 @@ function trimCollectionLanguage(value: string, kind: OwnerActionRequest["kind"])
       .replace(/\s+(?:as|to)\s+(?:(?:a|the|my|our)\s+)?(?:commitment|promise)\s*$/iu, "");
   }
   title = compact(title)
-    .replace(/\b(?:today|tonight|tomorrow|on\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})\b.*$/iu, "")
+    .replace(/\b(?:today|tonight|tomorrow|(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|at\s+(?:noon|midnight|\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2}))\b.*$/iu, "")
     .replace(/[\s,;:–—-]+$/u, "")
     .trim();
   return (title || compact(value)).slice(0, 240);
-}
-
-function dueAtFromCommand(content: string, timestamp: number): number | undefined {
-  if (!TEMPORAL_CUE.test(content)) return undefined;
-  return inferCalendarEventFromMessage(`${content} to calendar`, timestamp)?.startAt;
 }
 
 /**
@@ -71,46 +70,74 @@ export function parseOwnerActionRequest(content: string, timestamp = Date.now())
   if (!source) return undefined;
   const imperative = /^(?:please\s+)?(?:add|create|put|save|schedule|remember|remind)\b|^(?:תוסיף|תוסיפי|להוסיף|צור|צרי|שמור|שמרי|תזכור|תזכרי|תזכיר|תזכירי)\b/iu.test(source);
   const clearOwnerTodo = hasTodoTaskIntent(source);
-  if (!imperative && !clearOwnerTodo) return undefined;
 
-  if (EXPLICIT_CALENDAR_TARGET.test(source)) {
-    const event = inferCalendarEventFromMessage(source, timestamp);
-    if (!event) return undefined;
-    return { kind: "calendar", source, ...event };
-  }
-
-  if (EXPLICIT_KNOWLEDGE_TARGET.test(source)) {
+  // Knowledge is intentionally outside the temporal classifier. Preserve the
+  // existing explicit owner write without allowing ordinary statements to be
+  // stored as knowledge.
+  if (imperative && EXPLICIT_KNOWLEDGE_TARGET.test(source)) {
     return { kind: "knowledge", source, title: trimCollectionLanguage(source, "knowledge") };
   }
 
-  if (EXPLICIT_COMMITMENT_TARGET.test(source)) {
+  const classification = classifyTemporalRequest(source, timestamp);
+  if (classification?.primaryType === "calendar_event" && classification.temporal?.startAt) {
+    // The legacy parser may still contribute a location or a better fallback
+    // title, but it cannot alter the shared classifier's type or timestamp.
+    const enrichment = inferCalendarEventFromMessage(source, timestamp)
+      || inferCalendarEventFromMessage(`${source} to calendar`, timestamp);
     return {
-      kind: "commitment",
+      kind: "calendar",
       source,
-      title: trimCollectionLanguage(source, "commitment"),
-      dueAt: dueAtFromCommand(source, timestamp),
+      title: enrichment?.title || trimCollectionLanguage(source, "calendar"),
+      startAt: classification.temporal.startAt,
+      allDay: classification.temporal.precision === "day",
+      location: enrichment?.location,
     };
   }
+  if (classification?.primaryType === "todo") return {
+    kind: "todo",
+    source,
+    title: trimCollectionLanguage(source, "todo"),
+    dueAt: classification.temporal?.dueAt,
+    needsTimeClarification: classification.temporal?.precision === "day",
+  };
+  if (classification?.primaryType === "commitment") return {
+    kind: "commitment",
+    source,
+    title: trimCollectionLanguage(source, "commitment"),
+    dueAt: classification.temporal?.dueAt,
+  };
 
-  if (EXPLICIT_TODO_TARGET.test(source) || /^\s*remind me to\b/iu.test(source) || clearOwnerTodo) {
-    return {
-      kind: "todo",
-      source,
-      title: trimCollectionLanguage(source, "todo"),
-      dueAt: dueAtFromCommand(source, timestamp),
-    };
-  }
-
-  // In the owner's command channel, “Add bedtime at 23:30” is an explicit
-  // timed write even when the word calendar is omitted. The temporal cue keeps
-  // unrelated requests such as “add emojis” out of the calendar.
-  if (TEMPORAL_CUE.test(source)) {
-    const event = inferCalendarEventFromMessage(`${source} to calendar`, timestamp);
-    if (!event) return undefined;
-    return { kind: "calendar", source, ...event };
-  }
+  // The temporal service deliberately returns no result for undated requests.
+  // Preserve the established owner-only natural to-do behavior in that case.
+  if (clearOwnerTodo) return { kind: "todo", source, title: trimCollectionLanguage(source, "todo") };
 
   return undefined;
+}
+
+/**
+ * A clarification continuation must be only a clock value. Keeping this
+ * deliberately narrow prevents an unrelated owner message from being attached
+ * to an earlier action.
+ */
+export function continueOwnerActionWithTime(
+  action: Extract<OwnerActionRequest, { kind: "todo" }>,
+  response: string,
+): Extract<OwnerActionRequest, { kind: "todo" }> | undefined {
+  if (!action.dueAt || !action.needsTimeClarification) return undefined;
+  const match = response.match(/^\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*[.!]?\s*$/iu);
+  if (!match) return undefined;
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const period = match[3]?.toLocaleLowerCase();
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute > 59) return undefined;
+  if (period) {
+    if (hour < 1 || hour > 12) return undefined;
+    if (period === "pm" && hour < 12) hour += 12;
+    if (period === "am" && hour === 12) hour = 0;
+  } else if (hour > 23) return undefined;
+  const due = new Date(action.dueAt);
+  due.setHours(hour, minute, 0, 0);
+  return { ...action, dueAt: due.getTime(), needsTimeClarification: false, preserveTitle: true };
 }
 
 export function isOwnerClockQuery(content: string): boolean {

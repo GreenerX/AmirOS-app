@@ -17,12 +17,22 @@ import type { WritingStyleLearner } from "./writing-style.js";
 import {
   authoritativeClockReply,
   authoritativeScheduleReply,
+  continueOwnerActionWithTime,
   formatLocalTime,
   isOwnerClockQuery,
   ownerScheduleRange,
   parseOwnerActionRequest,
 } from "./owner-actions.js";
 import { presentTodo } from "./todo-presentation.js";
+import {
+  continueOwnerLifecycleSelection,
+  ownerLifecycleCandidates,
+  parseOwnerLifecycleRequest,
+  resolveLifecycleTimestamp,
+  resolveOwnerLifecycleTarget,
+  type OwnerLifecycleCandidate,
+  type OwnerLifecycleRequest,
+} from "./owner-lifecycle.js";
 
 const { MessageMedia } = whatsappWeb;
 
@@ -119,7 +129,7 @@ export function naturalFailureMessage(error: unknown): string {
 }
 
 function preventUnverifiedAmirosWriteClaim(answer: string): string {
-  const claimsSavedChange = /\b(?:added|saved|updated|completed|deleted|removed|already\s+(?:in|on)|now\s+(?:in|on))\b/iu.test(answer);
+  const claimsSavedChange = /\b(?:added|saved|updated|completed|cancelled|canceled|renamed|rescheduled|deleted|removed|already\s+(?:in|on)|now\s+(?:in|on))\b/iu.test(answer);
   const namesAmirosRecord = /\b(?:AmirOS|calendar|agenda|to[ -]?do|task|commitment|knowledge|memory|reminder|list)\b/iu.test(answer);
   if (!claimsSavedChange || !namesAmirosRecord) return answer;
   return "I couldn’t confirm that AmirOS saved that change. Please send a direct request, for example: “Add buy almonds to my to-do list.”";
@@ -419,8 +429,36 @@ export class MessageProcessor {
       const currentMessageId = message.id?._serialized || message.id?.id;
       const currentMessageTimestamp = message.timestamp ? message.timestamp * 1_000 : Date.now();
       const isExplicitSelfChatCommand = message.fromMe && isSelfChat && resolved.explicit;
+      const pendingOwnerAction = message.fromMe
+        ? this.amiros?.getPendingOwnerActionClarification(chatId, currentMessageTimestamp)
+        : undefined;
+      const pendingLifecycle = message.fromMe
+        ? this.amiros?.getPendingOwnerLifecycleClarification(chatId, currentMessageTimestamp)
+        : undefined;
+      const selectedLifecycleCandidate = pendingLifecycle
+        ? continueOwnerLifecycleSelection(pendingLifecycle, command.prompt)
+        : undefined;
+      if (pendingLifecycle && !selectedLifecycleCandidate) {
+        // As with time clarification, never attach unrelated text to stale
+        // lifecycle context. A fresh lifecycle command can still be parsed.
+        this.amiros?.clearPendingOwnerLifecycleClarification(chatId);
+      }
+      const lifecycleRequest = message.fromMe
+        ? selectedLifecycleCandidate
+          ? pendingLifecycle!.request
+          : parseOwnerLifecycleRequest(command.prompt, currentMessageTimestamp)
+        : undefined;
+      const continuedOwnerAction = pendingOwnerAction
+        && !lifecycleRequest
+        ? continueOwnerActionWithTime(pendingOwnerAction, command.prompt)
+        : undefined;
+      if (pendingOwnerAction && !continuedOwnerAction) {
+        // A non-time response is not silently attached to stale context. It is
+        // handled below as an independent message instead.
+        this.amiros?.clearPendingOwnerActionClarification(chatId);
+      }
       const ownerAction = message.fromMe
-        ? parseOwnerActionRequest(command.prompt, currentMessageTimestamp)
+        ? continuedOwnerAction || (!lifecycleRequest ? parseOwnerActionRequest(command.prompt, currentMessageTimestamp) : undefined)
         : undefined;
       if (message.fromMe && command.prompt.trim()) {
         this.amiros?.rememberMessage(chatId, {
@@ -431,22 +469,66 @@ export class MessageProcessor {
           timestamp: currentMessageTimestamp,
           messageId: currentMessageId,
           countAsIncoming: false,
-          extractSignals: !isExplicitSelfChatCommand && !ownerAction,
-          excludeFromAutomaticLearning: isExplicitSelfChatCommand || Boolean(ownerAction),
+          extractSignals: !isExplicitSelfChatCommand && !ownerAction && !lifecycleRequest,
+          excludeFromAutomaticLearning: isExplicitSelfChatCommand || Boolean(ownerAction) || Boolean(lifecycleRequest),
         });
-        if (!isExplicitSelfChatCommand && !ownerAction) {
+        if (!isExplicitSelfChatCommand && !ownerAction && !lifecycleRequest) {
           void this.intelligenceLearner?.analyzeIncoming(chatId);
           await this.refreshWritingStyle(chatId);
         }
       }
+      if (message.fromMe && lifecycleRequest && this.amiros) {
+        const resolution = selectedLifecycleCandidate
+          ? { status: "matched" as const, candidate: selectedLifecycleCandidate }
+          : resolveOwnerLifecycleTarget(lifecycleRequest, ownerLifecycleCandidates({
+              todos: this.amiros.listTodoTasks(),
+              events: this.amiros.listCalendarEvents(),
+              commitments: this.amiros.listCommitments(),
+            }), {
+              recentReferences: this.amiros.getOwnerRecordReferences(chatId),
+              now: currentMessageTimestamp,
+            });
+        if (resolution.status === "ambiguous") {
+          this.amiros.setPendingOwnerLifecycleClarification(chatId, {
+            request: lifecycleRequest,
+            candidates: resolution.candidates,
+            createdAt: currentMessageTimestamp,
+          });
+          const choices = resolution.candidates
+            .map((candidate, index) => `${index + 1}. ${candidate.title} (${this.lifecycleKindLabel(candidate.kind)})`)
+            .join("\n");
+          await this.sendAuthoritativeReply(message, chatId, `I found more than one possible match. Which one did you mean?\n${choices}\nReply with the number or title.`);
+          return;
+        }
+        if (resolution.status === "not_found") {
+          await this.sendAuthoritativeReply(message, chatId, "I couldn’t find an active AmirOS item that safely matches that request, so I didn’t change anything.");
+          return;
+        }
+        const answer = this.applyOwnerLifecycleMutation(chatId, currentMessageTimestamp, resolution.candidate, lifecycleRequest);
+        if (selectedLifecycleCandidate) this.amiros.clearPendingOwnerLifecycleClarification(chatId);
+        await this.sendAuthoritativeReply(message, chatId, answer);
+        return;
+      }
       if (message.fromMe && ownerAction && this.amiros) {
+        if (ownerAction.kind === "todo" && ownerAction.dueAt && ownerAction.needsTimeClarification) {
+          this.amiros.setPendingOwnerActionClarification(chatId, {
+            ...ownerAction,
+            dueAt: ownerAction.dueAt,
+            needsTimeClarification: true,
+            messageId: currentMessageId,
+            sourceTimestamp: currentMessageTimestamp,
+          });
+          await this.sendAuthoritativeReply(message, chatId, `What time should I set for *${ownerAction.title}*? 🕒`);
+          return;
+        }
         const answer = await this.applyOwnerAction(
           chatId,
           ownerAction,
-          currentMessageId,
-          currentMessageTimestamp,
+          pendingOwnerAction?.messageId || currentMessageId,
+          pendingOwnerAction?.sourceTimestamp || currentMessageTimestamp,
           ownerName,
         );
+        if (continuedOwnerAction) this.amiros.clearPendingOwnerActionClarification(chatId);
         await this.sendAuthoritativeReply(message, chatId, answer);
         return;
       }
@@ -632,7 +714,13 @@ export class MessageProcessor {
           source: action.source,
           currentTitle: action.title,
         });
-        const presentation = presentTodo({ source: action.source, ...generated });
+        const presentation = presentTodo({
+          source: action.source,
+          ...generated,
+          // A clarification only supplies missing time. It must never give AI
+          // permission to reinterpret the already accepted action title.
+          title: action.preserveTitle ? action.title : generated.title,
+        });
         title = presentation.title;
         todoPriority = presentation.priority;
       } catch (error) {
@@ -666,6 +754,9 @@ export class MessageProcessor {
     const timeFormat = this.amiros.getSettings().assistant.timeFormat;
     if (action.kind === "calendar") {
       const result = this.amiros.addOwnerCalendarEvent(chatId, { ...action, title, evidence });
+      this.amiros.rememberOwnerRecordReference(chatId, {
+        kind: "calendar", chatId, id: result.event.id, title: result.event.title, referencedAt: timestamp,
+      });
       if (this.eventImageGenerator && !result.event.imageUrl) {
         void this.eventImageGenerator(result.event.title)
           .then((imageUrl) => this.amiros?.updateCalendarEvent(chatId, result.event.id, { imageUrl }))
@@ -681,6 +772,9 @@ export class MessageProcessor {
     }
     if (action.kind === "todo") {
       const result = this.amiros.addOwnerTodo(chatId, { title, priority: todoPriority, dueAt: action.dueAt, evidence });
+      this.amiros.rememberOwnerRecordReference(chatId, {
+        kind: "todo", chatId, id: result.task.id, title: result.task.title, referencedAt: timestamp,
+      });
       if (result.reopenedFromCompleted) {
         return `Moved from completed to open in *AmirOS To-dos*: *${result.task.title}*${result.task.dueAt ? ` — ${formatLocalTime(result.task.dueAt, timeFormat)}` : ""}. ✅`;
       }
@@ -688,10 +782,91 @@ export class MessageProcessor {
     }
     if (action.kind === "commitment") {
       const result = this.amiros.addOwnerCommitment(chatId, { content: title, dueAt: action.dueAt, evidence });
+      this.amiros.rememberOwnerRecordReference(chatId, {
+        kind: "commitment", chatId, id: result.commitment.id, title: result.commitment.content, referencedAt: timestamp,
+      });
       return `${result.created ? "Added to" : "Already in"} *AmirOS Commitments*: *${result.commitment.content}*. 🤝`;
     }
     const result = this.amiros.addOwnerKnowledge(chatId, title);
     return `${result.created ? "Saved to" : "Already in"} *AmirOS Knowledge*: *${result.item.content}*. 🧠`;
+  }
+
+  private applyOwnerLifecycleMutation(
+    ownerChatId: string,
+    referencedAt: number,
+    candidate: OwnerLifecycleCandidate,
+    request: OwnerLifecycleRequest,
+  ): string {
+    if (!this.amiros) throw new Error("AmirOS storage is unavailable");
+    const timeFormat = this.amiros.getSettings().assistant.timeFormat;
+    const kind = this.lifecycleKindLabel(candidate.kind);
+    if (request.operation === "complete" || request.operation === "cancel") {
+      const status = request.operation === "complete"
+        ? candidate.kind === "todo" || candidate.kind === "commitment" ? "done" : "completed"
+        : "dismissed";
+      const record = candidate.kind === "todo"
+        ? this.amiros.updateTodoTask(candidate.chatId, candidate.id, { status: status as "done" | "dismissed" })
+        : candidate.kind === "calendar"
+          ? this.amiros.updateCalendarEvent(candidate.chatId, candidate.id, { status: status as "completed" | "dismissed" })
+          : this.amiros.updateCommitment(candidate.chatId, candidate.id, { status: status as "done" | "dismissed" });
+      if (!record) throw new Error(`The selected ${kind.toLocaleLowerCase()} no longer exists`);
+      const title = "title" in record ? record.title : record.content;
+      this.amiros.rememberOwnerRecordReference(ownerChatId, { ...candidate, title, referencedAt });
+      return `${request.operation === "complete" ? "Completed" : "Cancelled"} in *AmirOS ${kind}*: *${title}*. ${request.operation === "complete" ? "✅" : "🗑️"}`;
+    }
+
+    if (request.operation === "reschedule") {
+      const nextTimestamp = resolveLifecycleTimestamp(candidate.timestamp, request);
+      if (!nextTimestamp) throw new Error(`The selected ${kind.toLocaleLowerCase()} does not have a date or time that can be changed`);
+      const record = candidate.kind === "todo"
+        ? this.amiros.updateTodoTask(candidate.chatId, candidate.id, { dueAt: nextTimestamp })
+        : candidate.kind === "calendar"
+          ? this.amiros.updateCalendarEvent(candidate.chatId, candidate.id, { startAt: nextTimestamp })
+          : this.amiros.updateCommitment(candidate.chatId, candidate.id, { dueAt: nextTimestamp });
+      if (!record) throw new Error(`The selected ${kind.toLocaleLowerCase()} no longer exists`);
+      const title = "title" in record ? record.title : record.content;
+      this.amiros.rememberOwnerRecordReference(ownerChatId, { ...candidate, title, referencedAt });
+      const date = new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(new Date(nextTimestamp));
+      return `Rescheduled in *AmirOS ${kind}*: *${title}* — ${date} at ${formatLocalTime(nextTimestamp, timeFormat)}. 📅`;
+    }
+
+    if (request.operation === "rename") {
+      if (!request.newTitle) throw new Error("A new title is required");
+      const record = candidate.kind === "todo"
+        ? this.amiros.updateTodoTask(candidate.chatId, candidate.id, {
+            title: presentTodo({ source: request.source, title: request.newTitle }).title,
+          })
+        : candidate.kind === "calendar"
+          ? this.amiros.updateCalendarEvent(candidate.chatId, candidate.id, { title: request.newTitle })
+          : this.amiros.updateCommitment(candidate.chatId, candidate.id, { content: request.newTitle });
+      if (!record) throw new Error(`The selected ${kind.toLocaleLowerCase()} no longer exists`);
+      const title = "title" in record ? record.title : record.content;
+      this.amiros.rememberOwnerRecordReference(ownerChatId, { ...candidate, title, referencedAt });
+      return `Renamed in *AmirOS ${kind}*: *${title}*. ✏️`;
+    }
+
+    if (request.operation === "priority") {
+      if (candidate.kind !== "todo" || !request.priority) throw new Error("Priority can only be changed on a to-do");
+      const record = this.amiros.updateTodoTask(candidate.chatId, candidate.id, { priority: request.priority });
+      if (!record) throw new Error("The selected to-do no longer exists");
+      this.amiros.rememberOwnerRecordReference(ownerChatId, { ...candidate, title: record.title, referencedAt });
+      return `Updated in *AmirOS To-dos*: *${record.title}* is now ${record.priority} priority. 🚩`;
+    }
+
+    if (!request.note) throw new Error("A note is required");
+    const record = candidate.kind === "todo"
+      ? this.amiros.updateTodoTask(candidate.chatId, candidate.id, { note: request.note })
+      : candidate.kind === "calendar"
+        ? this.amiros.updateCalendarEvent(candidate.chatId, candidate.id, { note: request.note })
+        : this.amiros.updateCommitment(candidate.chatId, candidate.id, { note: request.note });
+    if (!record) throw new Error(`The selected ${kind.toLocaleLowerCase()} no longer exists`);
+    const title = "title" in record ? record.title : record.content;
+    this.amiros.rememberOwnerRecordReference(ownerChatId, { ...candidate, title, referencedAt });
+    return `Added a note in *AmirOS ${kind}*: *${title}* — ${request.note}. 📝`;
+  }
+
+  private lifecycleKindLabel(kind: OwnerLifecycleCandidate["kind"]): string {
+    return kind === "todo" ? "To-dos" : kind === "calendar" ? "Calendar" : "Commitments";
   }
 
   private async sendAuthoritativeReply(message: Message, chatId: string, answer: string): Promise<void> {

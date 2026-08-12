@@ -1,10 +1,10 @@
 import {
-  ArrowLeft, ArrowRight, CalendarDays, CheckCircle2, Clock3, ListTodo,
-  Eye, EyeOff, Heart, MessageCircle, RefreshCw, Search, Sparkles, Users,
+  ArrowLeft, ArrowRight, CalendarDays, CheckCircle2, ChevronDown, Clock3, ListTodo,
+  Eye, EyeOff, Heart, MessageCircle, RefreshCw, Search, Sparkles, Trash2, Users,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { ChatSummary, ContactPreferences, IntelligenceChat, IntelligenceData, RelationshipCommitment, TodoTask } from "../types";
+import type { ChatSummary, ContactInsight, ContactPreferences, IntelligenceChat, IntelligenceData, MemoryEvidence, RelationshipCommitment, TodoTask } from "../types";
 import { isKnownIntelligenceContactName } from "../intelligence-snapshot";
 import { profileSummaryParagraph } from "../profile-summary";
 import { replyAssessmentCopy } from "../reply-assessment-copy";
@@ -25,12 +25,20 @@ type PeopleExperienceProps = {
   onOpenCalendar: () => void;
   onContactChange: (chatId: string, patch: Partial<ContactPreferences>) => Promise<boolean>;
   onGenerateSummary: (chatId: string, isGroup: boolean) => Promise<void>;
+  onCalendarStatus: (chatId: string, eventId: string, status: "dismissed") => Promise<void>;
+  onCommitmentStatus: (chatId: string, commitmentId: string, status: "dismissed") => Promise<void>;
+  onInsightStatus: (chatId: string, insightId: string, status: "outdated") => Promise<void>;
+  onTodoStatus: (chatId: string, todoId: string, status: "dismissed") => Promise<void>;
 };
 
 const RELATIONSHIP_OPTIONS = [
   "Contact", "Partner", "Family", "Friend", "Close friend", "Client", "Colleague", "Manager", "Team", "Neighbor", "Other",
 ];
 const GROUP_RELATIONSHIP_OPTIONS = ["Group", "Friends group", "Family group", "Work group", "Community group", "Other group"];
+const WEAK_TOPIC_WORDS = new Set([
+  "and", "can", "dedication", "discussion", "excitement", "feeling", "feelings", "if", "inspiration", "inspiring", "it", "later", "needed", "playing", "something", "thing", "to", "topic", "update", "were", "where",
+]);
+const INVALID_TOPIC_STARTS = new Set(["and", "going", "has", "he", "is", "it", "she", "they", "to", "was", "where"]);
 
 function toMilliseconds(value: number) {
   return value < 10_000_000_000 ? value * 1_000 : value;
@@ -81,6 +89,15 @@ function isRelationshipSentence(sentence: string) {
   return /\b(?:relationship|friend|family|partner|spouse|husband|wife|parent|mother|father|brother|sister|cousin|aunt|uncle|colleague|coworker|client|manager|team|group|work|talk|connect|coordinate|support|share|close|know)\b/iu.test(sentence);
 }
 
+function sentenceDescribesCanonicalKey(sentence: string, canonicalKey?: string) {
+  if (!canonicalKey) return false;
+  const normalized = canonicalKey.replace(/[_\s-]+/gu, " ").toLocaleLowerCase();
+  if (/\b(?:residence|home|address|location)\b/iu.test(normalized)) return /\b(?:live|lives|lived|reside|resides|home|based in|moved)\b/iu.test(sentence);
+  if (/\b(?:employer|employment|job|work|role)\b/iu.test(normalized)) return /\b(?:work|works|worked|job|employer|joined|left|started)\b/iu.test(sentence);
+  if (/\b(?:diet|food preference)\b/iu.test(normalized)) return /\b(?:vegetarian|vegan|diet|eat|eats|food|meat)\b/iu.test(sentence);
+  return false;
+}
+
 function compactSentences(sentences: string[]) {
   const selected: string[] = [];
   for (const sentence of sentences) {
@@ -92,26 +109,90 @@ function compactSentences(sentences: string[]) {
   return selected;
 }
 
-/** Uses existing relationship knowledge only; profile preferences do not fill People cards. */
+/** Uses derived prose only while it agrees with the latest canonical truth. */
 export function personSummary(person: IntelligenceChat, ownerName: string) {
   const record = person.isGroup ? person.groupSummary : person.profile;
-  if (!record?.summary) return "No relationship summary yet.";
-
   const owner = normalizedName(ownerName);
-  const candidates = summarySentences(profileSummaryParagraph(
+  const profileIsUsable = !person.profile?.staleAt || person.isGroup;
+  const candidates = record?.summary && profileIsUsable ? summarySentences(profileSummaryParagraph(
     relationshipSummarySource(record.summary),
     person.contactName,
   )).filter((sentence) => {
     const normalizedSentence = normalizedName(sentence);
     return !owner || !normalizedSentence.startsWith(owner);
-  });
+  }) : [];
   const relationshipOnly = candidates.filter(isRelationshipSentence);
-  const selected = compactSentences(relationshipOnly.length ? relationshipOnly : candidates);
-  return selected.join(" ") || "No relationship summary yet.";
+  const selected = relationshipOnly.length ? relationshipOnly : candidates;
+  // Profiles are derived and generated on demand. Canonical facts remain the
+  // source of truth whenever that prose has become stale.
+  const liveCurrentFact = (person.insights || [])
+    .filter((item) => item.status === "confirmed" && (item.validity || "current") === "current")
+    .filter((item) => !record || !profileIsUsable || toMilliseconds(item.updatedAt) > toMilliseconds(record.updatedAt))
+    .sort((left, right) => toMilliseconds(right.updatedAt) - toMilliseconds(left.updatedAt))[0];
+  const liveSentence = liveCurrentFact && !normalizedName(record?.summary || "").includes(normalizedName(liveCurrentFact.content))
+    ? sentenceEnding(liveCurrentFact.content)
+    : undefined;
+  const compatibleSummary = liveCurrentFact
+    ? selected.filter((sentence) => !sentenceDescribesCanonicalKey(sentence, liveCurrentFact.canonicalKey))
+    : selected;
+  const summary = compactSentences(liveSentence ? [liveSentence, ...compatibleSummary] : compatibleSummary);
+  return summary.join(" ") || "No relationship summary yet.";
 }
 
-function interactionTimestamp(person: IntelligenceChat, chat?: ChatSummary) {
-  return toMilliseconds(chat?.timestamp || person.lastIncoming?.timestamp || person.updatedAt);
+function interactionTimestamp(person: IntelligenceChat) {
+  const timestamp = person.lastInteraction?.timestamp;
+  return timestamp ? toMilliseconds(timestamp) : undefined;
+}
+
+export function relationshipItemTemporalText(item: Pick<RelationshipCommitment, "evidence" | "dueAt">) {
+  const sourceTimestamp = item.evidence?.timestamp;
+  const source = sourceTimestamp ? `from ${shortDate(sourceTimestamp)}` : undefined;
+  const due = item.dueAt ? `due ${shortDate(item.dueAt)}` : undefined;
+  return [source, due].filter((value): value is string => Boolean(value)).join(" · ");
+}
+
+function sentenceEnding(value: string) {
+  const cleaned = value
+    .replace(/,\s+(?=(?:at|for|from|in|on|with)\b)/giu, " ")
+    .replace(/\.{2,}$/u, ".")
+    .trim();
+  return /[.!?]$/u.test(cleaned) ? cleaned : `${cleaned}.`;
+}
+
+export function compactRelationshipItemTitle(value: string, maxLength = 96) {
+  const normalized = value.replace(/\s+/gu, " ").replace(/\s+([,.;!?])/gu, "$1").trim();
+  if (normalized.length <= maxLength) return normalized;
+  const candidate = normalized.slice(0, maxLength - 1);
+  const wordBoundary = candidate.lastIndexOf(" ");
+  return `${candidate.slice(0, wordBoundary > maxLength * .58 ? wordBoundary : candidate.length).trimEnd()}…`;
+}
+
+export function commitmentPresentation(content: string) {
+  const normalized = content.replace(/\s+/gu, " ").trim();
+  if (/^Last login:.*(?:default interactive shell|Updating AmirOS|terminal)/iu.test(normalized)) {
+    return { title: "Review shared terminal output", detail: "A terminal log was shared in this conversation." };
+  }
+  const contextual = normalized.match(/^(.+?)\s+(when|while|after|before|once|upon returning|on returning)\s+(.+)$/iu);
+  if (contextual) {
+    const title = contextual[1]!.replace(/[,;:–—-]+$/u, "").trim();
+    const detail = sentenceEnding(`${contextual[2]![0]!.toLocaleUpperCase()}${contextual[2]!.slice(1)} ${contextual[3]!}`);
+    return { title, detail };
+  }
+  const clause = normalized.match(/^(.{18,90}?)[;–—]\s+(.+)$/u);
+  if (clause) return {
+    title: clause[1]!.replace(/[,;:–—-]+$/u, "").trim(),
+    detail: sentenceEnding(clause[2]!),
+  };
+  return { title: normalized.replace(/[.!?]+$/u, ""), detail: undefined };
+}
+
+function evidenceRecords(primary: MemoryEvidence, history?: MemoryEvidence[]) {
+  const records = new Map<string, MemoryEvidence>();
+  for (const evidence of [primary, ...(history || [])]) {
+    const key = evidence.messageId || `${evidence.timestamp}:${evidence.excerpt}`;
+    if (!records.has(key)) records.set(key, evidence);
+  }
+  return [...records.values()].sort((left, right) => toMilliseconds(right.timestamp) - toMilliseconds(left.timestamp));
 }
 
 function summaryRecordFor(person: IntelligenceChat) {
@@ -120,7 +201,7 @@ function summaryRecordFor(person: IntelligenceChat) {
 
 function summaryNeedsRefresh(person: IntelligenceChat) {
   const summary = summaryRecordFor(person);
-  return !summary?.summary.trim() || toMilliseconds(person.updatedAt) > toMilliseconds(summary.updatedAt) + 1_000;
+  return !summary?.summary.trim() || Boolean(person.profile?.staleAt) || toMilliseconds(person.updatedAt) > toMilliseconds(summary.updatedAt) + 1_000;
 }
 
 function relationshipOptions(person: IntelligenceChat, current: string) {
@@ -136,8 +217,18 @@ function categoryFor(person: IntelligenceChat, preferences?: ContactPreferences)
   return "friends";
 }
 
+export function isRelationshipCommitmentNoise(item: Pick<RelationshipCommitment, "content" | "evidence">) {
+  const content = `${item.content} ${item.evidence?.excerpt || ""}`.replace(/\s+/gu, " ").trim();
+  return /^(?:Last login:|The default interactive shell)/iu.test(content)
+    || /\bdefault interactive shell is now zsh\b/iu.test(content)
+    || /(?:\/node_modules\/|puppeteer-core|ChromeLauncher\.launch)/u.test(content);
+}
+
 function openCommitments(person: IntelligenceChat) {
-  return person.commitments.filter((item) => item.status === "open");
+  return person.commitments
+    .filter((item) => !isRelationshipCommitmentNoise(item))
+    .filter((item) => item.status === "open" || item.status === "needs_review")
+    .sort((left, right) => Number(left.status === "needs_review") - Number(right.status === "needs_review"));
 }
 
 function hasWaiting(person: IntelligenceChat) {
@@ -161,8 +252,166 @@ function commitmentOwnerLabel(commitment: RelationshipCommitment) {
   return commitment.owner === "me" ? "Follow-up for you" : "Follow-up from them";
 }
 
+function titleCaseTopic(value: string) {
+  return value.split(/\s+/u).map((word, index) =>
+    index > 0 && /^(?:a|an|and|at|for|in|of|on|the|to)$/iu.test(word)
+      ? word.toLocaleLowerCase()
+      : word.replace(/\p{L}/u, (letter) => letter.toLocaleUpperCase()),
+  ).join(" ").replace(/\bimax\b/giu, "IMAX").replace(/\bnyc\b/giu, "NYC");
+}
+
+export function normalizeTopicTitle(value: string) {
+  const cleaned = value.replace(/\s+/gu, " ").trim().replace(/[.!?,;:]+$/gu, "");
+  const words = cleaned.split(/\s+/u).filter(Boolean);
+  if (words.length < 2 || words.length > 4 || cleaned.length > 56) return "";
+  const first = words[0]?.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "") || "";
+  if (INVALID_TOPIC_STARTS.has(first)) return "";
+  if (!words.some((word) => /[\p{L}\p{N}]/u.test(word))) return "";
+  return titleCaseTopic(cleaned);
+}
+
+/** Backward-compatible semantic projection for insights saved before topicTitle existed. */
+export function conciseTopicLabel(content: string) {
+  const source = content.replace(/\s+/gu, " ").trim().split(/(?<=[.!?])\s+/u)[0]?.replace(/[.!?]+$/u, "") || "";
+  if (!source || /\b(?:affectionately )?reassured\b|\bcould read it later\b|\bnot so bad\b/iu.test(source)) return "";
+  if (/\b(?:difficult|hard|rough|tough)\s+(?:few\s+)?(?:days|weeks|months)\b/iu.test(source)) return "Personal Check-in";
+  if (/\b(?:sit|get|meet)\s+together\b/iu.test(source)) return /\bthis week\b/iu.test(source) ? "Meeting This Week" : "Meeting Plans";
+  if (/\bflamenco\b/iu.test(source)) return "Flamenco Night";
+  if (/\bpupp(?:y|ies)\b/iu.test(source) && /\b(?:visit|play|meet)\b/iu.test(source)) return "Puppy Visit";
+  const venue = source.match(/\b(?:at|to)\s+(?:the\s+)?([\p{Lu}][\p{L}\p{N}'’.-]*(?:\s+[\p{Lu}][\p{L}\p{N}'’.-]*)?)(?:\s+(?:restaurant|cafe|bar))?\b/u)?.[1];
+  if (/\bburrito\b/iu.test(source) && venue) return normalizeTopicTitle(`Burrito at ${venue}`);
+  if (/\bnot been to\b/iu.test(source) && venue) return normalizeTopicTitle(`${venue} Restaurant`);
+  if (/\bsecurity camera\b/iu.test(source)) return "Security Camera";
+  const trip = source.match(/\b(?:trip|travel|vacation)\b.*?\bto\s+([\p{L}\p{N}'’.-]+(?:\s+[\p{L}\p{N}'’.-]+){0,1})/iu);
+  if (trip?.[1]) return normalizeTopicTitle(`Trip to ${trip[1]}`);
+  const ticketSubject = source.match(/\b(?:tickets?|booking|reservation)\s+(?:for|to)\s+(?:the\s+)?(.+?)$/iu);
+  if (ticketSubject?.[1]) return normalizeTopicTitle(ticketSubject[1]);
+  const project = source.match(/\b((?:new|work|creative|personal)\s+project)\b/iu);
+  if (project?.[1]) return normalizeTopicTitle(project[1]);
+  const scooter = source.match(/\b(scooter(?:\s+(?:booking|purchase|reservation))?)\b/iu);
+  if (scooter?.[1]) return normalizeTopicTitle(scooter[1]);
+  if (/\btherapy\b/iu.test(source)) return "Therapy Sessions";
+  const broughtPerson = source.match(/\b(?:bring|bringing)\s+([\p{Lu}][\p{L}'’.-]*(?:\s+[\p{Lu}][\p{L}'’.-]*){0,2})$/u);
+  if (broughtPerson?.[1]) return normalizeTopicTitle(`${broughtPerson[1]} Visit`);
+  const animal = source.match(/\b(poodles?|dogs?|cats?)\b/iu);
+  const location = source.match(/\b(?:at|in)\s+([\p{Lu}\p{N}][\p{L}\p{N}'’.-]*)/u);
+  if (animal?.[1] && location?.[1]) return normalizeTopicTitle(`${animal[1]} at ${location[1]}`);
+  return "";
+}
+
+export function topicTitleForInsight(item: Pick<ContactInsight, "content" | "topicTitle" | "topicTitleConfidence">) {
+  if (item.topicTitle !== undefined) {
+    if ((item.topicTitleConfidence || 0) < 0.7) return "";
+    return normalizeTopicTitle(item.topicTitle);
+  }
+  return conciseTopicLabel(item.content);
+}
+
+export function topicLabelQuality(label: string) {
+  if (!normalizeTopicTitle(label)) return 0;
+  const words = label.toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .split(/\s+/u)
+    .filter(Boolean);
+  const meaningful = words.filter((word) => word.length > 1 && !WEAK_TOPIC_WORDS.has(word));
+  if (meaningful.length === 0) return 0;
+  return Math.min(1, 0.55 + meaningful.length * 0.15);
+}
+
+export function commitmentCoversReply(commitments: RelationshipCommitment[], replyContent?: string) {
+  if (!replyContent) return false;
+  const meaningfulTokens = (value: string) => new Set(value
+    .toLocaleLowerCase()
+    .replace(/\b(?:sent|sending)\b/gu, "send")
+    .replace(/\b(?:called|calling)\b/gu, "call")
+    .replace(/\b(?:booked|booking)\b/gu, "book")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .split(/\s+/u)
+    .map((token) => token.replace(/(?:ing|ed|s)$/u, ""))
+    .filter((token) => token.length >= 3 && !new Set([
+      "can", "could", "would", "please", "you", "your", "that", "this", "with", "from", "have", "need", "reply",
+    ]).has(token)));
+  const replyTokens = meaningfulTokens(replyContent);
+  return commitments.some((item) => {
+    const commitmentTokens = meaningfulTokens(item.content);
+    const shared = [...replyTokens].filter((token) => commitmentTokens.has(token)).length;
+    return shared >= 1 && shared / Math.min(replyTokens.size || 1, commitmentTokens.size || 1) >= 0.8;
+  });
+}
+
 function SectionEmpty({ children }: { children: string }) {
   return <p className="people-section-empty">{children}</p>;
+}
+
+function EvidenceHistory({
+  primary,
+  history,
+}: {
+  primary: MemoryEvidence;
+  history?: MemoryEvidence[];
+}) {
+  const records = evidenceRecords(primary, history);
+  return <section className="relationship-evidence" aria-label="Supporting evidence">
+    <h4>Supporting {records.length === 1 ? "message" : `messages (${records.length})`}</h4>
+    <div>{records.map((evidence) => <blockquote key={evidence.messageId || `${evidence.timestamp}:${evidence.excerpt}`}>
+      <p dir="auto">{evidence.excerpt}</p>
+      <time>{shortDate(evidence.timestamp)}{evidence.senderName ? ` · ${evidence.senderName}` : ""}</time>
+    </blockquote>)}</div>
+  </section>;
+}
+
+function RemoveItemButton({ label, disabled, onClick }: { label: string; disabled: boolean; onClick: () => void }) {
+  return <button className="contact-item-remove" type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick}><Trash2 size={14} /></button>;
+}
+
+function RelationshipCommitmentItem({
+  item,
+  meta,
+  removing,
+  onRemove,
+}: {
+  item: RelationshipCommitment;
+  meta: string;
+  removing: boolean;
+  onRemove: () => void;
+}) {
+  const presentation = commitmentPresentation(item.content);
+  const title = compactRelationshipItemTitle(presentation.title);
+  const needsReview = item.status === "needs_review";
+  return <article className={`relationship-commitment-item ${needsReview ? "needs-review" : "current"}`}>
+    <details className="relationship-item-disclosure">
+      <summary>
+        <span className="relationship-item-copy">
+          <span className="relationship-item-heading">
+            <strong dir="auto">{title}</strong>
+            <em className={`relationship-status-badge ${needsReview ? "review" : "current"}`}>{needsReview ? "Needs review" : "Current"}</em>
+          </span>
+          {presentation.detail ? <span className="relationship-item-support" dir="auto">{presentation.detail}</span> : null}
+          <small>{meta}</small>
+        </span>
+        <ChevronDown className="relationship-disclosure-chevron" size={15} aria-hidden="true" />
+      </summary>
+      <div className="relationship-item-expanded">
+        <p dir="auto">{item.content}</p>
+        <EvidenceHistory primary={item.evidence} history={item.evidenceHistory} />
+      </div>
+    </details>
+    <RemoveItemButton label={`Remove ${title}`} disabled={removing} onClick={onRemove} />
+  </article>;
+}
+
+function TopicItem({ item, removing, onRemove }: { item: ContactInsight; removing: boolean; onRemove: () => void }) {
+  const label = topicTitleForInsight(item);
+  return <article className="contact-topic-item">
+    <details className="relationship-item-disclosure">
+      <summary>
+        <span className="relationship-item-copy"><strong dir="auto">{label}</strong><span className="relationship-item-support" dir="auto">{compactRelationshipItemTitle(item.content, 112)}</span></span>
+        <ChevronDown className="relationship-disclosure-chevron" size={15} aria-hidden="true" />
+      </summary>
+      <div className="relationship-item-expanded"><p dir="auto">{item.content}</p><EvidenceHistory primary={item.evidence} history={item.evidenceHistory} /></div>
+    </details>
+    <RemoveItemButton label={`Remove ${label}`} disabled={removing} onClick={onRemove} />
+  </article>;
 }
 
 function QuickViewCard({
@@ -189,11 +438,12 @@ function QuickViewCard({
   </button>;
 }
 
-export function PeopleExperience({ data, chats, contacts, ownerName, loading, onRefresh, onOpenChat, onOpenCalendar, onContactChange, onGenerateSummary }: PeopleExperienceProps) {
+export function PeopleExperience({ data, chats, contacts, ownerName, loading, onRefresh, onOpenChat, onOpenCalendar, onContactChange, onGenerateSummary, onCalendarStatus, onCommitmentStatus, onInsightStatus, onTodoStatus }: PeopleExperienceProps) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<PeopleFilter>("all");
   const [selectedChatId, setSelectedChatId] = useState<string>();
   const [summaryBusyChatId, setSummaryBusyChatId] = useState<string>();
+  const [removingItemKey, setRemovingItemKey] = useState<string>();
   const chatById = useMemo(() => new Map(chats.map((chat) => [chat.id, chat])), [chats]);
   const everyone = useMemo(
     () => (data?.chats || []).filter((person) => (
@@ -220,7 +470,7 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
     [activePeople],
   );
   const recentlyActivePeople = useMemo(
-    () => [...activePeople].sort((left, right) => interactionTimestamp(right, chatById.get(right.chatId)) - interactionTimestamp(left, chatById.get(left.chatId))),
+    () => [...activePeople].sort((left, right) => (interactionTimestamp(right) || 0) - (interactionTimestamp(left) || 0)),
     [activePeople, chatById],
   );
   const hiddenPeople = useMemo(
@@ -238,14 +488,14 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
         || (filter === "favorites" && Boolean(contacts[person.chatId]?.pinned))
         || (filter === "waiting" && hasWaiting(person))
         || (filter === "upcoming" && confirmedUpcomingPlans(person).length > 0)
-        || (filter === "recent" && interactionTimestamp(person, chatById.get(person.chatId)) >= Date.now() - 30 * 24 * 60 * 60 * 1_000)
+        || (filter === "recent" && (interactionTimestamp(person) || 0) >= Date.now() - 30 * 24 * 60 * 60 * 1_000)
         || categoryFor(person, contacts[person.chatId]) === filter
             )
       ))
       .filter((person) => !normalizedQuery || `${person.contactName} ${relationshipLabel(person, contacts[person.chatId])}`.toLocaleLowerCase().includes(normalizedQuery))
       .sort((left, right) => {
         const pinDifference = Number(Boolean(contacts[right.chatId]?.pinned)) - Number(Boolean(contacts[left.chatId]?.pinned));
-        return pinDifference || interactionTimestamp(right, chatById.get(right.chatId)) - interactionTimestamp(left, chatById.get(left.chatId));
+        return pinDifference || (interactionTimestamp(right) || 0) - (interactionTimestamp(left) || 0);
       });
   }, [chatById, contacts, everyone, filter, query]);
   const selectedPerson = everyone.find((person) => person.chatId === selectedChatId);
@@ -272,6 +522,15 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
     }
   };
 
+  const removeItem = async (key: string, action: () => Promise<void>) => {
+    setRemovingItemKey(key);
+    try {
+      await action();
+    } finally {
+      setRemovingItemKey(undefined);
+    }
+  };
+
   if (selectedPerson) {
     const preferences = contacts[selectedPerson.chatId];
     const chat = chatById.get(selectedPerson.chatId);
@@ -280,11 +539,16 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
     const todos = openTodos(selectedPerson, allTodos);
     const waitingOnMe = commitments.filter((item) => item.owner === "me");
     const waitingOnThem = commitments.filter((item) => item.owner !== "me");
+    const replyCoveredByCommitment = commitmentCoversReply(waitingOnMe, selectedPerson.lastIncoming?.content);
     const replyCopy = replyAssessmentCopy(selectedPerson.replyAssessment);
-    const topics = selectedPerson.insights.filter((item) => item.status === "confirmed")
+    const lastInteraction = selectedPerson.lastInteraction;
+    const topics = selectedPerson.insights
+      .filter((item) => item.status === "confirmed" && (item.validity || "current") !== "historical")
+      .filter((item) => item.freshness !== "stale")
+      .filter((item) => topicLabelQuality(topicTitleForInsight(item)) >= 0.7)
       .sort((left, right) => toMilliseconds(right.updatedAt) - toMilliseconds(left.updatedAt));
     const timeline: TimelineItem[] = [
-      selectedPerson.lastIncoming ? { id: `message:${selectedPerson.lastIncoming.messageId || selectedPerson.lastIncoming.timestamp}`, label: "Recent message", content: selectedPerson.lastIncoming.content || "Message received", timestamp: selectedPerson.lastIncoming.timestamp } : undefined,
+      selectedPerson.lastInteraction ? { id: `interaction:${selectedPerson.lastInteraction.messageId || selectedPerson.lastInteraction.timestamp}`, label: "Recent interaction", content: selectedPerson.lastInteraction.content || "Message", timestamp: selectedPerson.lastInteraction.timestamp } : undefined,
       ...plans.map((item) => ({ id: `event:${item.id}`, label: "Upcoming plan", content: item.title, timestamp: item.startAt })),
       ...commitments.map((item) => ({ id: `commitment:${item.id}`, label: commitmentOwnerLabel(item), content: item.content, timestamp: item.updatedAt })),
       ...topics.map((item) => ({ id: `topic:${item.id}`, label: "Important topic", content: item.content, timestamp: item.updatedAt })),
@@ -295,20 +559,22 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
         <button className="people-back" type="button" onClick={() => setSelectedChatId(undefined)}><ArrowLeft size={18} />People</button>
         <button className="button compact" type="button" onClick={() => onOpenChat(selectedPerson.chatId)}><MessageCircle size={16} />Open conversation</button>
       </header>
-      <section className="contact-intelligence-hero">
-        <ContactAvatar name={selectedPerson.contactName} src={chat?.avatarUrl} className="contact-intelligence-avatar" />
-        <div><span className="people-eyebrow">Contact intelligence</span><h1>{selectedPerson.contactName}</h1><p className="contact-intelligence-relationship">{relationshipLabel(selectedPerson, preferences)}</p><p className="contact-intelligence-summary" dir="auto">{personSummary(selectedPerson, ownerName)}</p></div>
-        <article className="contact-last-interaction"><span>Last interaction</span><strong>{relativeTime(selectedPerson.lastIncoming?.timestamp || selectedPerson.updatedAt)}</strong><p dir="auto">{selectedPerson.lastIncoming?.content || "No recent message is available."}</p><button type="button" onClick={() => onOpenChat(selectedPerson.chatId, selectedPerson.lastIncoming?.messageId)}>View conversation <ArrowRight size={14} /></button></article>
-      </section>
-      <div className="contact-intelligence-grid">
-        <section className="contact-intelligence-section plans"><header><span><CalendarDays size={19} /><h2>Upcoming plans</h2></span><button type="button" onClick={onOpenCalendar}>View calendar <ArrowRight size={14} /></button></header>{plans.length ? <div className="contact-item-list">{plans.slice(0, 3).map((item) => <button type="button" key={item.id} onClick={onOpenCalendar}><span className="contact-item-date">{shortDate(item.startAt)}</span><span><strong dir="auto">{item.title}</strong><small>{item.location || "Confirmed plan"}</small></span><ArrowRight size={14} /></button>)}</div> : <SectionEmpty>No upcoming confirmed plans.</SectionEmpty>}</section>
-        <section className="contact-intelligence-section commitments"><header><span><CheckCircle2 size={19} /><h2>Open commitments</h2></span></header>{commitments.length ? <div className="contact-item-list">{commitments.slice(0, 3).map((item) => <article key={item.id}><span><strong dir="auto">{item.content}</strong><small>{commitmentOwnerLabel(item)}{item.dueAt ? ` · due ${shortDate(item.dueAt)}` : ""}</small></span></article>)}</div> : <SectionEmpty>No open commitments.</SectionEmpty>}</section>
-        <section className="contact-intelligence-section todos"><header><span><ListTodo size={19} /><h2>Open to-dos</h2></span></header>{todos.length ? <div className="contact-item-list">{todos.slice(0, 3).map((item) => <article key={item.id}><span><strong dir="auto">{item.title}</strong><small>{item.dueAt ? `Due ${shortDate(item.dueAt)}` : "Open to-do"}</small></span></article>)}</div> : <SectionEmpty>{`No open to-dos involving ${selectedPerson.contactName}.`}</SectionEmpty>}</section>
-        <section className="contact-intelligence-section waiting-on-them"><header><span><Clock3 size={19} /><h2>Follow-ups from them</h2></span></header>{waitingOnThem.length ? <div className="contact-item-list">{waitingOnThem.slice(0, 3).map((item) => <article key={item.id}><span><strong dir="auto">{item.content}</strong><small>Open {relativeTime(item.updatedAt)}</small></span></article>)}</div> : <SectionEmpty>No follow-ups from them.</SectionEmpty>}</section>
-        <section className="contact-intelligence-section waiting-on-me"><header><span><MessageCircle size={19} /><h2>Your follow-ups</h2></span></header>{selectedPerson.needsReply || waitingOnMe.length ? <div className="contact-item-list">{selectedPerson.needsReply ? <button type="button" onClick={() => onOpenChat(selectedPerson.chatId, selectedPerson.lastIncoming?.messageId)}><span><strong>May need your reply</strong><small>{replyCopy ? `${replyCopy.text} · ${relativeTime(selectedPerson.lastIncoming?.timestamp || selectedPerson.updatedAt)}` : relativeTime(selectedPerson.lastIncoming?.timestamp || selectedPerson.updatedAt)}</small></span><ArrowRight size={14} /></button> : null}{waitingOnMe.slice(0, 2).map((item) => <article key={item.id}><span><strong dir="auto">{item.content}</strong><small>Open {relativeTime(item.updatedAt)}</small></span></article>)}</div> : <SectionEmpty>Nothing needs your attention.</SectionEmpty>}</section>
-        <section className="contact-intelligence-section topics"><header><span><Sparkles size={19} /><h2>Recent important topics</h2></span></header>{topics.length ? <div className="contact-topic-list">{topics.slice(0, 6).map((item) => <span key={item.id} dir="auto">{item.content}</span>)}</div> : <SectionEmpty>No confirmed important topics yet.</SectionEmpty>}</section>
+      <div className="contact-intelligence-overview">
+        <section className="contact-intelligence-hero">
+          <ContactAvatar name={selectedPerson.contactName} src={chat?.avatarUrl} className="contact-intelligence-avatar" />
+          <div className="contact-intelligence-profile"><span className="people-eyebrow">Contact intelligence</span><div className="contact-intelligence-name-row"><h1>{selectedPerson.contactName}</h1><p className="contact-intelligence-relationship">{relationshipLabel(selectedPerson, preferences)}</p></div><p className="contact-intelligence-summary" dir="auto">{personSummary(selectedPerson, ownerName)}</p></div>
+          <article className="contact-last-interaction"><span>Last interaction</span><strong>{lastInteraction ? relativeTime(lastInteraction.timestamp) : "No interaction saved"}</strong><p dir="auto">{lastInteraction?.content || "No human message is available."}</p><button type="button" onClick={() => onOpenChat(selectedPerson.chatId, lastInteraction?.messageId)}>View conversation <ArrowRight size={14} /></button></article>
+        </section>
+        <section className="contact-intelligence-section todos contact-intelligence-overview-todos"><header><span><ListTodo size={19} /><h2>Open to-dos</h2></span></header>{todos.length ? <div className="contact-item-list">{todos.map((item) => <article className="contact-removable-item" key={item.id}><span><strong dir="auto">{compactRelationshipItemTitle(item.title)}</strong><small>{item.dueAt ? `Due ${shortDate(item.dueAt)}` : "Open to-do"}</small></span><RemoveItemButton label={`Remove ${item.title}`} disabled={removingItemKey === `todo:${item.id}`} onClick={() => void removeItem(`todo:${item.id}`, () => onTodoStatus(selectedPerson.chatId, item.id, "dismissed"))} /></article>)}</div> : <SectionEmpty>{`No open to-dos involving ${selectedPerson.contactName}.`}</SectionEmpty>}</section>
       </div>
-      <section className="contact-timeline"><header><span><Clock3 size={19} /><div><h2>Conversation timeline</h2><p>Recent events and confirmed relationship context.</p></div></span></header>{timeline.length ? <div>{timeline.map((item) => <button type="button" key={item.id} onClick={() => onOpenChat(selectedPerson.chatId)}><time>{shortDate(item.timestamp)}</time><span><small>{item.label}</small><strong dir="auto">{item.content}</strong></span><ArrowRight size={14} /></button>)}</div> : <SectionEmpty>No relationship activity has been saved yet.</SectionEmpty>}</section>
+      <div className="contact-intelligence-grid">
+        <section className="contact-intelligence-section plans"><header><span><CalendarDays size={19} /><h2>Upcoming plans</h2></span><button type="button" onClick={onOpenCalendar}>View calendar <ArrowRight size={14} /></button></header>{plans.length ? <div className="contact-item-list">{plans.map((item) => <article className="contact-removable-item" key={item.id}><button className="contact-item-open" type="button" onClick={onOpenCalendar}><span className="contact-item-date">{shortDate(item.startAt)}</span><span><strong dir="auto">{compactRelationshipItemTitle(item.title)}</strong><small>{item.location || "Confirmed plan"}</small></span><ArrowRight size={14} /></button><RemoveItemButton label={`Remove ${item.title}`} disabled={removingItemKey === `event:${item.id}`} onClick={() => void removeItem(`event:${item.id}`, () => onCalendarStatus(selectedPerson.chatId, item.id, "dismissed"))} /></article>)}</div> : <SectionEmpty>No upcoming confirmed plans.</SectionEmpty>}</section>
+        <section className="contact-intelligence-section commitments"><header><span><CheckCircle2 size={19} /><h2>Open commitments</h2></span></header>{commitments.length ? <div className="contact-item-list">{commitments.map((item) => <RelationshipCommitmentItem key={item.id} item={item} meta={[commitmentOwnerLabel(item), relationshipItemTemporalText(item)].filter(Boolean).join(" · ")} removing={removingItemKey === `commitment:${item.id}`} onRemove={() => void removeItem(`commitment:${item.id}`, () => onCommitmentStatus(selectedPerson.chatId, item.id, "dismissed"))} />)}</div> : <SectionEmpty>No open commitments.</SectionEmpty>}</section>
+        <section className="contact-intelligence-section waiting-on-them"><header><span><Clock3 size={19} /><h2>Follow-ups from them</h2></span></header>{waitingOnThem.length ? <div className="contact-item-list">{waitingOnThem.map((item) => <RelationshipCommitmentItem key={item.id} item={item} meta={relationshipItemTemporalText(item) || `Open ${relativeTime(item.updatedAt)}`} removing={removingItemKey === `commitment:${item.id}`} onRemove={() => void removeItem(`commitment:${item.id}`, () => onCommitmentStatus(selectedPerson.chatId, item.id, "dismissed"))} />)}</div> : <SectionEmpty>No follow-ups from them.</SectionEmpty>}</section>
+        <section className="contact-intelligence-section waiting-on-me"><header><span><MessageCircle size={19} /><h2>Your follow-ups</h2></span></header>{(selectedPerson.needsReply && !replyCoveredByCommitment) || waitingOnMe.length ? <div className="contact-item-list">{selectedPerson.needsReply && !replyCoveredByCommitment ? <button type="button" onClick={() => onOpenChat(selectedPerson.chatId, selectedPerson.lastIncoming?.messageId)}><span><strong>May need your reply</strong><small>{replyCopy ? `${replyCopy.text} · ${relativeTime(selectedPerson.lastIncoming?.timestamp || selectedPerson.updatedAt)}` : relativeTime(selectedPerson.lastIncoming?.timestamp || selectedPerson.updatedAt)}</small></span><ArrowRight size={14} /></button> : null}{waitingOnMe.map((item) => <RelationshipCommitmentItem key={item.id} item={item} meta={relationshipItemTemporalText(item) || `Open ${relativeTime(item.updatedAt)}`} removing={removingItemKey === `commitment:${item.id}`} onRemove={() => void removeItem(`commitment:${item.id}`, () => onCommitmentStatus(selectedPerson.chatId, item.id, "dismissed"))} />)}</div> : <SectionEmpty>Nothing needs your attention.</SectionEmpty>}</section>
+        <section className="contact-intelligence-section topics"><header><span><Sparkles size={19} /><h2>Recent important topics</h2></span></header>{topics.length ? <div className="contact-topic-list">{topics.map((item) => <TopicItem key={item.id} item={item} removing={removingItemKey === `insight:${item.id}`} onRemove={() => void removeItem(`insight:${item.id}`, () => onInsightStatus(selectedPerson.chatId, item.id, "outdated"))} />)}</div> : <SectionEmpty>No confirmed important topics yet.</SectionEmpty>}</section>
+      </div>
+      <section className="contact-timeline"><header><span><Clock3 size={19} /><div><h2>Conversation timeline</h2><p>Recent events and confirmed relationship context.</p></div></span></header>{timeline.length ? <div>{timeline.map((item) => <button type="button" key={item.id} onClick={() => onOpenChat(selectedPerson.chatId)}><time>{shortDate(item.timestamp)}</time><span><small>{item.label}</small><strong dir="auto">{compactRelationshipItemTitle(commitmentPresentation(item.content).title)}</strong></span><ArrowRight size={14} /></button>)}</div> : <SectionEmpty>No relationship activity has been saved yet.</SectionEmpty>}</section>
     </main>;
   }
 
@@ -326,9 +592,10 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
       const relationship = relationshipLabel(person, preferences);
       const plans = confirmedUpcomingPlans(person);
       const commitments = openCommitments(person);
-      const waitingOnMe = (person.needsReply ? 1 : 0) + commitments.filter((item) => item.owner === "me").length;
+      const replyCoveredByCommitment = commitmentCoversReply(commitments.filter((item) => item.owner === "me"), person.lastIncoming?.content);
+      const waitingOnMe = (person.needsReply && !replyCoveredByCommitment ? 1 : 0) + commitments.filter((item) => item.owner === "me").length;
       const waitingOnThem = commitments.filter((item) => item.owner !== "me").length;
-      const interactedAt = interactionTimestamp(person, chatById.get(person.chatId));
+      const interactedAt = interactionTimestamp(person);
       const needsSummary = summaryNeedsRefresh(person);
       const summaryBusy = summaryBusyChatId === person.chatId;
       const hasSummary = Boolean(summaryRecordFor(person)?.summary.trim());
@@ -345,7 +612,7 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
         <label className="people-relationship-picker"><span>Relationship</span><select value={relationship} aria-label={`Relationship with ${person.contactName}`} onChange={(event) => void onContactChange(person.chatId, { relationship: event.currentTarget.value })}>{relationshipOptions(person, relationship).map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
         <div className="people-card-summary"><p dir="auto">{personSummary(person, ownerName)}</p>{needsSummary ? <button type="button" className="people-summary-action" disabled={summaryBusy} onClick={() => void generatePersonSummary(person)}>{summaryBusy ? <RefreshCw size={13} className="spin" /> : <Sparkles size={13} />}{summaryBusy ? "Updating summary…" : hasSummary ? "Regenerate summary" : "Generate summary"}{hasSummary && !summaryBusy ? <em>New information</em> : null}</button> : null}</div>
         <div className="people-card-metrics"><span><CalendarDays size={16} /><b>{plans.length}</b><small>Upcoming</small></span><span><MessageCircle size={16} /><b>{waitingOnMe}</b><small>For you</small></span><span><Clock3 size={16} /><b>{waitingOnThem}</b><small>From them</small></span></div>
-        <button type="button" className="people-card-footer" onClick={() => setSelectedChatId(person.chatId)}>Last interaction {relativeTime(interactedAt)} <ArrowRight size={16} /></button>
+        <button type="button" className="people-card-footer" onClick={() => setSelectedChatId(person.chatId)}>Last interaction {interactedAt ? relativeTime(interactedAt) : "not available"} <ArrowRight size={16} /></button>
       </article>;
     })}</section>
     {visiblePeople.length === 0 ? <div className="people-directory-empty"><Users size={28} /><strong>{filter === "hidden" ? "No hidden people." : "No people match that filter."}</strong><p>{filter === "hidden" ? "Hidden people will appear here so you can show them again." : "Try a different search or relationship filter."}</p></div> : null}

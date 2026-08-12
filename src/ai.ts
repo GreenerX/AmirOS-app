@@ -19,6 +19,7 @@ import { hasCalendarPlanIntent, isOwnerTodoSource } from "./amiros-state.js";
 import { relationshipLearningInstructions } from "./prompts/relationship-learning.js";
 import type { ReplyAssessmentContextEntry } from "./reply-needed.js";
 import { presentTodo } from "./todo-presentation.js";
+import { assessKnowledgeFreshness } from "./memory-maintenance.js";
 import type {
   ContactMemoryItem,
   ContactPreferences,
@@ -113,6 +114,11 @@ export type RelationshipAnalysis = {
   insights: Array<{
     kind: "fact" | "preference" | "relationship_change" | "important_date";
     content: string;
+    topicTitle?: string;
+    topicTitleConfidence?: number;
+    canonicalKey?: string;
+    validity?: "current" | "historical" | "temporary";
+    evolution?: "reinforce" | "replace" | "append";
     confidence: number;
     subjectNames: string[];
     evidence: { messageId?: string; excerpt: string; senderName?: string; timestamp: number };
@@ -285,7 +291,9 @@ export function buildContextScopeInstructions(context: ReplyContext): string {
         const contact = cleanInstructionValue(record.contactName, 120) || cleanInstructionValue(record.senderName, 120) || record.chatId;
         const status = cleanInstructionValue(record.status, 40) || (record.kind === "message" ? "conversation evidence" : "saved");
         const content = cleanInstructionValue(record.content, 500);
-        return `- [${record.kind}; ${status}; ${contact}; ${new Date(record.timestamp).toLocaleString()}] ${content}`;
+        const freshness = record.knowledgeFreshness ? `; ${record.knowledgeFreshness}` : "";
+        const qualification = record.knowledgeNeedsQualification ? " Treat this as possibly stale and qualify it." : "";
+        return `- [${record.kind}; ${status}${freshness}; ${contact}; ${new Date(record.timestamp).toLocaleString()}] ${content}${qualification}`;
       }),
     );
   } else if (knowledgeAllowed) {
@@ -340,15 +348,21 @@ export function buildPersonalizedInstructions(context: ReplyContext, prompt = ""
     .slice(-40)
     .map((item) => cleanInstructionValue(item.content, 1_000))
     .filter(Boolean);
-  const profileSummary = cleanInstructionValue(context.profile?.summary, 8_000);
+  const profileSummary = context.profile?.staleAt
+    ? ""
+    : cleanInstructionValue(context.profile?.summary, 8_000);
   const confirmedInsights = (context.insights || [])
-    .filter((item) => item.status === "confirmed")
+    .filter((item) => item.status === "confirmed" && (item.validity || "current") !== "historical")
+    .filter((item) => assessKnowledgeFreshness(item).state !== "stale")
     .sort((left, right) =>
       knowledgeRelevance(right.content, prompt) - knowledgeRelevance(left.content, prompt) ||
       right.updatedAt - left.updatedAt,
     )
     .slice(0, 24)
-    .map((item) => cleanInstructionValue(item.content, 700))
+    .map((item) => {
+      const content = cleanInstructionValue(item.content, 700);
+      return assessKnowledgeFreshness(item).qualify ? `${content} (may need reconfirmation)` : content;
+    })
     .filter(Boolean);
   const styleProfile = context.styleProfile;
   const styleGuidance = styleProfile?.replyGuidance
@@ -482,8 +496,14 @@ export function buildContactProfilePrompt(input: {
     .join("\n");
   const previous = cleanInstructionValue(input.previousSummary, 8_000);
   const confirmedKnowledge = (input.insights || [])
-    .filter((item) => item.status === "confirmed")
+    .filter((item) => item.status === "confirmed" && (item.validity || "current") !== "historical")
+    .filter((item) => assessKnowledgeFreshness(item).state !== "stale")
     .slice(-100)
+    .map((item) => `- ${item.kind.replaceAll("_", " ")}: ${cleanInstructionValue(item.content, 1_000)}`)
+    .join("\n");
+  const historicalKnowledge = (input.insights || [])
+    .filter((item) => item.status === "confirmed" && item.validity === "historical")
+    .slice(-40)
     .map((item) => `- ${item.kind.replaceAll("_", " ")}: ${cleanInstructionValue(item.content, 1_000)}`)
     .join("\n");
   return [
@@ -492,6 +512,7 @@ export function buildContactProfilePrompt(input: {
     previous ? `Previous profile to improve:\n${previous}` : "",
     manualFacts ? `Operator-saved facts:\n${manualFacts}` : "",
     confirmedKnowledge ? `Confirmed relationship knowledge:\n${confirmedKnowledge}` : "",
+    historicalKnowledge ? `Historical relationship knowledge (past context only; never present as current truth):\n${historicalKnowledge}` : "",
     transcript ? `Conversation evidence:\n${transcript}` : "Conversation evidence: none yet.",
   ].filter(Boolean).join("\n\n");
 }
@@ -536,7 +557,8 @@ function isContextPayloadFailure(error: unknown): boolean {
 
 function buildContextRecoveryInstructions(context: ReplyContext, prompt: string): string {
   const localKnowledge = (context.insights || [])
-    .filter((item) => item.status === "confirmed")
+    .filter((item) => item.status === "confirmed" && (item.validity || "current") !== "historical")
+    .filter((item) => assessKnowledgeFreshness(item).state !== "stale")
     .sort((left, right) =>
       knowledgeRelevance(right.content, prompt) - knowledgeRelevance(left.content, prompt) ||
       right.updatedAt - left.updatedAt,
@@ -804,7 +826,7 @@ export class AiService {
         input.isGroup
           ? `Write one cohesive plain-text paragraph about ${input.contactName} in 90–170 words. Describe the group's purpose, relationship, communication norms, participant dynamics, and important recurring decisions or plans.`
           : `Write one cohesive plain-text biographical paragraph about ${input.contactName} in 90–170 words. Begin with the person's name and naturally describe their relationship with Amir, communication style, personality, preferences, and important useful facts.`,
-        "Synthesize all supplied confirmed knowledge, operator-saved facts, conversation evidence, and the previous profile. Prefer confirmed knowledge when records conflict.",
+        "Synthesize all supplied confirmed knowledge, operator-saved facts, conversation evidence, and the previous profile. Current canonical knowledge is authoritative when it conflicts with older conversation evidence or the previous profile. Historical knowledge is past context only and must never be stated as current truth.",
         "Do not use headings, bullets, labels, lists, Markdown, or advice directed at Amir. Do not enumerate evidence. Mention a meaningful uncertainty naturally only when it materially changes the portrait.",
         "Separate facts from tentative inferences. Never diagnose health conditions or infer sensitive traits such as religion, ethnicity, sexual orientation, political affiliation, or medical status unless the person explicitly stated the fact and it is directly useful.",
         "Do not invent details. Keep the paragraph warm, specific, readable, and concise.",
@@ -859,7 +881,7 @@ export class AiService {
           || (!entry.messageId && typeof input.candidateSince === "number" && entry.timestamp >= input.candidateSince),
       }));
     const result = await this.structuredResponse<{
-      insights: Array<{ kind: RelationshipAnalysis["insights"][number]["kind"]; content: string; confidence: number; subjectNames: string[]; sourceIndex: number }>;
+      insights: Array<{ kind: RelationshipAnalysis["insights"][number]["kind"]; content: string; topicTitle: string; topicTitleConfidence: number; canonicalKey: string; validity: "current" | "historical" | "temporary"; evolution: "reinforce" | "replace" | "append"; confidence: number; subjectNames: string[]; sourceIndex: number }>;
       commitments: Array<{ content: string; owner: RelationshipCommitment["owner"]; assigneeName: string; dueAt: number; sourceIndex: number }>;
       events: Array<{ title: string; startAt: number; allDay: boolean; location: string; sourceIndex: number }>;
       todos: Array<{
@@ -884,9 +906,10 @@ export class AiService {
         properties: {
           insights: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, properties: {
             kind: { type: "string", enum: ["fact", "preference", "relationship_change", "important_date"] },
-            content: { type: "string" }, confidence: { type: "number", minimum: 0, maximum: 1 },
+            content: { type: "string" }, topicTitle: { type: "string", maxLength: 80 }, topicTitleConfidence: { type: "number", minimum: 0, maximum: 1 },
+            canonicalKey: { type: "string", maxLength: 80 }, validity: { type: "string", enum: ["current", "historical", "temporary"] }, evolution: { type: "string", enum: ["reinforce", "replace", "append"] }, confidence: { type: "number", minimum: 0, maximum: 1 },
             subjectNames: { type: "array", maxItems: 8, items: { type: "string" } }, sourceIndex: { type: "integer" },
-          }, required: ["kind", "content", "confidence", "subjectNames", "sourceIndex"] } },
+          }, required: ["kind", "content", "topicTitle", "topicTitleConfidence", "canonicalKey", "validity", "evolution", "confidence", "subjectNames", "sourceIndex"] } },
           commitments: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, properties: {
             content: { type: "string" }, owner: { type: "string", enum: ["me", "contact", "group_member"] },
             assigneeName: { type: "string" }, dueAt: { type: "number" }, sourceIndex: { type: "integer" },
@@ -915,6 +938,11 @@ export class AiService {
       insights: result.insights.filter((item) => hasCandidateEvidence(item.sourceIndex)).map((item) => ({
         kind: item.kind,
         content: item.content,
+        topicTitle: item.topicTitle.replace(/\s+/g, " ").trim(),
+        topicTitleConfidence: item.topicTitleConfidence,
+        canonicalKey: item.canonicalKey.replace(/\s+/g, " ").trim(),
+        validity: item.validity,
+        evolution: item.evolution,
         confidence: item.confidence,
         subjectNames: item.subjectNames.map((name) => name.replace(/\s+/g, " ").trim()).filter(Boolean),
         evidence: evidenceFor(item.sourceIndex),
