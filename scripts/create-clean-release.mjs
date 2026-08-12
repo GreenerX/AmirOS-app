@@ -4,6 +4,16 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const releaseRoot = resolve(root, "release", "AmirOS");
+const excludedRelativePaths = new Set([
+  "src/profile-pdf 2.ts",
+]);
+
+function includeReleasePath(source) {
+  const relativePath = source.slice(root.length + 1);
+  if (!relativePath) return true;
+  if (source.endsWith("/.DS_Store")) return false;
+  return !excludedRelativePaths.has(relativePath);
+}
 
 // This is intentionally an allow-list. No runtime state, credentials,
 // WhatsApp session, logs, marketing exports, or generated customer data can
@@ -39,7 +49,7 @@ mkdirSync(releaseRoot, { recursive: true });
 for (const entry of included) {
   const source = resolve(root, entry);
   if (!existsSync(source)) throw new Error(`Missing release file: ${entry}`);
-  cpSync(source, resolve(releaseRoot, entry), { recursive: true });
+  cpSync(source, resolve(releaseRoot, entry), { recursive: true, filter: includeReleasePath });
 }
 
 writeFileSync(resolve(releaseRoot, "CUSTOMER-START-HERE.md"), `# Welcome to AmirOS

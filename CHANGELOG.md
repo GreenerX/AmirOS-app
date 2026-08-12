@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.9.0] - Upcoming
+## [0.9.0] - 2026-08-13
 
 ### Added
 
@@ -11,6 +11,9 @@
 - Added an owner-action end-to-end QA harness that exercises incoming owner messages through persistence and confirmation.
 - Added canonical memory fields for current, historical, temporary, reinforced, replaced, and autonomously confirmed relationship knowledge.
 - Added automatic memory maintenance for type-aware freshness, repeated evidence, profile invalidation, and current-first retrieval.
+- Added memory explainability so People and Ask AmirOS can show confidence, evidence, reinforcement, current-versus-historical status, and why AmirOS believes a fact.
+- Added grounded Relationship Intelligence briefings that distinguish current context, recent developments, upcoming plans, and unresolved follow-ups without presenting old conversation history as current.
+- Added Proactive Intelligence for timely relationship context, commitments, to-dos, and likely replies, with deterministic safety checks, cached AI usefulness review, semantic deduplication, feedback-aware ranking, and automatic resolution.
 - Added backend and frontend build freshness checks so stale compiled backend or dashboard code is detected before runtime use.
 
 ### Changed
@@ -21,6 +24,7 @@
 - Changed Ask AmirOS and reply grounding to prefer current canonical knowledge and qualify stale or uncertain knowledge when it is still relevant.
 - Changed relationship-learning prompts to produce semantic topic titles, canonical keys, validity, and evolution metadata for new insights.
 - Changed startup and launch scripts to use freshness-aware build wrappers instead of directly launching potentially stale `dist` output.
+- Changed Today’s Focus to adapt late in the evening: it becomes Up Next only when every remaining visible card belongs to tomorrow, while overdue or still-actionable items keep today’s framing.
 
 ### Improved
 
@@ -30,6 +34,8 @@
 - Improved relationship commitment reconciliation so repeated or reworded obligations merge into one record with preserved evidence history.
 - Improved memory retrieval so current facts rank ahead of older or historical facts, while historical facts remain available for history-oriented questions.
 - Improved contact summaries so People can project newer canonical facts immediately, even before a full profile regeneration.
+- Improved Ask AmirOS relationship answers with temporal relevance, evidence-grounded uncertainty, and natural follow-up explanations such as “Why?”, “How do you know?”, and “What changed?”.
+- Improved proactive guidance with human-readable “Why this is here” explanations, contact identity, AI confidence when available, durable dismissal, and non-blocking interaction feedback.
 - Improved dashboard diagnostics and health checks to verify that the browser receives the current stamped UI build.
 
 ### Fixed
@@ -50,6 +56,7 @@
 ### Testing
 
 - Added focused tests for temporal classification, owner actions, lifecycle commands, memory evolution, build freshness, UI build runtime behavior, relationship learning prompts, and People presentation.
+- Added precision-first Proactive Intelligence evaluation coverage for useful suggestions, noise, duplicates, resolved items, caching, feedback, privacy exclusions, and deterministic fallback.
 - Added owner-action E2E tests for clarification, persistence, lifecycle mutations, ambiguity handling, duplicate protection, failed writes, and truthful confirmations.
 - Verified the current state with the full Vitest suite, backend typecheck, frontend typecheck, backend build, frontend build, and Git whitespace checks before committing.
 

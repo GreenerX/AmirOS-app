@@ -29,24 +29,24 @@ export const AMIROS_VERSION = packageVersion();
 
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
-  releasedAt: "2026-08-10",
-  headline: "A more dependable, personal daily assistant",
+  releasedAt: "2026-08-13",
+  headline: "Intelligence that stays current and helps at the right time",
   notes: [
     {
-      title: "A polished daily header",
-      detail: "Local weather, saved city clocks, time preferences, and city artwork are clearer, lighter, and more efficient to load.",
+      title: "Relationships, grounded in what actually happened",
+      detail: "People profiles and Ask AmirOS now organize current plans, follow-ups, important topics, relationship changes, and their supporting evidence without treating old context as current truth.",
     },
     {
-      title: "Smarter owner actions and to-dos",
-      detail: "Clear WhatsApp commands save directly to AmirOS. New tasks get a concise summary, the right priority, and a fitting emoji.",
+      title: "Memory that evolves with people",
+      detail: "Canonical knowledge can reinforce durable facts, preserve earlier truth as history, qualify uncertainty, and keep People summaries aligned as relationships and circumstances change.",
     },
     {
-      title: "More reliable follow-up guidance",
-      detail: "Suggested actions use deterministic reply signals first, with cached AI review only when a conversation is genuinely unclear.",
+      title: "Natural control from your own WhatsApp chat",
+      detail: "Create, clarify, complete, cancel, rename, reprioritize, and reschedule calendar events, to-dos, and commitments with verified writes and truthful confirmations.",
     },
     {
-      title: "Release notes that always fit",
-      detail: "What’s new now stays within your screen, with the release details scrolling while its controls remain available.",
+      title: "A more useful Today’s Focus",
+      detail: "AmirOS safely ranks timely plans, commitments, replies, and relationship context, explains why each item appears, learns from dismissals, and shifts to tomorrow only when tonight is genuinely clear.",
     },
   ],
 };
@@ -57,6 +57,29 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.8.5",
+    releasedAt: "2026-08-10",
+    headline: "A more dependable, personal daily assistant",
+    notes: [
+      {
+        title: "A polished daily header",
+        detail: "Local weather, saved city clocks, time preferences, and city artwork are clearer, lighter, and more efficient to load.",
+      },
+      {
+        title: "Smarter owner actions and to-dos",
+        detail: "Clear WhatsApp commands save directly to AmirOS. New tasks get a concise summary, the right priority, and a fitting emoji.",
+      },
+      {
+        title: "More reliable follow-up guidance",
+        detail: "Suggested actions use deterministic reply signals first, with cached AI review only when a conversation is genuinely unclear.",
+      },
+      {
+        title: "Release notes that always fit",
+        detail: "What’s new now stays within your screen, with the release details scrolling while its controls remain available.",
+      },
+    ],
+  },
   {
     version: "0.8.0",
     releasedAt: "2026-08-09",
