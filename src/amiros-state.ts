@@ -6,6 +6,7 @@ import { parseExplicitClockTime, stripExplicitClockTime } from "./temporal-class
 import type { CachedReplyAssessment } from "./reply-needed.js";
 import { presentTodo } from "./todo-presentation.js";
 import { assessKnowledgeFreshness, type KnowledgeFreshness } from "./memory-maintenance.js";
+import { explainContactInsight, type MemoryExplanation } from "./memory-explainability.js";
 import {
   normalizeOwnerRecordReferences,
   normalizePendingOwnerLifecycleClarification,
@@ -130,6 +131,8 @@ export type ContactInsight = {
   maintenanceConfirmationReason?: "repeated_direct_evidence";
   /** Computed projection used by UI/API responses; never replaces validity. */
   freshness?: KnowledgeFreshness;
+  /** Derived explanation projection used by UI/API responses; never persisted as source of truth. */
+  explanation?: MemoryExplanation;
   status: "inferred" | "confirmed" | "outdated";
   confidence: number;
   evidence: MemoryEvidence;
@@ -333,6 +336,7 @@ export type IntelligenceSearchRecord = {
   knowledgeValidity?: ContactInsight["validity"];
   knowledgeFreshness?: KnowledgeFreshness;
   knowledgeNeedsQualification?: boolean;
+  explanation?: MemoryExplanation;
   timestamp: number;
   score: number;
 };
@@ -2065,11 +2069,16 @@ export class AmirosState {
     answer: string,
     sources: IntelligenceSearchRecord[],
   ): IntelligenceQuestionHistoryItem {
+    const historySources = sources.slice(0, 12).map((source) => {
+      const historySource = { ...source };
+      delete historySource.explanation;
+      return historySource;
+    });
     const item = {
       id: randomUUID(),
       question: question.replace(/\s+/g, " ").trim().slice(0, 500),
       answer: answer.trim().slice(0, 8_000),
-      sources: structuredClone(sources.slice(0, 12)),
+      sources: structuredClone(historySources),
       createdAt: Date.now(),
     };
     this.persisted.intelligenceHistory.push(item);
@@ -2162,11 +2171,13 @@ export class AmirosState {
           if (isOutgoing && isMoreRecent(candidate, lastOutgoing)) lastOutgoing = candidate;
           if (isHumanInteraction && isMoreRecent(candidate, lastInteraction)) lastInteraction = candidate;
         });
+        const now = Date.now();
         return {
           chatId,
           insights: structuredClone((memory.insights || []).map((item) => ({
             ...item,
-            freshness: assessKnowledgeFreshness(item).state,
+            freshness: assessKnowledgeFreshness(item, now).state,
+            explanation: explainContactInsight(item, memory.insights || [], now),
           }))),
           commitments: structuredClone((memory.commitments || []).map((item) => ({ ...item, status: relationshipCommitmentStatus(item) }))),
           events: structuredClone(memory.events || []),
@@ -2532,16 +2543,17 @@ export class AmirosState {
             ? (historicalIntent ? 4 : 20) + Math.round(item.confidence * 4)
             : 3 + Math.round(item.confidence * 2);
         push({
-        id: item.id,
-        chatId,
-        kind: "insight",
-        content: item.content,
-        senderName: item.evidence.senderName,
-        status: item.status,
-        knowledgeValidity: item.validity || "current",
-        knowledgeFreshness: freshness.state,
-        knowledgeNeedsQualification: freshness.qualify,
-        timestamp: item.lastReinforcedAt || item.updatedAt,
+          id: item.id,
+          chatId,
+          kind: "insight",
+          content: item.content,
+          senderName: item.evidence.senderName,
+          status: item.status,
+          knowledgeValidity: item.validity || "current",
+          knowledgeFreshness: freshness.state,
+          knowledgeNeedsQualification: freshness.qualify,
+          explanation: explainContactInsight(item, memory.insights, now),
+          timestamp: item.lastReinforcedAt || item.updatedAt,
         }, Math.max(0, baseBoost * freshness.scoreMultiplier), item.evidence.timestamp);
       });
       memory.commitments.filter((item) => item.status === "open").forEach((item) => push(

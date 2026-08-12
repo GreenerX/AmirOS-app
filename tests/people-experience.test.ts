@@ -152,11 +152,12 @@ describe("People experience", () => {
       readFile(new URL("../ui/src/styles.css", import.meta.url), "utf8"),
       readFile(new URL("../src/dashboard.ts", import.meta.url), "utf8"),
     ]);
-    expect(people).toContain("Upcoming plans");
-    expect(people).toContain("Open commitments");
+    expect(people).toContain("Coming up together");
+    expect(people).toContain("What needs your attention");
+    expect(people).toContain("What AmirOS knows now");
+    expect(people).toContain("Earlier context");
     expect(people).toContain("Conversation timeline");
-    expect(people).toContain("Follow-ups from them");
-    expect(people).toContain("Your follow-ups");
+    expect(people).toContain("They’re following up");
     expect(people).toContain("data?.todos || []");
     expect(people).toContain("!isOwnerContact(person, ownerName)");
     expect(people).toContain("people-relationship-picker");
@@ -172,20 +173,25 @@ describe("People experience", () => {
     expect(people).toContain("Needs review");
     expect(people).toContain("RelationshipCommitmentItem");
     expect(people).toContain("EvidenceHistory");
+    expect(people).toContain("MemoryExplanationPanel");
+    expect(people).toContain("How AmirOS knows this");
     expect(people).toContain('className="relationship-item-disclosure"');
     expect(people).toContain("Supporting evidence");
     expect(people).toContain("relationship-status-badge");
     expect(people).toContain("contact-topic-item");
-    expect(people).toContain("contact-intelligence-overview");
+    expect(people).toContain("contact-intelligence-priority-grid");
     expect(people).toContain("contact-intelligence-name-row");
     expect(people).toContain("isRelationshipCommitmentNoise");
     expect(people).toContain("contact-item-remove");
     expect(people).toContain("onCommitmentStatus");
-    expect(styles).toContain("grid-auto-rows: 250px");
-    expect(styles).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
-    expect(styles).toContain("padding: 34px 37px 44px");
+    expect(styles).toContain("contact-intelligence-priority-grid");
+    expect(styles).toContain(".contact-memory-history");
+    expect(styles).toContain("overflow: visible; overscroll-behavior: auto");
+    expect(styles).toContain("padding: 34px 37px 56px");
     expect(styles).toContain(".contact-item-list > article.relationship-commitment-item.needs-review");
     expect(styles).toContain(".relationship-evidence");
+    expect(styles).toContain(".memory-explanation");
+    expect(styles).toContain(".floating-ai-memory-explanation");
     expect(dashboard).toContain('commitment.status === "open" || commitment.status === "needs_review"');
     expect(intelligence).toContain('if (activeTab === "people") return <PeopleExperience');
     expect(sidebar).toContain('label: "People"');

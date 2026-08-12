@@ -220,6 +220,20 @@ export type MemoryEvidence = {
   source?: "whatsapp_bot";
 };
 
+export type MemoryExplanation = {
+  summary: string;
+  statusLabel: "Current" | "Historical" | "Temporary" | "Pending review" | "Outdated";
+  confidenceLabel: "High confidence" | "Medium confidence" | "Low confidence";
+  confidencePercent: number;
+  freshnessLabel: string;
+  evidenceCount: number;
+  reinforcedCount: number;
+  origin: string;
+  replaced?: string[];
+  replacedBy?: string;
+  bullets: string[];
+};
+
 export type ContactInsight = {
   id: string;
   clusterId?: string;
@@ -241,6 +255,7 @@ export type ContactInsight = {
   maintenanceConfirmedAt?: number;
   maintenanceConfirmationReason?: "repeated_direct_evidence";
   freshness?: "timeless" | "fresh" | "aging" | "stale" | "historical" | "uncertain";
+  explanation?: MemoryExplanation;
   status: "inferred" | "confirmed" | "outdated";
   confidence: number;
   evidenceHistory?: MemoryEvidence[];
@@ -375,6 +390,7 @@ export type IntelligenceSearchResult = {
     kind: "message" | "memory" | "insight" | "commitment" | "profile" | "calendar_event";
     content: string;
     senderName?: string;
+    explanation?: MemoryExplanation;
     timestamp: number;
     score: number;
   }>;

@@ -1,5 +1,5 @@
 import {
-  ArrowLeft, ArrowRight, CalendarDays, CheckCircle2, ChevronDown, Clock3, ListTodo,
+  ArrowLeft, ArrowRight, CalendarDays, ChevronDown, Clock3,
   Eye, EyeOff, Heart, MessageCircle, RefreshCw, Search, Sparkles, Trash2, Users,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -360,6 +360,31 @@ function EvidenceHistory({
   </section>;
 }
 
+function MemoryExplanationPanel({ explanation }: { explanation?: ContactInsight["explanation"] }) {
+  if (!explanation) return null;
+  return <section className="memory-explanation" aria-label="How AmirOS knows this">
+    <header>
+      <span><Sparkles size={13} />How AmirOS knows this</span>
+      <em>{explanation.confidenceLabel}</em>
+    </header>
+    <p>{explanation.summary}</p>
+    <div className="memory-explanation-pills">
+      <span>{explanation.statusLabel}</span>
+      <span>Supported by {explanation.evidenceCount} {explanation.evidenceCount === 1 ? "message" : "messages"}</span>
+      {explanation.reinforcedCount > 0 ? <span>Confirmed again in {explanation.reinforcedCount} later {explanation.reinforcedCount === 1 ? "conversation" : "conversations"}</span> : null}
+      {explanation.freshnessLabel !== "Current" ? <span>{explanation.freshnessLabel}</span> : null}
+    </div>
+    {explanation.replaced?.length ? <div className="memory-explanation-change">
+      <strong>Previously</strong>
+      {explanation.replaced.map((item) => <span key={item}>{item}</span>)}
+    </div> : null}
+    {explanation.replacedBy ? <div className="memory-explanation-change">
+      <strong>Now superseded by</strong>
+      <span>{explanation.replacedBy}</span>
+    </div> : null}
+  </section>;
+}
+
 function RemoveItemButton({ label, disabled, onClick }: { label: string; disabled: boolean; onClick: () => void }) {
   return <button className="contact-item-remove" type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick}><Trash2 size={14} /></button>;
 }
@@ -400,15 +425,29 @@ function RelationshipCommitmentItem({
   </article>;
 }
 
-function TopicItem({ item, removing, onRemove }: { item: ContactInsight; removing: boolean; onRemove: () => void }) {
+function TopicItem({
+  item,
+  removing,
+  onRemove,
+  historical = false,
+}: {
+  item: ContactInsight;
+  removing: boolean;
+  onRemove: () => void;
+  historical?: boolean;
+}) {
   const label = topicTitleForInsight(item);
-  return <article className="contact-topic-item">
+  const explanation = item.explanation;
+  const meta = historical
+    ? explanation?.replacedBy ? "Earlier context · replaced by newer information" : "Earlier relationship context"
+    : `${explanation?.confidenceLabel || "Confirmed"} · updated ${relativeTime(item.updatedAt)}`;
+  return <article className={`contact-topic-item ${historical ? "historical" : "current"}`}>
     <details className="relationship-item-disclosure">
       <summary>
-        <span className="relationship-item-copy"><strong dir="auto">{label}</strong><span className="relationship-item-support" dir="auto">{compactRelationshipItemTitle(item.content, 112)}</span></span>
+        <span className="relationship-item-copy"><strong dir="auto">{label}</strong><span className="relationship-item-support">{meta}</span></span>
         <ChevronDown className="relationship-disclosure-chevron" size={15} aria-hidden="true" />
       </summary>
-      <div className="relationship-item-expanded"><p dir="auto">{item.content}</p><EvidenceHistory primary={item.evidence} history={item.evidenceHistory} /></div>
+      <div className="relationship-item-expanded"><p className="relationship-memory-fact" dir="auto">{item.content}</p><MemoryExplanationPanel explanation={explanation} /><EvidenceHistory primary={item.evidence} history={item.evidenceHistory} /></div>
     </details>
     <RemoveItemButton label={`Remove ${label}`} disabled={removing} onClick={onRemove} />
   </article>;
@@ -542,16 +581,21 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
     const replyCoveredByCommitment = commitmentCoversReply(waitingOnMe, selectedPerson.lastIncoming?.content);
     const replyCopy = replyAssessmentCopy(selectedPerson.replyAssessment);
     const lastInteraction = selectedPerson.lastInteraction;
-    const topics = selectedPerson.insights
+    const currentMemory = selectedPerson.insights
       .filter((item) => item.status === "confirmed" && (item.validity || "current") !== "historical")
       .filter((item) => item.freshness !== "stale")
       .filter((item) => topicLabelQuality(topicTitleForInsight(item)) >= 0.7)
       .sort((left, right) => toMilliseconds(right.updatedAt) - toMilliseconds(left.updatedAt));
+    const historicalMemory = selectedPerson.insights
+      .filter((item) => item.status === "confirmed" && item.validity === "historical")
+      .filter((item) => topicLabelQuality(topicTitleForInsight(item)) >= 0.7)
+      .sort((left, right) => toMilliseconds(right.supersededAt || right.updatedAt) - toMilliseconds(left.supersededAt || left.updatedAt));
+    const attentionCommitments = commitments.filter((item) => item.owner === "me");
     const timeline: TimelineItem[] = [
       selectedPerson.lastInteraction ? { id: `interaction:${selectedPerson.lastInteraction.messageId || selectedPerson.lastInteraction.timestamp}`, label: "Recent interaction", content: selectedPerson.lastInteraction.content || "Message", timestamp: selectedPerson.lastInteraction.timestamp } : undefined,
       ...plans.map((item) => ({ id: `event:${item.id}`, label: "Upcoming plan", content: item.title, timestamp: item.startAt })),
       ...commitments.map((item) => ({ id: `commitment:${item.id}`, label: commitmentOwnerLabel(item), content: item.content, timestamp: item.updatedAt })),
-      ...topics.map((item) => ({ id: `topic:${item.id}`, label: "Important topic", content: item.content, timestamp: item.updatedAt })),
+      ...currentMemory.map((item) => ({ id: `topic:${item.id}`, label: "Important context", content: item.content, timestamp: item.updatedAt })),
     ].filter((item): item is TimelineItem => Boolean(item)).sort((left, right) => toMilliseconds(right.timestamp) - toMilliseconds(left.timestamp)).slice(0, 7);
 
     return <main className="main-content people-experience contact-intelligence-page">
@@ -559,21 +603,18 @@ export function PeopleExperience({ data, chats, contacts, ownerName, loading, on
         <button className="people-back" type="button" onClick={() => setSelectedChatId(undefined)}><ArrowLeft size={18} />People</button>
         <button className="button compact" type="button" onClick={() => onOpenChat(selectedPerson.chatId)}><MessageCircle size={16} />Open conversation</button>
       </header>
-      <div className="contact-intelligence-overview">
-        <section className="contact-intelligence-hero">
+      <section className="contact-intelligence-hero">
           <ContactAvatar name={selectedPerson.contactName} src={chat?.avatarUrl} className="contact-intelligence-avatar" />
-          <div className="contact-intelligence-profile"><span className="people-eyebrow">Contact intelligence</span><div className="contact-intelligence-name-row"><h1>{selectedPerson.contactName}</h1><p className="contact-intelligence-relationship">{relationshipLabel(selectedPerson, preferences)}</p></div><p className="contact-intelligence-summary" dir="auto">{personSummary(selectedPerson, ownerName)}</p></div>
+          <div className="contact-intelligence-profile"><span className="people-eyebrow">Your relationship with</span><div className="contact-intelligence-name-row"><h1>{selectedPerson.contactName}</h1><p className="contact-intelligence-relationship">{relationshipLabel(selectedPerson, preferences)}</p></div><p className="contact-intelligence-summary" dir="auto">{personSummary(selectedPerson, ownerName)}</p></div>
           <article className="contact-last-interaction"><span>Last interaction</span><strong>{lastInteraction ? relativeTime(lastInteraction.timestamp) : "No interaction saved"}</strong><p dir="auto">{lastInteraction?.content || "No human message is available."}</p><button type="button" onClick={() => onOpenChat(selectedPerson.chatId, lastInteraction?.messageId)}>View conversation <ArrowRight size={14} /></button></article>
-        </section>
-        <section className="contact-intelligence-section todos contact-intelligence-overview-todos"><header><span><ListTodo size={19} /><h2>Open to-dos</h2></span></header>{todos.length ? <div className="contact-item-list">{todos.map((item) => <article className="contact-removable-item" key={item.id}><span><strong dir="auto">{compactRelationshipItemTitle(item.title)}</strong><small>{item.dueAt ? `Due ${shortDate(item.dueAt)}` : "Open to-do"}</small></span><RemoveItemButton label={`Remove ${item.title}`} disabled={removingItemKey === `todo:${item.id}`} onClick={() => void removeItem(`todo:${item.id}`, () => onTodoStatus(selectedPerson.chatId, item.id, "dismissed"))} /></article>)}</div> : <SectionEmpty>{`No open to-dos involving ${selectedPerson.contactName}.`}</SectionEmpty>}</section>
-      </div>
-      <div className="contact-intelligence-grid">
-        <section className="contact-intelligence-section plans"><header><span><CalendarDays size={19} /><h2>Upcoming plans</h2></span><button type="button" onClick={onOpenCalendar}>View calendar <ArrowRight size={14} /></button></header>{plans.length ? <div className="contact-item-list">{plans.map((item) => <article className="contact-removable-item" key={item.id}><button className="contact-item-open" type="button" onClick={onOpenCalendar}><span className="contact-item-date">{shortDate(item.startAt)}</span><span><strong dir="auto">{compactRelationshipItemTitle(item.title)}</strong><small>{item.location || "Confirmed plan"}</small></span><ArrowRight size={14} /></button><RemoveItemButton label={`Remove ${item.title}`} disabled={removingItemKey === `event:${item.id}`} onClick={() => void removeItem(`event:${item.id}`, () => onCalendarStatus(selectedPerson.chatId, item.id, "dismissed"))} /></article>)}</div> : <SectionEmpty>No upcoming confirmed plans.</SectionEmpty>}</section>
-        <section className="contact-intelligence-section commitments"><header><span><CheckCircle2 size={19} /><h2>Open commitments</h2></span></header>{commitments.length ? <div className="contact-item-list">{commitments.map((item) => <RelationshipCommitmentItem key={item.id} item={item} meta={[commitmentOwnerLabel(item), relationshipItemTemporalText(item)].filter(Boolean).join(" · ")} removing={removingItemKey === `commitment:${item.id}`} onRemove={() => void removeItem(`commitment:${item.id}`, () => onCommitmentStatus(selectedPerson.chatId, item.id, "dismissed"))} />)}</div> : <SectionEmpty>No open commitments.</SectionEmpty>}</section>
-        <section className="contact-intelligence-section waiting-on-them"><header><span><Clock3 size={19} /><h2>Follow-ups from them</h2></span></header>{waitingOnThem.length ? <div className="contact-item-list">{waitingOnThem.map((item) => <RelationshipCommitmentItem key={item.id} item={item} meta={relationshipItemTemporalText(item) || `Open ${relativeTime(item.updatedAt)}`} removing={removingItemKey === `commitment:${item.id}`} onRemove={() => void removeItem(`commitment:${item.id}`, () => onCommitmentStatus(selectedPerson.chatId, item.id, "dismissed"))} />)}</div> : <SectionEmpty>No follow-ups from them.</SectionEmpty>}</section>
-        <section className="contact-intelligence-section waiting-on-me"><header><span><MessageCircle size={19} /><h2>Your follow-ups</h2></span></header>{(selectedPerson.needsReply && !replyCoveredByCommitment) || waitingOnMe.length ? <div className="contact-item-list">{selectedPerson.needsReply && !replyCoveredByCommitment ? <button type="button" onClick={() => onOpenChat(selectedPerson.chatId, selectedPerson.lastIncoming?.messageId)}><span><strong>May need your reply</strong><small>{replyCopy ? `${replyCopy.text} · ${relativeTime(selectedPerson.lastIncoming?.timestamp || selectedPerson.updatedAt)}` : relativeTime(selectedPerson.lastIncoming?.timestamp || selectedPerson.updatedAt)}</small></span><ArrowRight size={14} /></button> : null}{waitingOnMe.map((item) => <RelationshipCommitmentItem key={item.id} item={item} meta={relationshipItemTemporalText(item) || `Open ${relativeTime(item.updatedAt)}`} removing={removingItemKey === `commitment:${item.id}`} onRemove={() => void removeItem(`commitment:${item.id}`, () => onCommitmentStatus(selectedPerson.chatId, item.id, "dismissed"))} />)}</div> : <SectionEmpty>Nothing needs your attention.</SectionEmpty>}</section>
-        <section className="contact-intelligence-section topics"><header><span><Sparkles size={19} /><h2>Recent important topics</h2></span></header>{topics.length ? <div className="contact-topic-list">{topics.map((item) => <TopicItem key={item.id} item={item} removing={removingItemKey === `insight:${item.id}`} onRemove={() => void removeItem(`insight:${item.id}`, () => onInsightStatus(selectedPerson.chatId, item.id, "outdated"))} />)}</div> : <SectionEmpty>No confirmed important topics yet.</SectionEmpty>}</section>
-      </div>
+      </section>
+      <section className="contact-intelligence-priority-grid" aria-label="What matters now">
+        <section className="contact-intelligence-section attention"><header><span><Sparkles size={19} /><div><h2>What needs your attention</h2><p>Open follow-ups, commitments, and to-dos involving {selectedPerson.contactName}.</p></div></span></header>{(selectedPerson.needsReply && !replyCoveredByCommitment) || attentionCommitments.length || todos.length ? <div className="contact-item-list">{selectedPerson.needsReply && !replyCoveredByCommitment ? <button type="button" onClick={() => onOpenChat(selectedPerson.chatId, selectedPerson.lastIncoming?.messageId)}><span><strong>May need your reply</strong><small>{replyCopy ? `${replyCopy.text} · ${relativeTime(selectedPerson.lastIncoming?.timestamp || selectedPerson.updatedAt)}` : relativeTime(selectedPerson.lastIncoming?.timestamp || selectedPerson.updatedAt)}</small></span><ArrowRight size={14} /></button> : null}{attentionCommitments.map((item) => <RelationshipCommitmentItem key={item.id} item={item} meta={relationshipItemTemporalText(item) || `Open ${relativeTime(item.updatedAt)}`} removing={removingItemKey === `commitment:${item.id}`} onRemove={() => void removeItem(`commitment:${item.id}`, () => onCommitmentStatus(selectedPerson.chatId, item.id, "dismissed"))} />)}{todos.map((item) => <article className="contact-removable-item" key={item.id}><span><strong dir="auto">{compactRelationshipItemTitle(item.title)}</strong><small>{item.dueAt ? `Due ${shortDate(item.dueAt)}` : "Open to-do"}</small></span><RemoveItemButton label={`Remove ${item.title}`} disabled={removingItemKey === `todo:${item.id}`} onClick={() => void removeItem(`todo:${item.id}`, () => onTodoStatus(selectedPerson.chatId, item.id, "dismissed"))} /></article>)}</div> : <SectionEmpty>Nothing needs your attention right now.</SectionEmpty>}</section>
+        <section className="contact-intelligence-section plans"><header><span><CalendarDays size={19} /><div><h2>Coming up together</h2><p>Confirmed plans and important dates.</p></div></span><button type="button" onClick={onOpenCalendar}>Calendar <ArrowRight size={14} /></button></header>{plans.length ? <div className="contact-item-list">{plans.map((item) => <article className="contact-removable-item" key={item.id}><button className="contact-item-open" type="button" onClick={onOpenCalendar}><span className="contact-item-date">{shortDate(item.startAt)}</span><span><strong dir="auto">{compactRelationshipItemTitle(item.title)}</strong><small>{item.location || "Confirmed plan"}</small></span><ArrowRight size={14} /></button><RemoveItemButton label={`Remove ${item.title}`} disabled={removingItemKey === `event:${item.id}`} onClick={() => void removeItem(`event:${item.id}`, () => onCalendarStatus(selectedPerson.chatId, item.id, "dismissed"))} /></article>)}</div> : <SectionEmpty>No upcoming confirmed plans.</SectionEmpty>}</section>
+        <section className="contact-intelligence-section waiting-on-them"><header><span><Clock3 size={19} /><div><h2>They’re following up</h2><p>Things {selectedPerson.contactName} said they would do.</p></div></span></header>{waitingOnThem.length ? <div className="contact-item-list">{waitingOnThem.map((item) => <RelationshipCommitmentItem key={item.id} item={item} meta={relationshipItemTemporalText(item) || `Open ${relativeTime(item.updatedAt)}`} removing={removingItemKey === `commitment:${item.id}`} onRemove={() => void removeItem(`commitment:${item.id}`, () => onCommitmentStatus(selectedPerson.chatId, item.id, "dismissed"))} />)}</div> : <SectionEmpty>No follow-ups from them.</SectionEmpty>}</section>
+      </section>
+      <section className="contact-intelligence-section memory"><header><span><Sparkles size={19} /><div><h2>What AmirOS knows now</h2><p>Important current context about {selectedPerson.contactName}.</p></div></span></header>{currentMemory.length ? <div className="contact-topic-list">{currentMemory.map((item) => <TopicItem key={item.id} item={item} removing={removingItemKey === `insight:${item.id}`} onRemove={() => void removeItem(`insight:${item.id}`, () => onInsightStatus(selectedPerson.chatId, item.id, "outdated"))} />)}</div> : <SectionEmpty>No confirmed relationship context yet.</SectionEmpty>}</section>
+      {historicalMemory.length ? <details className="contact-memory-history"><summary><span><Clock3 size={17} />Earlier context</span><small>{historicalMemory.length} {historicalMemory.length === 1 ? "memory" : "memories"} preserved</small><ChevronDown size={16} /></summary><div className="contact-topic-list">{historicalMemory.map((item) => <TopicItem key={item.id} item={item} historical removing={removingItemKey === `insight:${item.id}`} onRemove={() => void removeItem(`insight:${item.id}`, () => onInsightStatus(selectedPerson.chatId, item.id, "outdated"))} />)}</div></details> : null}
       <section className="contact-timeline"><header><span><Clock3 size={19} /><div><h2>Conversation timeline</h2><p>Recent events and confirmed relationship context.</p></div></span></header>{timeline.length ? <div>{timeline.map((item) => <button type="button" key={item.id} onClick={() => onOpenChat(selectedPerson.chatId)}><time>{shortDate(item.timestamp)}</time><span><small>{item.label}</small><strong dir="auto">{compactRelationshipItemTitle(commitmentPresentation(item.content).title)}</strong></span><ArrowRight size={14} /></button>)}</div> : <SectionEmpty>No relationship activity has been saved yet.</SectionEmpty>}</section>
     </main>;
   }

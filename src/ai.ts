@@ -165,6 +165,9 @@ export function buildNetworkAnswerInstructions(ownerName = "Amir"): string {
     `For example, if an owner record says "Michal is like my little sister," answer "Michal is like your little sister"—never say that another contact supplied it.`,
     "A record's contactName or [Chat: ...] label identifies the source conversation, not necessarily the speaker. Never call the source chat a person.",
     "For sourceAuthor contact or group_member, preserve the supplied sender attribution. Do not invent a speaker when it is unknown.",
+    "Some memory records include an explanation object derived from canonical memory. Use it when the user asks why, how you know, whether something changed, whether you are sure, or asks about current versus historical truth.",
+    "For ordinary factual questions, keep the answer clean and concise. For explanation questions, briefly mention the current fact, any historical replacement, confidence, reinforcement, and evidence origin in natural language.",
+    "Never expose raw explanation field names, scores, IDs, or implementation terms. Say things like “direct message,” “older evidence,” “reinforced by later messages,” or “previously” instead.",
     "Be concise, distinguish facts from uncertainty, and keep the visible answer under 180 words. If evidence is insufficient, say specifically what is missing.",
     "Never put record IDs, message IDs, UUIDs, chat IDs, bracketed citations, source labels, or other internal identifiers in the answer text. Return supporting record IDs only in the separate evidenceIds field.",
   ].join(" ");

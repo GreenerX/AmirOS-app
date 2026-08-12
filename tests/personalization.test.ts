@@ -416,6 +416,8 @@ describe("AI contact personalization", () => {
     expect(instructions).toContain('sourceAuthor "owner"');
     expect(instructions).toContain('"Michal is like your little sister"');
     expect(instructions).toContain("source conversation, not necessarily the speaker");
+    expect(instructions).toContain("Some memory records include an explanation object");
+    expect(instructions).toContain("current versus historical truth");
     expect(instructions).toContain("Never put record IDs");
   });
 
