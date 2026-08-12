@@ -269,7 +269,7 @@ export async function askIntelligence(
     signal?: AbortSignal;
   },
 ): Promise<IntelligenceSearchResult> {
-  if (isDemo) return { answer: "Sana prefers concise pricing updates and Thursday deliveries.", evidenceIds: [], sources: [] };
+  if (isDemo) return { answer: "Before meeting Sana tomorrow, bring the final pricing sheet and a one-page decision summary. She values concise recommendations, and she asked to reserve the first 20 minutes to agree the launch sequence and named owners.", evidenceIds: [], sources: [] };
   return request("/api/intelligence/search", {
     method: "POST",
     body: JSON.stringify({ query, followUp: options?.followUp, scope: options?.scope }),

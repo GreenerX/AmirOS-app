@@ -127,6 +127,15 @@ const demoReplies: Record<string, string> = {
 export function demoMessagesForChat(chatId: string): ChatMessage[] {
   const chat = demoChats.find((item) => item.id === chatId) || demoChats[0];
   if (!chat) return [];
+  if (chatId === "sana@demo") {
+    return [
+      { id: "sana-1", body: "Morning Alex — I’ve reviewed the launch deck. The story feels much clearer now.", fullBody: "Morning Alex — I’ve reviewed the launch deck. The story feels much clearer now.", fromMe: false, timestamp: seconds(94), type: "chat", hasMedia: false },
+      { id: "sana-2", body: "That’s great to hear. I tightened the opening and added the pricing comparison.", fullBody: "That’s great to hear. I tightened the opening and added the pricing comparison.", fromMe: true, timestamp: seconds(78), type: "chat", hasMedia: false },
+      { id: "sana-3", body: "Perfect. Before tomorrow’s walkthrough, could you send the final pricing sheet and keep the recommendations concise?", fullBody: "Perfect. Before tomorrow’s walkthrough, could you send the final pricing sheet and keep the recommendations concise?", fromMe: false, timestamp: seconds(36), type: "chat", hasMedia: false },
+      { id: "sana-4", body: "I’ll send the final version this afternoon and bring a one-page summary for the meeting.", fullBody: "I’ll send the final version this afternoon and bring a one-page summary for the meeting.", fromMe: true, timestamp: seconds(24), type: "chat", hasMedia: false },
+      { id: "sana-5", body: "Thank you — and please reserve 20 minutes at the start to decide on the launch sequence.", fullBody: "Thank you — and please reserve 20 minutes at the start to decide on the launch sequence.", fromMe: false, timestamp: seconds(3), type: "chat", hasMedia: false },
+    ];
+  }
   const messages: ChatMessage[] = [
     {
       ...demoMessages[0]!,
@@ -400,9 +409,13 @@ export const demoDashboard: DashboardData = {
 };
 
 export function demoIntelligenceData(): IntelligenceData {
+  const todayMorning = new Date();
+  todayMorning.setHours(10, 0, 0, 0);
+  const todayAfternoon = new Date();
+  todayAfternoon.setHours(13, 30, 0, 0);
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(15, 0, 0, 0);
+  tomorrow.setHours(14, 0, 0, 0);
   const friday = new Date();
   friday.setDate(friday.getDate() + ((5 - friday.getDay() + 7) % 7 || 7));
   friday.setHours(10, 30, 0, 0);
@@ -413,12 +426,44 @@ export function demoIntelligenceData(): IntelligenceData {
     subjectChatIds: ["sana@demo"],
     subjectNames: ["Sana Farooq"],
     kind: "preference" as const,
-    content: "Sana prefers concise updates, clear pricing, and Thursday deliveries.",
-    status: "inferred" as const,
+    content: "Sana prefers concise updates, clear pricing, and a short decision summary before meetings.",
+    topicTitle: "Clear Decisions",
+    topicTitleConfidence: 0.96,
+    status: "confirmed" as const,
     confidence: 0.96,
     evidence: { messageId: "sana@demo-incoming", excerpt: "Can you send the price list and confirm Thursday delivery?", senderName: "Sana Farooq", timestamp: hourAgo },
     createdAt: hourAgo,
     updatedAt: hourAgo,
+  };
+  const sanaLaunchTopic = {
+    id: "demo-sana-launch-topic",
+    clusterId: "demo-sana-launch-topic-cluster",
+    subjectChatIds: ["sana@demo"],
+    subjectNames: ["Sana Farooq"],
+    kind: "fact" as const,
+    content: "Sana is leading the launch walkthrough and wants to decide the release sequence at the start of the meeting.",
+    topicTitle: "Launch Walkthrough",
+    topicTitleConfidence: 0.95,
+    status: "confirmed" as const,
+    confidence: 0.97,
+    evidence: { messageId: "sana-5", excerpt: "Please reserve 20 minutes at the start to decide on the launch sequence.", senderName: "Sana Farooq", timestamp: hourAgo - 5 * 60_000 },
+    createdAt: hourAgo - 5 * 60_000,
+    updatedAt: hourAgo - 5 * 60_000,
+  };
+  const sanaPersonalTopic = {
+    id: "demo-sana-personal-topic",
+    clusterId: "demo-sana-personal-topic-cluster",
+    subjectChatIds: ["sana@demo"],
+    subjectNames: ["Sana Farooq"],
+    kind: "relationship_change" as const,
+    content: "Sana has moved into a strategic partner role and appreciates a short personal check-in before project details.",
+    topicTitle: "Strategic Partnership",
+    topicTitleConfidence: 0.91,
+    status: "confirmed" as const,
+    confidence: 0.92,
+    evidence: { messageId: "sana-1", excerpt: "The story feels much clearer now.", senderName: "Sana Farooq", timestamp: hourAgo - 44 * 60_000 },
+    createdAt: hourAgo - 44 * 60_000,
+    updatedAt: hourAgo - 44 * 60_000,
   };
   const bilalInsight = {
     id: "demo-bilal-fact",
@@ -459,13 +504,14 @@ export function demoIntelligenceData(): IntelligenceData {
   };
   const launchReview = {
     id: "demo-next-event",
-    title: "Product launch review",
+    title: "Sana’s launch walkthrough",
     startAt: tomorrow.getTime(),
     endAt: tomorrow.getTime() + 60 * 60_000,
     allDay: false,
     status: "confirmed" as const,
     location: "Studio meeting room",
-    evidence: { messageId: "product-team@demo-incoming", excerpt: "Can we move tomorrow’s launch review to 3 PM?", senderName: "Sana Farooq", timestamp: hourAgo, source: "whatsapp_bot" as const },
+    note: "Bring the final pricing sheet and a concise decision summary.",
+    evidence: { messageId: "sana-5", excerpt: "Please reserve 20 minutes at the start to decide on the launch sequence.", senderName: "Sana Farooq", timestamp: hourAgo, source: "whatsapp_bot" as const },
     createdAt: hourAgo,
     updatedAt: hourAgo,
   };
@@ -481,38 +527,95 @@ export function demoIntelligenceData(): IntelligenceData {
     createdAt: hourAgo - 12 * 60_000,
     updatedAt: hourAgo - 12 * 60_000,
   };
+  const teamStandup = {
+    id: "demo-team-standup",
+    title: "Launch team stand-up",
+    startAt: todayMorning.getTime(),
+    endAt: todayMorning.getTime() + 45 * 60_000,
+    allDay: false,
+    status: "confirmed" as const,
+    location: "Studio 4 · video room",
+    evidence: { messageId: "product-team@demo-incoming", excerpt: "Let’s align on owners before the afternoon review.", senderName: "Mariam Ali", timestamp: hourAgo - 2 * 60 * 60_000 },
+    createdAt: hourAgo - 2 * 60 * 60_000,
+    updatedAt: hourAgo - 2 * 60 * 60_000,
+  };
+  const bilalCall = {
+    id: "demo-bilal-call",
+    title: "Delivery confirmation with Bilal",
+    startAt: todayAfternoon.getTime(),
+    endAt: todayAfternoon.getTime() + 30 * 60_000,
+    allDay: false,
+    status: "confirmed" as const,
+    location: "Phone call",
+    evidence: { messageId: "bilal@demo-incoming", excerpt: "Could we confirm the delivery window this afternoon?", senderName: "Bilal Khan", timestamp: hourAgo - 90 * 60_000 },
+    createdAt: hourAgo - 90 * 60_000,
+    updatedAt: hourAgo - 90 * 60_000,
+  };
+  const sendPricingSheet = {
+    id: "demo-send-pricing-sheet",
+    chatId: "sana@demo",
+    contactName: "Sana Farooq",
+    title: "Send Sana the final pricing sheet 📎",
+    status: "open" as const,
+    priority: "high" as const,
+    dueAt: Date.now() + 90 * 60_000,
+    note: "Include the one-page decision summary.",
+    evidence: { messageId: "sana-3", excerpt: "Could you send the final pricing sheet and keep the recommendations concise?", senderName: "Sana Farooq", timestamp: hourAgo - 36 * 60_000 },
+    createdAt: hourAgo - 36 * 60_000,
+    updatedAt: hourAgo - 36 * 60_000,
+  };
+  const prepWalkthrough = {
+    id: "demo-prep-walkthrough",
+    chatId: "sana@demo",
+    contactName: "Sana Farooq",
+    title: "Prepare launch walkthrough notes ✨",
+    status: "open" as const,
+    priority: "normal" as const,
+    dueAt: tomorrow.getTime() - 90 * 60_000,
+    evidence: { messageId: "sana-5", excerpt: "Reserve 20 minutes at the start to decide on the launch sequence.", senderName: "Sana Farooq", timestamp: hourAgo - 5 * 60_000 },
+    createdAt: hourAgo - 5 * 60_000,
+    updatedAt: hourAgo - 5 * 60_000,
+  };
 
   return {
     generatedAt: Date.now(),
     needsReply: [{
       chatId: "sana@demo", contactName: "Sana Farooq", isGroup: false,
-      insights: [sanaInsight], commitments: [sendDeck], events: [coffeeSuggestion],
+      insights: [sanaInsight, sanaLaunchTopic, sanaPersonalTopic], commitments: [sendDeck], events: [launchReview, coffeeSuggestion], todos: [sendPricingSheet, prepWalkthrough],
+      profile: { summary: "Sana is a trusted strategic partner on the launch. She values calm preparation, concise recommendations, and clear decisions with named owners. Keep the meeting focused on release sequence, pricing, and the next commitment.", updatedAt: hourAgo - 10 * 60_000, sourceMessageCount: 18 },
       needsReply: true,
-      lastIncoming: { role: "user", content: "Can you send the price list and confirm Thursday delivery?", timestamp: Math.floor(hourAgo / 1_000) },
+      replyAssessment: { needsReply: true, mayNeedReply: true, confidence: 0.96, source: "deterministic" as const, reason: "direct_request" },
+      lastIncoming: { role: "user", content: "Thank you — please reserve 20 minutes at the start to decide on the launch sequence.", timestamp: Math.floor((hourAgo - 5 * 60_000) / 1_000), messageId: "sana-5" },
+      lastInteraction: { role: "user", content: "Thank you — please reserve 20 minutes at the start to decide on the launch sequence.", timestamp: Math.floor((hourAgo - 5 * 60_000) / 1_000), messageId: "sana-5" },
       updatedAt: Date.now() - 2 * 60_000,
     }],
     commitments: [{ ...sendDeck, chatId: "sana@demo", contactName: "Sana Farooq" }],
     changes: [
       { ...sanaInsight, chatId: "sana@demo", contactName: "Sana Farooq" },
+      { ...sanaLaunchTopic, chatId: "sana@demo", contactName: "Sana Farooq" },
+      { ...sanaPersonalTopic, chatId: "sana@demo", contactName: "Sana Farooq" },
       { ...teamInsight, chatId: "product-team@demo", contactName: "Product Team" },
       { ...bilalInsight, chatId: "bilal@demo", contactName: "Bilal Khan" },
     ],
     events: [
-      { ...launchReview, chatId: "product-team@demo", contactName: "Product Team" },
+      { ...teamStandup, chatId: "product-team@demo", contactName: "Product Team" },
+      { ...bilalCall, chatId: "bilal@demo", contactName: "Bilal Khan" },
+      { ...launchReview, chatId: "sana@demo", contactName: "Sana Farooq" },
       { ...coffeeSuggestion, chatId: "sana@demo", contactName: "Sana Farooq" },
     ],
+    todos: [sendPricingSheet, prepWalkthrough],
     chats: [
-      { chatId: "sana@demo", contactName: "Sana Farooq", isGroup: false, insights: [sanaInsight], commitments: [sendDeck], events: [coffeeSuggestion], needsReply: true, lastIncoming: { role: "user", content: "Can you send the price list and confirm Thursday delivery?", timestamp: Math.floor(hourAgo / 1_000) }, updatedAt: Date.now() - 2 * 60_000 },
-      { chatId: "bilal@demo", contactName: "Bilal Khan", isGroup: false, insights: [bilalInsight], commitments: [], events: [], needsReply: false, updatedAt: Date.now() - 18 * 60_000 },
-      { chatId: "product-team@demo", contactName: "Product Team", isGroup: true, insights: [teamInsight], commitments: [], events: [launchReview], needsReply: false, updatedAt: Date.now() - 12 * 60_000 },
+      { chatId: "sana@demo", contactName: "Sana Farooq", isGroup: false, insights: [sanaInsight, sanaLaunchTopic, sanaPersonalTopic], commitments: [sendDeck], events: [launchReview, coffeeSuggestion], todos: [sendPricingSheet, prepWalkthrough], profile: { summary: "Sana is a trusted strategic partner on the launch. She values calm preparation, concise recommendations, and clear decisions with named owners. Keep the meeting focused on release sequence, pricing, and the next commitment.", updatedAt: hourAgo - 10 * 60_000, sourceMessageCount: 18 }, needsReply: true, replyAssessment: { needsReply: true, mayNeedReply: true, confidence: 0.96, source: "deterministic" as const, reason: "direct_request" }, lastIncoming: { role: "user", content: "Thank you — please reserve 20 minutes at the start to decide on the launch sequence.", timestamp: Math.floor((hourAgo - 5 * 60_000) / 1_000), messageId: "sana-5" }, lastInteraction: { role: "user", content: "Thank you — please reserve 20 minutes at the start to decide on the launch sequence.", timestamp: Math.floor((hourAgo - 5 * 60_000) / 1_000), messageId: "sana-5" }, updatedAt: Date.now() - 2 * 60_000 },
+      { chatId: "bilal@demo", contactName: "Bilal Khan", isGroup: false, insights: [bilalInsight], commitments: [], events: [bilalCall], needsReply: false, lastInteraction: { role: "assistant", content: "I’ll confirm the exact delivery window for your order this afternoon.", timestamp: Math.floor((hourAgo - 20 * 60_000) / 1_000) }, updatedAt: Date.now() - 18 * 60_000 },
+      { chatId: "product-team@demo", contactName: "Product Team", isGroup: true, insights: [teamInsight], commitments: [], events: [teamStandup], needsReply: false, lastInteraction: { role: "user", content: "Let’s align on owners before the afternoon review.", timestamp: Math.floor((hourAgo - 30 * 60_000) / 1_000) }, updatedAt: Date.now() - 12 * 60_000 },
     ],
     questionHistory: [{
       id: "demo-question-1",
-      question: "What should I focus on today?",
-      answer: "Send Sana the launch deck before noon, then prepare for tomorrow’s 3 PM product review.",
+      question: "What should I remember before meeting Sana tomorrow?",
+      answer: "Bring the final pricing sheet and a one-page decision summary. Sana values concise recommendations, and she wants the first 20 minutes reserved to agree the launch sequence and named owners.",
       sources: [],
       createdAt: Date.now() - 25 * 60_000,
     }],
-    suggestedQuestions: ["What needs my attention?", "What’s on my schedule?", "What does Sana prefer?"],
+    suggestedQuestions: ["What should I remember before meeting Sana tomorrow?", "What needs my attention today?", "What does Sana prefer?"],
   };
 }
