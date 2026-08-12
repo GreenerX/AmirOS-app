@@ -21,6 +21,7 @@ import type { ReplyAssessmentContextEntry } from "./reply-needed.js";
 import { presentTodo } from "./todo-presentation.js";
 import { assessKnowledgeFreshness } from "./memory-maintenance.js";
 import type { RelationshipBrief } from "./relationship-intelligence.js";
+import type { ProactiveAiJudgment, ProactiveCandidate } from "./proactive-intelligence.js";
 import type {
   ContactMemoryItem,
   ContactPreferences,
@@ -1156,6 +1157,88 @@ export class AiService {
       },
     });
     return result.summary.replace(/\s+/g, " ").trim().slice(0, 280);
+  }
+
+  /**
+   * Judges only candidates that already passed deterministic privacy, freshness,
+   * and action-state rules. The model may suppress, rank, merge, or rewrite;
+   * it cannot add a candidate or change its underlying action/evidence.
+   */
+  async judgeProactiveCandidates(candidates: ProactiveCandidate[]): Promise<ProactiveAiJudgment[]> {
+    this.assertAvailable();
+    const safeCandidates = candidates.slice(0, 12).map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      deterministicPriority: item.priority,
+      title: item.title,
+      detail: item.detail,
+      why: item.why,
+      contactName: item.contactName,
+      action: item.action,
+      timestamp: item.timestamp,
+    }));
+    const result = await this.structuredResponse<{ judgments: ProactiveAiJudgment[] }>({
+      name: "proactive_intelligence_judgment",
+      instructions: [
+        "You are a conservative attention editor for a private personal assistant.",
+        "Every supplied candidate already passed deterministic privacy, freshness, and state checks.",
+        "For each candidate, decide whether it is genuinely useful now, score usefulness 0-100, and give confidence 0-100.",
+        "Suppress noise, stale-feeling repetition, trivial observations, and items that do not suggest useful preparation or follow-up.",
+        "Merge only candidates about the same contact and same real-world situation. Put merged IDs in mergeWithIds; never merge merely because the contact is the same.",
+        "Rewrite title, detail, and why in concise, calm, natural language using only supplied facts. Never add facts, advice, urgency, dates, names, or actions not present.",
+        "Return exactly one judgment for every supplied ID. Do not create IDs.",
+      ].join(" "),
+      input: JSON.stringify({ candidates: safeCandidates }),
+      // Twelve ranked candidates with grounded copy can exceed the generic
+      // structured-response budget. Leave enough room to close strict JSON;
+      // the input remains bounded and this runs only once per evidence key.
+      maxOutputTokens: 2_800,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          judgments: {
+            type: "array",
+            maxItems: 12,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                candidateId: { type: "string", minLength: 1, maxLength: 300 },
+                show: { type: "boolean" },
+                usefulness: { type: "number", minimum: 0, maximum: 100 },
+                confidence: { type: "number", minimum: 0, maximum: 100 },
+                title: { type: "string", maxLength: 100 },
+                detail: { type: "string", maxLength: 170 },
+                why: { type: "string", maxLength: 220 },
+                reason: { type: "string", maxLength: 120 },
+                mergeWithIds: { type: "array", maxItems: 6, items: { type: "string", maxLength: 300 } },
+              },
+              required: ["candidateId", "show", "usefulness", "confidence", "title", "detail", "why", "reason", "mergeWithIds"],
+            },
+          },
+        },
+        required: ["judgments"],
+      },
+    });
+    const allowedIds = new Set(safeCandidates.map((item) => item.id));
+    const byId = new Map(result.judgments
+      .filter((item) => allowedIds.has(item.candidateId))
+      .map((item) => [item.candidateId, {
+        ...item,
+        mergeWithIds: [...new Set(item.mergeWithIds.filter((id) => allowedIds.has(id) && id !== item.candidateId))],
+      }]));
+    return safeCandidates.map((candidate) => byId.get(candidate.id) || {
+      candidateId: candidate.id,
+      show: true,
+      usefulness: Math.max(0, Math.min(100, 100 - candidate.deterministicPriority)),
+      confidence: 0,
+      title: candidate.title,
+      detail: candidate.detail,
+      why: candidate.why,
+      reason: "AI returned no judgment; deterministic result kept",
+      mergeWithIds: [],
+    });
   }
 
   async regenerateCalendarTitle(input: {

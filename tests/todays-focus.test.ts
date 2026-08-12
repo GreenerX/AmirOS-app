@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTodaysFocus } from "../ui/src/todays-focus";
+import { buildTodaysFocus, todaysFocusPresentation } from "../ui/src/todays-focus";
 import type { IntelligenceData } from "../ui/src/types";
 
 const now = new Date(2026, 7, 6, 10, 0, 0);
@@ -118,5 +118,105 @@ describe("buildTodaysFocus", () => {
     }
 
     expect(buildTodaysFocus(value, now)).toHaveLength(4);
+  });
+
+  it("places proactive context in Today’s Focus without duplicating its source action", () => {
+    const value = data();
+    value.commitments.push({ id: "commitment", chatId: "dani", contactName: "Dani", content: "Send photos", owner: "me", status: "open", dueAt: at(-1), evidence, createdAt: at(-2), updatedAt: at(-1) });
+    value.proactive = [{
+      id: "proactive:commitment:dani:commitment",
+      fingerprint: "a".repeat(24),
+      kind: "commitment",
+      priority: 0,
+      title: "Send photos",
+      detail: "Still open with Dani",
+      why: "This commitment is still open and past its due time.",
+      chatId: "dani",
+      contactName: "Dani",
+      sourceIds: ["commitment"],
+      messageId: "message-1",
+      action: "chat",
+      timestamp: at(-1),
+    }];
+
+    expect(buildTodaysFocus(value, now)).toEqual([expect.objectContaining({
+      id: "proactive:commitment:dani:commitment",
+      why: "This commitment is still open and past its due time.",
+    })]);
+  });
+
+  it("keeps one proactive slot when calendar cards would otherwise fill the row", () => {
+    const value = data();
+    for (let index = 0; index < 4; index += 1) {
+      value.events.push({
+        id: `event-${index}`, chatId: "work", contactName: "Work", title: `Event ${index}`,
+        startAt: at(index > 2 ? 1 : 0, 11 + index), allDay: false, status: "confirmed", evidence,
+        createdAt: at(-1), updatedAt: at(-1),
+      });
+    }
+    value.proactive = [{
+      id: "proactive:change:dani:move", fingerprint: "b".repeat(24), kind: "meaningful_change", priority: 30,
+      title: "Something changed with Dani", detail: "Dani moved to New York", why: "Recent confirmed context.",
+      chatId: "dani", contactName: "Dani", sourceIds: ["move"], messageId: "move-message", action: "chat", timestamp: at(-1),
+    }];
+
+    const focus = buildTodaysFocus(value, now);
+    expect(focus).toHaveLength(4);
+    expect(focus.some((item) => item.proactive?.kind === "meaningful_change")).toBe(true);
+    expect(focus.filter((item) => item.type === "calendar")).toHaveLength(3);
+  });
+});
+
+describe("todaysFocusPresentation", () => {
+  const card = (timestamp: number, title = "Dinner tomorrow") => ({
+    id: title,
+    type: "calendar" as const,
+    priority: -1,
+    title,
+    detail: "Happening tomorrow",
+    chatId: "dani",
+    contactName: "Dani",
+    action: "calendar" as const,
+    timestamp,
+  });
+
+  it("switches to Up Next late at night when every visible card is for tomorrow", () => {
+    const late = new Date(2026, 7, 6, 21, 30);
+    expect(todaysFocusPresentation([card(at(1, 9)), card(at(1, 18), "Movie tomorrow")], late)).toEqual({
+      title: "Up Next",
+      subtitle: "A head start on tomorrow",
+      period: "tomorrow",
+    });
+  });
+
+  it("uses singular tomorrow wording for one remaining card", () => {
+    const late = new Date(2026, 7, 6, 22);
+    expect(todaysFocusPresentation([card(at(1, 9))], late).subtitle).toBe("One thing for tomorrow");
+  });
+
+  it("keeps Today’s Focus when an actionable item from today remains", () => {
+    const late = new Date(2026, 7, 6, 21);
+    const overdue = { ...card(at(-1)), id: "overdue", type: "todo" as const, action: "todo" as const, priority: 0, detail: "Overdue task" };
+    expect(todaysFocusPresentation([card(at(1, 9)), overdue], late)).toEqual({
+      title: "Today's Focus",
+      subtitle: "Before you wrap up",
+      period: "today",
+    });
+  });
+
+  it("does not switch early even when only tomorrow cards are visible", () => {
+    expect(todaysFocusPresentation([card(at(1, 9))], new Date(2026, 7, 6, 19, 59))).toEqual({
+      title: "Today's Focus",
+      subtitle: "What matters most today",
+      period: "today",
+    });
+  });
+
+  it("uses a calm nighttime message when no cards remain", () => {
+    expect(todaysFocusPresentation([], new Date(2026, 7, 6, 23))).toEqual({
+      title: "Today's Focus",
+      subtitle: "You're all clear for tonight",
+      period: "today",
+    });
   });
 });

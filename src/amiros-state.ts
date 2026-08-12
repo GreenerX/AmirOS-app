@@ -18,6 +18,12 @@ import {
   type OwnerRecordReference,
   type PendingOwnerLifecycleClarification,
 } from "./owner-lifecycle.js";
+import {
+  PROACTIVE_AI_POLICY_VERSION,
+  type ProactiveAiJudgmentBatch,
+  type ProactiveCandidateKind,
+  type ProactiveDeliveryDecision,
+} from "./proactive-intelligence.js";
 
 export type ReplyMode = "off" | "suggest" | "auto";
 export type OwnerTriggerAccess = "knowledge" | "calendar";
@@ -460,6 +466,10 @@ type PersistedState = {
   ownerProfile: OwnerProfile;
   activities: AmirosActivity[];
   outgoingMediaCaptions: Record<string, OutgoingMediaCaption[]>;
+  /** Delivery/attention state only; canonical memory remains in `memories`. */
+  proactiveDelivery: Record<string, ProactiveDeliveryDecision>;
+  /** Cached AI attention editing, keyed by deterministic evidence fingerprints. */
+  proactiveJudgments: Record<string, ProactiveAiJudgmentBatch>;
 };
 
 const DEFAULT_CONTACT: ContactPreferences = {
@@ -531,6 +541,8 @@ const DEFAULT_STATE: PersistedState = {
   },
   activities: [],
   outgoingMediaCaptions: {},
+  proactiveDelivery: {},
+  proactiveJudgments: {},
 };
 
 const MONTHS: Record<string, number> = {
@@ -1336,6 +1348,62 @@ export class AmirosState {
             return cleaned.length ? [[chatId, cleaned]] : [];
           }),
         ),
+        proactiveDelivery: Object.fromEntries(
+          Object.entries(parsed.proactiveDelivery || {}).flatMap(([candidateId, value]) => {
+            const decision = value as Partial<ProactiveDeliveryDecision> | undefined;
+            if (
+              !decision ||
+              typeof decision.fingerprint !== "string" ||
+              !/^[a-f0-9]{24}$/u.test(decision.fingerprint) ||
+              (decision.status !== "opened" && decision.status !== "dismissed" && decision.status !== "resolved") ||
+              !Number.isFinite(decision.updatedAt)
+            ) return [];
+            return [[candidateId.slice(0, 300), {
+              candidateId: candidateId.slice(0, 300),
+              fingerprint: decision.fingerprint,
+              status: decision.status,
+              updatedAt: Number(decision.updatedAt),
+              kind: ["upcoming_context", "commitment", "todo", "reply", "meaningful_change"].includes(decision.kind || "")
+                ? decision.kind as ProactiveCandidateKind
+                : undefined,
+              chatId: typeof decision.chatId === "string" ? decision.chatId.slice(0, 180) : undefined,
+            } satisfies ProactiveDeliveryDecision]];
+          }).slice(-1_000),
+        ),
+        proactiveJudgments: Object.fromEntries(
+          Object.entries(parsed.proactiveJudgments || {}).flatMap(([key, value]) => {
+            const batch = value as Partial<ProactiveAiJudgmentBatch> | undefined;
+            if (
+              !/^[a-f0-9]{24}$/u.test(key) || batch?.key !== key ||
+              batch.policyVersion !== PROACTIVE_AI_POLICY_VERSION || !Number.isFinite(batch.judgedAt) ||
+              !Array.isArray(batch.judgments)
+            ) return [];
+            const judgments = batch.judgments.filter((item) =>
+              item && typeof item.candidateId === "string" && typeof item.show === "boolean" &&
+              Number.isFinite(item.usefulness) && Number.isFinite(item.confidence) &&
+              typeof item.title === "string" && typeof item.detail === "string" &&
+              typeof item.why === "string" && typeof item.reason === "string" && Array.isArray(item.mergeWithIds),
+            ).slice(0, 12).map((item) => ({
+              candidateId: item.candidateId.slice(0, 300),
+              show: item.show,
+              usefulness: Math.max(0, Math.min(100, Number(item.usefulness))),
+              confidence: Math.max(0, Math.min(100, Number(item.confidence))),
+              title: item.title.replace(/\s+/gu, " ").trim().slice(0, 100),
+              detail: item.detail.replace(/\s+/gu, " ").trim().slice(0, 170),
+              why: item.why.replace(/\s+/gu, " ").trim().slice(0, 220),
+              reason: item.reason.replace(/\s+/gu, " ").trim().slice(0, 120),
+              mergeWithIds: item.mergeWithIds.filter((id): id is string => typeof id === "string").map((id) => id.slice(0, 300)).slice(0, 6),
+            }));
+            return judgments.length ? [[key, {
+              key,
+              policyVersion: PROACTIVE_AI_POLICY_VERSION,
+              judgedAt: Number(batch.judgedAt),
+              judgments,
+            } satisfies ProactiveAiJudgmentBatch]] : [];
+          }).sort((left, right) =>
+            (right[1] as ProactiveAiJudgmentBatch).judgedAt - (left[1] as ProactiveAiJudgmentBatch).judgedAt,
+          ).slice(0, 100),
+        ),
       };
     } catch {
       return structuredClone(DEFAULT_STATE);
@@ -1350,6 +1418,61 @@ export class AmirosState {
       mode: 0o600,
     });
     renameSync(temporaryPath, this.filePath);
+  }
+
+  proactiveDeliveryDecisions(): ProactiveDeliveryDecision[] {
+    return structuredClone(Object.values(this.persisted.proactiveDelivery));
+  }
+
+  setProactiveDeliveryDecision(
+    candidateId: string,
+    fingerprint: string,
+    status: ProactiveDeliveryDecision["status"],
+    now = Date.now(),
+    context: { kind?: ProactiveCandidateKind; chatId?: string } = {},
+  ): ProactiveDeliveryDecision | undefined {
+    const cleanId = candidateId.trim().slice(0, 300);
+    if (!cleanId || !/^[a-f0-9]{24}$/u.test(fingerprint)) return undefined;
+    const decision = {
+      candidateId: cleanId,
+      fingerprint,
+      status,
+      updatedAt: now,
+      kind: context.kind,
+      chatId: context.chatId?.slice(0, 180),
+    } satisfies ProactiveDeliveryDecision;
+    this.persisted.proactiveDelivery[cleanId] = decision;
+    const entries = Object.values(this.persisted.proactiveDelivery)
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, 1_000);
+    this.persisted.proactiveDelivery = Object.fromEntries(entries.map((item) => [item.candidateId, item]));
+    this.save();
+    return structuredClone(decision);
+  }
+
+  proactiveJudgment(key: string): ProactiveAiJudgmentBatch | undefined {
+    const batch = this.persisted.proactiveJudgments[key];
+    return batch ? structuredClone(batch) : undefined;
+  }
+
+  setProactiveJudgment(batch: ProactiveAiJudgmentBatch): void {
+    if (!/^[a-f0-9]{24}$/u.test(batch.key) || batch.policyVersion !== PROACTIVE_AI_POLICY_VERSION) return;
+    this.persisted.proactiveJudgments[batch.key] = structuredClone(batch);
+    const entries = Object.values(this.persisted.proactiveJudgments)
+      .sort((left, right) => right.judgedAt - left.judgedAt)
+      .slice(0, 100);
+    this.persisted.proactiveJudgments = Object.fromEntries(entries.map((item) => [item.key, item]));
+    this.save();
+  }
+
+  resolveInactiveProactiveDelivery(activeCandidateIds: Set<string>, now = Date.now()): void {
+    let changed = false;
+    for (const [candidateId, decision] of Object.entries(this.persisted.proactiveDelivery)) {
+      if (decision.status !== "opened" || activeCandidateIds.has(candidateId)) continue;
+      this.persisted.proactiveDelivery[candidateId] = { ...decision, status: "resolved", updatedAt: now };
+      changed = true;
+    }
+    if (changed) this.save();
   }
 
   getContact(chatId: string): ContactPreferences {

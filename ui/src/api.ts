@@ -20,6 +20,7 @@ import type {
   GroupConversationSummary,
   IntelligenceData,
   IntelligenceSearchResult,
+  ProactiveIntelligenceItem,
   RelationshipCommitment,
   TodoTask,
   ThemeName,
@@ -201,6 +202,22 @@ export async function getMessages(chatId: string): Promise<{
 export async function getIntelligence(): Promise<IntelligenceData> {
   if (isDemo) return demoIntelligenceData();
   return request("/api/intelligence");
+}
+
+export async function updateProactiveIntelligence(
+  item: Pick<ProactiveIntelligenceItem, "id" | "fingerprint" | "kind" | "chatId">,
+  status: "opened" | "dismissed" | "resolved",
+): Promise<void> {
+  if (isDemo) return;
+  await request(`/api/intelligence/proactive/${encodeURIComponent(item.id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      fingerprint: item.fingerprint,
+      status,
+      kind: item.kind,
+      chatId: item.chatId,
+    }),
+  });
 }
 
 export async function markChatRead(chatId: string): Promise<void> {

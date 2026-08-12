@@ -17,6 +17,7 @@ import {
   PencilLine,
   Search,
   ShieldCheck,
+  Info,
   Sparkles,
   Trash2,
   X,
@@ -28,8 +29,8 @@ import { compactNumber, formatDateTime, formatTime, timeOfDayGreeting } from "..
 import { hideIntelligenceAction, readHiddenIntelligenceActions, replyActionId } from "../intelligence-visibility";
 import { buildIntelligenceSnapshot, isKnownIntelligenceContactName } from "../intelligence-snapshot";
 import { replyAssessmentCopy } from "../reply-assessment-copy";
-import { buildTodaysFocus, type TodaysFocusItem } from "../todays-focus";
-import type { Activity, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, TodoTask, ViewName } from "../types";
+import { buildTodaysFocus, todaysFocusPresentation, type TodaysFocusItem } from "../todays-focus";
+import type { Activity, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, ProactiveIntelligenceItem, TodoTask, ViewName } from "../types";
 import { ContactAvatar } from "./ContactAvatar";
 import { TodoEditorDialog } from "./IntelligenceView";
 import { OverviewHeaderExperience } from "./OverviewHeaderExperience";
@@ -48,6 +49,7 @@ type OverviewProps = {
   onCalendarStatus: (chatId: string, eventId: string, patch: { status?: "inferred" | "confirmed" | "completed" | "dismissed" }) => Promise<void>;
   onInsightStatus: (chatId: string, insightId: string, status: "confirmed" | "outdated") => Promise<void>;
   onDismissNextBestAction: (action: NextBestAction) => Promise<void>;
+  onProactiveDecision: (item: ProactiveIntelligenceItem, status: "opened" | "dismissed" | "resolved") => Promise<void>;
 };
 
 export type NextBestAction = {
@@ -155,7 +157,7 @@ function readHiddenTodaysFocus(): Set<string> {
   }
 }
 
-export function Overview({ data, chats, intelligence, onNavigate, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onOpenTodoReview, onTodoStatus, onTodoUpdate, onCalendarStatus, onInsightStatus, onDismissNextBestAction }: OverviewProps) {
+export function Overview({ data, chats, intelligence, onNavigate, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onOpenTodoReview, onTodoStatus, onTodoUpdate, onCalendarStatus, onInsightStatus, onDismissNextBestAction, onProactiveDecision }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
   const [todoFilter, setTodoFilter] = useState<TodoFilter>("open");
@@ -229,12 +231,16 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
     () => todaysFocus.filter((item) => !hiddenTodaysFocus.has(item.id)),
     [hiddenTodaysFocus, todaysFocus],
   );
+  const focusPresentation = useMemo(
+    () => todaysFocusPresentation(visibleTodaysFocus, deviceTime),
+    [deviceTime, visibleTodaysFocus],
+  );
   useEffect(() => {
     for (const item of visibleTodaysFocus) {
       const isBirthday = item.action === "calendar" && /birthday/i.test(item.title);
       const isPersonFocus = isBirthday || item.type === "commitment" || item.action === "reply";
       const chat = isPersonFocus ? chats.find((candidate) => candidate.id === item.chatId) : undefined;
-      if ((isPersonFocus && chat?.avatarUrl) || item.imageUrl || todaysFocusIcons[item.id]
+      if (item.proactive || (isPersonFocus && chat?.avatarUrl) || item.imageUrl || todaysFocusIcons[item.id]
         || pendingTodaysFocusIcons.current.has(item.id) || failedTodaysFocusIcons.current.has(item.id)) continue;
       pendingTodaysFocusIcons.current.add(item.id);
       void ensureTodaysFocusIcon({ title: item.title, type: item.type })
@@ -329,6 +335,9 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
     onOpenNextBestAction(focus.chatId, focus.messageId);
   };
   const openTodaysFocus = (item: TodaysFocusItem) => {
+    if (item.proactive) void onProactiveDecision(item.proactive, "opened").catch(() => {
+      // Opening the requested destination is more important than optional ranking feedback.
+    });
     if (item.action === "calendar") {
       onNavigate("calendar");
       return;
@@ -353,6 +362,13 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
       return next;
     });
   };
+  const dismissTodaysFocus = async (item: TodaysFocusItem) => {
+    if (item.proactive) {
+      await onProactiveDecision(item.proactive, "dismissed");
+      return;
+    }
+    hideTodaysFocus(item.id);
+  };
   const removeTodo = async (todo: TodoTask & { contactName: string }) => {
     if (!window.confirm(`Remove “${todo.title}” from your to-do list?`)) return;
     await onTodoStatus(todo.chatId, todo.id, "dismissed");
@@ -373,23 +389,28 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
           <div className="todays-focus-title-block">
             <span>
               <span className="todays-focus-title-row">
-                <h2 id="overview-reminders-title">Today's Focus</h2>
+                <h2 id="overview-reminders-title">{focusPresentation.title}</h2>
                 {visibleTodaysFocus.length > 0 ? <span className="count-badge intelligence-count">{visibleTodaysFocus.length}</span> : null}
               </span>
-              <small>What matters most today</small>
+              <small>{focusPresentation.subtitle}</small>
             </span>
           </div>
           {visibleTodaysFocus.length > 4 ? <button className="button compact ghost todays-focus-view-all" type="button" onClick={() => onNavigate("intelligence")}>View all <ArrowRight size={14} /></button> : null}
         </div>
         {visibleTodaysFocus.length > 0 ? <div className={`overview-reminders-list todays-focus-grid todays-focus-grid-${Math.min(visibleTodaysFocus.length, 4)}`}>
           {visibleTodaysFocus.slice(0, 4).map((item) => {
-            const category = item.priority === 0 ? "Overdue" : item.type === "calendar" ? item.detail : item.type === "reply" ? "May need your reply" : "Due today";
-            const context = item.type === "calendar"
+            const category = item.proactive
+              ? item.proactive.kind === "upcoming_context" ? "Worth knowing"
+                : item.proactive.kind === "meaningful_change" ? "Recent change"
+                  : item.proactive.kind === "reply" ? "May need your reply"
+                    : item.priority <= 1 ? "Overdue" : "Follow-up"
+              : item.priority === 0 ? "Overdue" : item.type === "calendar" ? item.detail : item.type === "reply" ? "May need your reply" : "Due today";
+            const context = item.proactive ? item.detail : item.type === "calendar"
               ? [item.allDay ? "All day" : formatTime(item.timestamp), item.location].filter(Boolean).join(" · ")
               : item.contactName ? `${item.detail} · ${item.contactName}` : item.detail;
             const replyCopy = item.type === "reply" ? replyAssessmentCopy(item.replyAssessment) : undefined;
             const isBirthday = item.action === "calendar" && /birthday/i.test(item.title);
-            const isPersonFocus = isBirthday || item.type === "commitment" || item.action === "reply";
+            const isPersonFocus = Boolean(item.proactive) || isBirthday || item.type === "commitment" || item.action === "reply";
             const chat = isPersonFocus ? chats.find((candidate) => candidate.id === item.chatId) : undefined;
             const itemIcon = isBirthday
               ? <CakeSlice size={26} />
@@ -422,7 +443,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
                 title="Hide from Today's Focus"
                 onClick={(event) => {
                   event.stopPropagation();
-                  hideTodaysFocus(item.id);
+                  void dismissTodaysFocus(item);
                 }}
               >
                 ×
@@ -439,6 +460,8 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
                   <span dir="auto">{context}</span>
                   {item.source === "whatsapp_bot" ? <span className="whatsapp-origin"><Bot size={12} /> Added by WhatsApp Bot</span> : null}
                   {replyCopy ? <span className="reply-assessment-indicator">{replyCopy.text}</span> : null}
+                  {item.why ? <span className="proactive-why" title={item.why}><Info size={11} /> Why this is here: {item.why}</span> : null}
+                  {item.proactive?.aiAssessment ? <span className="reply-assessment-indicator" title={item.proactive.aiAssessment.reason}>AI checked · {item.proactive.aiAssessment.confidence >= 80 ? "High confidence" : "Worth considering"}</span> : null}
                 </span>
               </div>
             </article>;

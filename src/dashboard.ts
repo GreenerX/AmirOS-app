@@ -65,6 +65,14 @@ import {
   generatedImageUrl,
   type GeneratedImageFormat,
 } from "./image-cache.js";
+import {
+  applyProactiveAiJudgment,
+  applyProactiveDeliveryState,
+  applyProactiveFeedbackRanking,
+  buildProactiveCandidates,
+  proactiveJudgmentKey,
+  PROACTIVE_AI_POLICY_VERSION,
+} from "./proactive-intelligence.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -1693,6 +1701,8 @@ export function startAmirosDashboard(options: DashboardOptions) {
     updateCheckExpiresAt = Date.now() + 60 * 60_000;
     return updateCheck;
   };
+  const proactiveJudgmentJobs = new Set<string>();
+  const proactiveJudgmentRetryAfter = new Map<string, number>();
   const server = createServer(async (request, response) => {
     try {
       if (request.method === "OPTIONS") {
@@ -2114,6 +2124,54 @@ export function startAmirosDashboard(options: DashboardOptions) {
           .sort((a, b) => a.startAt - b.startAt);
         const todos = visibleTodoTasks(chats.flatMap((item) => item.todos
           .map((todo) => ({ ...todo, chatId: item.chatId, contactName: item.contactName }))));
+        const proactiveDelivery = state.proactiveDeliveryDecisions();
+        const proactiveCandidates = buildProactiveCandidates(chats.map((item) => ({
+          chatId: item.chatId,
+          contactName: item.contactName,
+          isGroup: item.isGroup,
+          isOwner: item.contactName.replace(/\s+/gu, " ").trim().toLocaleLowerCase() === ownerName.replace(/\s+/gu, " ").trim().toLocaleLowerCase(),
+          insights: item.insights,
+          commitments: item.commitments,
+          events: item.events,
+          todos: item.todos,
+          needsReply: item.needsReply,
+          replyAssessment: item.replyAssessment,
+          lastIncoming: item.lastIncoming,
+          lastInteraction: item.lastInteraction,
+        })), assessedAt);
+        state.resolveInactiveProactiveDelivery(new Set(proactiveCandidates.map((item) => item.id)), assessedAt);
+        const feedbackRankedProactive = applyProactiveFeedbackRanking(
+          applyProactiveDeliveryState(proactiveCandidates, proactiveDelivery),
+          proactiveDelivery,
+          assessedAt,
+        );
+        const judgmentKey = proactiveJudgmentKey(feedbackRankedProactive);
+        const cachedProactiveJudgment = state.proactiveJudgment(judgmentKey);
+        const proactive = applyProactiveDeliveryState(
+          applyProactiveAiJudgment(feedbackRankedProactive, cachedProactiveJudgment),
+          proactiveDelivery,
+        );
+        if (
+          feedbackRankedProactive.length > 0 && !cachedProactiveJudgment && ai.isConfigured() &&
+          !proactiveJudgmentJobs.has(judgmentKey) && (proactiveJudgmentRetryAfter.get(judgmentKey) || 0) <= assessedAt
+        ) {
+          proactiveJudgmentJobs.add(judgmentKey);
+          void ai.judgeProactiveCandidates(feedbackRankedProactive)
+            .then((judgments) => {
+              state.setProactiveJudgment({
+                key: judgmentKey,
+                policyVersion: PROACTIVE_AI_POLICY_VERSION,
+                judgedAt: Date.now(),
+                judgments,
+              });
+              proactiveJudgmentRetryAfter.delete(judgmentKey);
+            })
+            .catch((error) => {
+              proactiveJudgmentRetryAfter.set(judgmentKey, Date.now() + 15 * 60_000);
+              console.warn("Proactive AI judgment unavailable; keeping deterministic results:", error instanceof Error ? error.message : error);
+            })
+            .finally(() => proactiveJudgmentJobs.delete(judgmentKey));
+        }
         const chatNamesById = new Map(chats.map((chat) => [chat.chatId, chat.contactName]));
         const changesByCluster = new Map<string, (typeof chats)[number]["insights"][number] & {
           chatId: string;
@@ -2173,7 +2231,37 @@ export function startAmirosDashboard(options: DashboardOptions) {
           chats,
           questionHistory,
           suggestedQuestions: suggestedIntelligenceQuestions(chats, commitments, events),
+          proactive,
         });
+        return;
+      }
+
+      const proactiveDecisionMatch = pathname.match(/^\/api\/intelligence\/proactive\/([^/]+)$/);
+      if (request.method === "PATCH" && proactiveDecisionMatch?.[1]) {
+        const candidateId = decodeURIComponent(proactiveDecisionMatch[1]);
+        const body = await readJson<{
+          fingerprint?: string;
+          status?: "opened" | "dismissed" | "resolved";
+          kind?: "upcoming_context" | "commitment" | "todo" | "reply" | "meaningful_change";
+          chatId?: string;
+        }>(request);
+        if (!body.fingerprint || !/^[a-f0-9]{24}$/u.test(body.fingerprint)) {
+          sendJson(response, 400, { error: "Proactive item fingerprint is invalid" });
+          return;
+        }
+        if (body.status !== "opened" && body.status !== "dismissed" && body.status !== "resolved") {
+          sendJson(response, 400, { error: "Choose opened, dismissed, or resolved" });
+          return;
+        }
+        const decision = state.setProactiveDeliveryDecision(candidateId, body.fingerprint, body.status, Date.now(), {
+          kind: body.kind,
+          chatId: body.chatId,
+        });
+        if (!decision) {
+          sendJson(response, 400, { error: "Proactive item is invalid" });
+          return;
+        }
+        sendJson(response, 200, { decision });
         return;
       }
 

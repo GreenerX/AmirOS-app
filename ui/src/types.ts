@@ -378,6 +378,27 @@ export type IntelligenceData = {
     createdAt: number;
   }>;
   suggestedQuestions: string[];
+  proactive?: ProactiveIntelligenceItem[];
+};
+
+export type ProactiveIntelligenceItem = {
+  id: string;
+  fingerprint: string;
+  kind: "upcoming_context" | "commitment" | "todo" | "reply" | "meaningful_change";
+  priority: number;
+  title: string;
+  detail: string;
+  why: string;
+  chatId: string;
+  contactName: string;
+  sourceIds: string[];
+  messageId?: string;
+  action: "chat" | "calendar" | "todo";
+  timestamp: number;
+  aiAssessment?: {
+    confidence: number;
+    reason: string;
+  };
 };
 
 export type IntelligenceSearchResult = {

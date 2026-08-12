@@ -1,5 +1,5 @@
 import { buildProactiveReminders } from "./proactive-reminders.js";
-import type { IntelligenceChat, IntelligenceData } from "./types.js";
+import type { IntelligenceChat, IntelligenceData, ProactiveIntelligenceItem } from "./types.js";
 
 export type TodaysFocusItem = {
   id: string;
@@ -17,6 +17,14 @@ export type TodaysFocusItem = {
   imageUrl?: string;
   source?: "whatsapp_bot";
   replyAssessment?: IntelligenceChat["replyAssessment"];
+  proactive?: ProactiveIntelligenceItem;
+  why?: string;
+};
+
+export type TodaysFocusPresentation = {
+  title: "Today's Focus" | "Up Next";
+  subtitle: string;
+  period: "today" | "tomorrow";
 };
 
 function toMilliseconds(value: number) {
@@ -25,6 +33,39 @@ function toMilliseconds(value: number) {
 
 function startOfLocalDay(now: Date) {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
+/**
+ * Keeps the section recognizable during the day, then transitions to tomorrow
+ * only when tonight is genuinely clear and every visible card belongs to the
+ * next local calendar day.
+ */
+export function todaysFocusPresentation(
+  items: TodaysFocusItem[],
+  now = new Date(),
+): TodaysFocusPresentation {
+  const isLateEvening = now.getHours() >= 20;
+  if (!isLateEvening) {
+    return { title: "Today's Focus", subtitle: "What matters most today", period: "today" };
+  }
+  const tomorrow = startOfLocalDay(now) + 86_400_000;
+  const dayAfterTomorrow = tomorrow + 86_400_000;
+  const onlyTomorrow = items.length > 0 && items.every((item) => {
+    const timestamp = toMilliseconds(item.timestamp);
+    return timestamp >= tomorrow && timestamp < dayAfterTomorrow;
+  });
+  if (onlyTomorrow) {
+    return {
+      title: "Up Next",
+      subtitle: items.length === 1 ? "One thing for tomorrow" : "A head start on tomorrow",
+      period: "tomorrow",
+    };
+  }
+  return {
+    title: "Today's Focus",
+    subtitle: items.length > 0 ? "Before you wrap up" : "You're all clear for tonight",
+    period: "today",
+  };
 }
 
 function duePriority(dueAt: number, now: Date) {
@@ -40,6 +81,7 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
 
   const items: TodaysFocusItem[] = [];
   const seen = new Set<string>();
+  const proactiveSourceIds = new Set((data.proactive || []).flatMap((item) => item.sourceIds));
   const add = (item: TodaysFocusItem) => {
     if (seen.has(item.id)) return;
     seen.add(item.id);
@@ -47,6 +89,7 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
   };
 
   for (const commitment of data.commitments) {
+    if (proactiveSourceIds.has(commitment.id)) continue;
     if (commitment.owner !== "me" || commitment.status !== "open" || typeof commitment.dueAt !== "number") continue;
     const priority = duePriority(commitment.dueAt, now);
     if (priority === undefined) continue;
@@ -65,6 +108,7 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
   }
 
   for (const todo of data.todos || []) {
+    if (proactiveSourceIds.has(todo.id)) continue;
     if (todo.status !== "open" || typeof todo.dueAt !== "number") continue;
     const priority = duePriority(todo.dueAt, now);
     if (priority === undefined) continue;
@@ -85,6 +129,7 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
   const tomorrow = startOfLocalDay(now) + 86_400_000;
   const dayAfterTomorrow = tomorrow + 86_400_000;
   for (const event of data.events) {
+    if (proactiveSourceIds.has(event.id)) continue;
     const startAt = toMilliseconds(event.startAt);
     if (event.status !== "confirmed" || startAt < now.getTime() || startAt >= dayAfterTomorrow) continue;
     add({
@@ -108,6 +153,7 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
   }
 
   for (const chat of data.needsReply) {
+    if (chat.lastIncoming?.messageId && proactiveSourceIds.has(chat.lastIncoming.messageId)) continue;
     if (!chat.needsReply) continue;
     add({
       id: `reply:${chat.chatId}:${chat.lastIncoming?.messageId || "latest"}`,
@@ -125,7 +171,7 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
   }
 
   for (const reminder of buildProactiveReminders(data, now)) {
-    if (seen.has(reminder.id)) continue;
+    if (seen.has(reminder.id) || proactiveSourceIds.has(reminder.recordId)) continue;
     add({
       id: reminder.id,
       type: reminder.type,
@@ -140,5 +186,33 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
     });
   }
 
-  return items.sort((left, right) => left.priority - right.priority || left.timestamp - right.timestamp || left.title.localeCompare(right.title)).slice(0, 4);
+  for (const proactive of data.proactive || []) {
+    if (seen.has(proactive.id)) continue;
+    add({
+      id: proactive.id,
+      type: proactive.kind === "todo" ? "todo" : proactive.kind === "reply" ? "reply" : "commitment",
+      priority: proactive.priority,
+      title: proactive.title,
+      detail: proactive.detail,
+      chatId: proactive.chatId,
+      contactName: proactive.contactName,
+      messageId: proactive.messageId,
+      action: proactive.action,
+      timestamp: proactive.timestamp,
+      proactive,
+      why: proactive.why,
+    });
+  }
+
+  const ranked = items.sort((left, right) => left.priority - right.priority || left.timestamp - right.timestamp || left.title.localeCompare(right.title));
+  const visible = ranked.slice(0, 4);
+  const bestProactive = ranked.find((item) => item.proactive);
+  if (bestProactive && !visible.some((item) => item.id === bestProactive.id)) {
+    // Agenda already carries the complete event list. Keep one of the four
+    // identity-rich focus cards available for context that AmirOS proactively
+    // judged useful, instead of letting calendar duplication consume the row.
+    visible[Math.max(0, visible.length - 1)] = bestProactive;
+    visible.sort((left, right) => left.priority - right.priority || left.timestamp - right.timestamp || left.title.localeCompare(right.title));
+  }
+  return visible;
 }
