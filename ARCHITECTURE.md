@@ -754,7 +754,7 @@ Dashboard features that reach into `window.require(...)` depend on WhatsApp Web 
 
 ### Duplicate-looking source files should be audited before cleanup
 
-The repository currently contains some duplicate-looking filenames such as `profile-pdf 2.ts` and several UI component files with ` 2` in the name. Do not delete them casually during feature work; first verify whether they are tracked, imported, or release-packaged.
+Some UI component files still have duplicate-looking names containing ` 2`. Do not delete them casually during feature work; first verify whether they are tracked, imported, or release-packaged. The obsolete, unreferenced `profile-pdf 2.ts` duplicate was audited and removed during the v0.9.0 release cleanup; `src/profile-pdf.ts` remains the active implementation.
 
 ### Memory and owner-action systems are intentionally separated
 
