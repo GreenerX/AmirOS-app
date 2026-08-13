@@ -10,6 +10,7 @@ export type ProactiveReminder = {
   chatId: string;
   contactName: string;
   messageId?: string;
+  timestamp: number;
 };
 
 function toMilliseconds(value: number) {
@@ -53,6 +54,7 @@ export function buildProactiveReminders(data: IntelligenceData | undefined, now 
       chatId: commitment.chatId,
       contactName: commitment.contactName,
       messageId: commitment.evidence.messageId,
+      timestamp: toMilliseconds(commitment.dueAt),
     });
   }
 
@@ -70,6 +72,7 @@ export function buildProactiveReminders(data: IntelligenceData | undefined, now 
       chatId: todo.chatId,
       contactName: todo.contactName,
       messageId: todo.evidence.messageId,
+      timestamp: toMilliseconds(todo.dueAt),
     });
   }
 
@@ -87,6 +90,7 @@ export function buildProactiveReminders(data: IntelligenceData | undefined, now 
       chatId: event.chatId,
       contactName: event.contactName,
       messageId: event.evidence.messageId,
+      timestamp: toMilliseconds(event.startAt),
     });
   }
 

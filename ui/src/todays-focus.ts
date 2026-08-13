@@ -35,31 +35,37 @@ function startOfLocalDay(now: Date) {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 }
 
+function isTomorrowItem(item: TodaysFocusItem, now: Date) {
+  const tomorrow = startOfLocalDay(now) + 86_400_000;
+  const timestamp = toMilliseconds(item.timestamp);
+  return timestamp >= tomorrow && timestamp < tomorrow + 86_400_000;
+}
+
 /**
- * Keeps the section recognizable during the day, then transitions to tomorrow
- * only when tonight is genuinely clear and every visible card belongs to the
- * next local calendar day.
+ * Keeps the section focused on today until mid-afternoon, then transitions to
+ * tomorrow only when today is genuinely clear and every visible card belongs
+ * to the next local calendar day.
  */
 export function todaysFocusPresentation(
   items: TodaysFocusItem[],
   now = new Date(),
 ): TodaysFocusPresentation {
-  const isLateEvening = now.getHours() >= 20;
-  if (!isLateEvening) {
-    return { title: "Today's Focus", subtitle: "What matters most today", period: "today" };
-  }
+  const canLookAhead = now.getHours() >= 15;
   const tomorrow = startOfLocalDay(now) + 86_400_000;
   const dayAfterTomorrow = tomorrow + 86_400_000;
   const onlyTomorrow = items.length > 0 && items.every((item) => {
     const timestamp = toMilliseconds(item.timestamp);
     return timestamp >= tomorrow && timestamp < dayAfterTomorrow;
   });
-  if (onlyTomorrow) {
+  if (canLookAhead && onlyTomorrow) {
     return {
       title: "Up Next",
       subtitle: items.length === 1 ? "One thing for tomorrow" : "A head start on tomorrow",
       period: "tomorrow",
     };
+  }
+  if (now.getHours() < 20) {
+    return { title: "Today's Focus", subtitle: "What matters most today", period: "today" };
   }
   return {
     title: "Today's Focus",
@@ -182,7 +188,7 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
       contactName: reminder.contactName,
       messageId: reminder.messageId,
       action: reminder.type === "calendar" ? "calendar" : reminder.type === "todo" ? "todo" : "chat",
-      timestamp: now.getTime(),
+      timestamp: reminder.timestamp,
     });
   }
 
@@ -204,7 +210,15 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
     });
   }
 
-  const ranked = items.sort((left, right) => left.priority - right.priority || left.timestamp - right.timestamp || left.title.localeCompare(right.title));
+  const todayItems = items.filter((item) => !isTomorrowItem(item, now));
+  const tomorrowItems = items.filter((item) => isTomorrowItem(item, now));
+  // Tomorrow belongs in this section only after the day is genuinely clear.
+  // This keeps the visible cards and the adaptive heading semantically aligned:
+  // "What matters most today" never sits above tomorrow's plans.
+  const candidates = now.getHours() >= 15 && todayItems.length === 0
+    ? tomorrowItems
+    : todayItems;
+  const ranked = candidates.sort((left, right) => left.priority - right.priority || left.timestamp - right.timestamp || left.title.localeCompare(right.title));
   const visible = ranked.slice(0, 4);
   const bestProactive = ranked.find((item) => item.proactive);
   if (bestProactive && !visible.some((item) => item.id === bestProactive.id)) {

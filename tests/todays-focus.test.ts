@@ -65,7 +65,7 @@ describe("buildTodaysFocus", () => {
     })]));
   });
 
-  it("includes tomorrow's events with tomorrow wording and presentation details", () => {
+  it("keeps tomorrow's events out of Today’s Focus during the day", () => {
     const value = data();
     value.events.push({
       id: "tomorrow",
@@ -81,12 +81,36 @@ describe("buildTodaysFocus", () => {
       updatedAt: at(-1),
     });
 
-    expect(buildTodaysFocus(value, now)).toEqual(expect.arrayContaining([expect.objectContaining({
+    expect(buildTodaysFocus(value, now)).toHaveLength(0);
+  });
+
+  it("shows tomorrow's events as Up Next after 3 PM when today is clear", () => {
+    const value = data();
+    value.events.push({
+      id: "tomorrow", chatId: "dani", contactName: "Dani", title: "Flamenco with Dani",
+      startAt: at(1, 19), allDay: false, location: "Suzanne Dellal Centre", status: "confirmed",
+      evidence, createdAt: at(-1), updatedAt: at(-1),
+    });
+    const afternoon = new Date(2026, 7, 6, 15);
+    const items = buildTodaysFocus(value, afternoon);
+
+    expect(items).toEqual([expect.objectContaining({
       title: "Flamenco with Dani",
       detail: "Happening tomorrow",
       location: "Suzanne Dellal Centre",
-      allDay: false,
-    })]));
+    })]);
+    expect(todaysFocusPresentation(items, afternoon).title).toBe("Up Next");
+  });
+
+  it("does not mix tomorrow cards into late Today’s Focus while today still needs attention", () => {
+    const value = data();
+    value.todos!.push({ id: "overdue", chatId: "work", contactName: "Work", title: "Send report", status: "open", priority: "high", dueAt: at(-1), evidence, createdAt: at(-2), updatedAt: at(-1) });
+    value.events.push({ id: "tomorrow", chatId: "dani", contactName: "Dani", title: "Dinner tomorrow", startAt: at(1, 19), allDay: false, status: "confirmed", evidence, createdAt: at(-1), updatedAt: at(-1) });
+    const afternoon = new Date(2026, 7, 6, 15);
+    const items = buildTodaysFocus(value, afternoon);
+
+    expect(items.map((item) => item.title)).toEqual(["Send report"]);
+    expect(todaysFocusPresentation(items, afternoon).title).toBe("Today's Focus");
   });
 
   it("does not pull later events into Today's Focus", () => {
@@ -180,9 +204,9 @@ describe("todaysFocusPresentation", () => {
     timestamp,
   });
 
-  it("switches to Up Next late at night when every visible card is for tomorrow", () => {
-    const late = new Date(2026, 7, 6, 21, 30);
-    expect(todaysFocusPresentation([card(at(1, 9)), card(at(1, 18), "Movie tomorrow")], late)).toEqual({
+  it("switches to Up Next after 3 PM when every visible card is for tomorrow", () => {
+    const afternoon = new Date(2026, 7, 6, 15);
+    expect(todaysFocusPresentation([card(at(1, 9)), card(at(1, 18), "Movie tomorrow")], afternoon)).toEqual({
       title: "Up Next",
       subtitle: "A head start on tomorrow",
       period: "tomorrow",
@@ -204,8 +228,8 @@ describe("todaysFocusPresentation", () => {
     });
   });
 
-  it("does not switch early even when only tomorrow cards are visible", () => {
-    expect(todaysFocusPresentation([card(at(1, 9))], new Date(2026, 7, 6, 19, 59))).toEqual({
+  it("does not switch before 3 PM even when only tomorrow cards are visible", () => {
+    expect(todaysFocusPresentation([card(at(1, 9))], new Date(2026, 7, 6, 14, 59))).toEqual({
       title: "Today's Focus",
       subtitle: "What matters most today",
       period: "today",

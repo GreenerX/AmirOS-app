@@ -73,8 +73,14 @@ describe("Overview polish", () => {
     expect(styles).toContain(".overview-page .overview-header { margin-bottom: 0; }");
     expect(styles).toContain(".overview-page .todays-focus-panel { margin-top: -45px; }");
     expect(styles).toContain("background: var(--todays-focus-theme)");
-    expect(styles).toContain("min-height: 96px");
-    expect(styles).toContain("grid-template-columns: 62px fit-content(360px)");
+    expect(styles).toContain("font-size: clamp(29px, 2.1vw, 34px)");
+    expect(styles).toContain("font-size: clamp(16px, 1.15vw, 18px)");
+    expect(styles).toContain("font-size: clamp(17px, 1.15vw, 19px)");
+    expect(styles).toContain(".overview-quote figcaption { margin-top: 7px");
+    expect(styles).toContain("min-height: 88px");
+    expect(styles).toContain("grid-template-columns: 54px fit-content(330px)");
+    expect(styles).toContain("flex-wrap: nowrap");
+    expect(styles).toContain("overflow-x: auto");
     expect(styles).toContain("height: 360px");
     expect(styles).toContain("grid-auto-rows: 48px");
     expect(styles).toContain('.overview-today-agenda[data-event-count="3"]');
