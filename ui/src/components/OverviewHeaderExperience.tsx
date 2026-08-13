@@ -138,6 +138,7 @@ function updateAndPersistCities(
 }
 
 export function OverviewHeaderExperience({ now }: { now: Date }) {
+  const demoMode = new URLSearchParams(window.location.search).get("demo") === "1";
   const { timeFormat, setTimeFormat } = useTimeFormat();
   const [unit, setUnit] = useState<TemperatureUnit>(readTemperatureUnit);
   const [cities, setCities] = useState<SavedTimeZoneCity[]>(readSavedTimeZoneCities);
@@ -158,6 +159,18 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
   };
 
   useEffect(() => {
+    if (demoMode) {
+      let active = true;
+      void getCurrentWeather(32.08088, 34.78057, "Asia/Jerusalem").then((weather) => {
+        if (active) {
+          setLocalWeather(weather);
+          setLocalWeatherUnavailable(false);
+        }
+      });
+      return () => {
+        active = false;
+      };
+    }
     if (!navigator.geolocation) {
       setLocalWeatherUnavailable(true);
       return;
@@ -196,7 +209,7 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
       permission?.removeEventListener("change", refresh);
       window.clearInterval(interval);
     };
-  }, []);
+  }, [demoMode]);
 
   useEffect(() => {
     if (cities.length === 0) {

@@ -10,6 +10,7 @@ The system is intentionally built around a few strong principles:
 - AI enriches, summarizes, ranks, and extracts; it does not get to pretend a write succeeded.
 - Long-term memory is canonical, evidence-backed, and preserved even when current truth changes.
 - The dashboard is a projection of local state, not a second source of truth.
+- Owner-facing intelligence uses shared capability services across the dashboard and WhatsApp; the bot is AmirOS on the go, not a separate assistant with weaker rules.
 - Build freshness is part of runtime correctness.
 
 This document describes the architecture that exists today, not an aspirational rewrite.
@@ -342,8 +343,11 @@ Primary files:
 - `src/amiros-state.ts`
 - `src/intelligence-learner.ts`
 - `src/memory-maintenance.ts`
+- `src/memory-correction.ts`
 - `src/ai.ts`
 - `tests/memory-evolution.test.ts`
+- `tests/memory-correction.test.ts`
+- `tests/memory-correction-api.test.ts`
 - `tests/intelligence-learner.test.ts`
 - `tests/people-experience.test.ts`
 
@@ -451,6 +455,29 @@ It:
 - uncertain/unconfirmed facts are qualified
 
 Age alone never deletes knowledge or turns a durable confirmed fact into history.
+
+### Owner correction and control
+
+Ask AmirOS and the owner-authored WhatsApp bot are peer correction surfaces. Ask AmirOS carries cited canonical insight references back to `/api/intelligence/search`. The bot persists a bounded, six-hour context containing the last owner question, bot answer, and at most twelve canonical insight references. A follow-up such as “That’s wrong” can therefore reuse the same correction engine without searching arbitrary answer history or mutating an unrelated fact. Ambiguous corrections keep that bounded context through one clarification exchange and survive a backend restart.
+
+`src/memory-correction.ts` determines obvious operations without AI:
+
+- reject: the fact was wrong / never true
+- forget: do not use this memory again
+- historical: it used to be true or was temporary
+
+For a contextual correction or a supplied replacement, `AiService.interpretMemoryCorrection()` can choose one of the supplied canonical candidates only. It must name exactly one candidate at least 85% confidence; otherwise AmirOS asks the owner to clarify. AI failure also fails closed: no fact is mutated.
+
+`AmirosState.applyMemoryCorrection()` is the authoritative mutation path. It:
+
+- retains the original `ContactInsight` and its evidence
+- records an owner correction audit entry in `memoryCorrections`
+- marks rejected/forgotten facts outdated, or keeps prior truth historical
+- creates a new confirmed current canonical fact for a safe replacement
+- invalidates derived profile prose through the existing maintenance pass
+- excludes corrected evidence from ordinary retrieval and blocks reanalysis of the exact prior evidence
+
+This is deliberately not a generic database editor. Calendar events, to-dos, commitments, raw messages, and profile prose are never correction targets through this route. Only owner-authored WhatsApp messages may invoke it; contacts and group participants cannot mutate AmirOS memory.
 
 ### Retrieval
 
@@ -702,8 +729,10 @@ The owner-action E2E harness is especially important. It uses the production `Me
 8. Stale generated profiles must be ignored until regenerated.
 9. Historical calendar events should remain available unless explicitly dismissed/deleted.
 10. Contact/group privacy scopes must remain explicit.
-11. Build freshness must protect both backend and frontend runtime paths.
-12. Dashboard UI state is a projection; durable truth lives in `AmirosState`.
+11. Natural memory corrections must be scoped to a cited canonical fact or a clearly named result; never use global answer history as an implicit mutation target.
+12. Build freshness must protect both backend and frontend runtime paths.
+13. Dashboard UI state is a projection; durable truth lives in `AmirosState`.
+14. New owner-facing intelligence should define both dashboard and owner-WhatsApp delivery over the same authoritative service unless the capability is inherently visual or administrative.
 
 ## Extension points
 
@@ -730,6 +759,7 @@ When adding memory behavior:
 - update maintenance/freshness scoring rather than creating a parallel memory system
 - update retrieval scoring and People projections together
 - add tests in `tests/memory-evolution.test.ts` and `tests/people-experience.test.ts`
+- add a focused correction test when a change affects suppression, replacement, or Ask AmirOS source scoping
 
 When adding dashboard features:
 
@@ -776,6 +806,7 @@ Image generation is cached locally and compacted, but it still depends on networ
 - Time parsing is deterministic and narrow by design; unsupported phrasing safely falls back instead of guessing.
 - Reply-needed AI fallback is capped per dashboard refresh, so some ambiguous chats may update on a later refresh.
 - Contact Intelligence summaries are generated prose and may need regeneration after large memory changes, though stale profiles are ignored for retrieval and People prioritizes canonical facts.
+- Memory correction is available in Ask AmirOS and through owner-authored WhatsApp bot conversations. A dedicated correction-history UI is not yet exposed; the audit trail is persisted for future owner-facing inspection.
 - WhatsApp readiness depends on the linked-device session and WhatsApp Web behavior.
 
 ## Recommended development workflow

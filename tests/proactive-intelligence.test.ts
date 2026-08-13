@@ -94,6 +94,16 @@ describe("proactive intelligence", () => {
     expect(buildProactiveCandidates([active], now).some((item) => item.kind === "commitment")).toBe(false);
   });
 
+  it("keeps deterministic fallback copy compact while AI is still judging", () => {
+    const candidates = buildProactiveCandidates([source({ commitments: [{
+      id: "long", content: "Send Yuvi a message after the flamenco event and confirm every remaining detail about the plan", owner: "me", status: "open", dueAt: now + 60_000,
+      evidence, createdAt: now - DAY, updatedAt: now - DAY,
+    }] })], now);
+    expect(candidates[0]!.title.length).toBeLessThanOrEqual(64);
+    expect(candidates[0]!.detail.length).toBeLessThanOrEqual(72);
+    expect(candidates[0]!.title.endsWith("…")).toBe(false);
+  });
+
   it("requires high-confidence direct reply evidence", () => {
     const base = source({
       needsReply: true,
@@ -182,6 +192,21 @@ describe("proactive intelligence", () => {
     expect(judged[0]).toMatchObject({ title: "Send Dani the photos", aiAssessment: { confidence: 92 } });
     expect(judged[0]!.sourceIds).toEqual(expect.arrayContaining(["photos", "send-photos"]));
     expect(judged[0]!.sourceIds).not.toContain("coffee");
+  });
+
+  it("keeps AI-written Focus copy short and complete", () => {
+    const candidates = buildProactiveCandidates([source({ commitments: [{
+      id: "appointment", content: "Arrange a hospital phone appointment with Firouzion and confirm all the scheduling details", owner: "me", status: "open", dueAt: now + 60_000,
+      evidence, createdAt: now - DAY, updatedAt: now - DAY,
+    }] })], now);
+    const candidate = candidates[0]!;
+    const judged = applyProactiveAiJudgment(candidates, {
+      key: proactiveJudgmentKey(candidates), policyVersion: PROACTIVE_AI_POLICY_VERSION, judgedAt: now,
+      judgments: [{ candidateId: candidate.id, show: true, usefulness: 90, confidence: 92, title: "Arrange a hospital phone appointment with Firouzion and confirm every last scheduling detail", detail: "A long repeated explanation about the same hospital phone appointment that consumes too much card space", why: "This explanation remains available internally but is not rendered on the Focus card.", reason: "Useful follow-up", mergeWithIds: [] }],
+    });
+    expect(judged[0]!.title.length).toBeLessThanOrEqual(64);
+    expect(judged[0]!.detail.length).toBeLessThanOrEqual(72);
+    expect(judged[0]!.title.endsWith("…")).toBe(false);
   });
 
   it("ignores stale AI output and preserves deterministic fallback", () => {

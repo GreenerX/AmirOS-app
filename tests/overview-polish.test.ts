@@ -51,6 +51,7 @@ describe("Overview polish", () => {
     expect(overview).toContain("item.type === \"calendar\"");
     expect(overview).toContain("formatTime(item.timestamp)");
     expect(overview).not.toContain("todays-focus-action");
+    expect(overview).not.toContain("Why this is here:");
     expect(overview).not.toContain("overview-action-strip");
     expect(overview).toContain("todaysAgenda.map");
     expect(overview).toContain("data-event-count");
@@ -75,10 +76,15 @@ describe("Overview polish", () => {
     expect(styles).toContain("background: var(--todays-focus-theme)");
     expect(styles).toContain("font-size: clamp(29px, 2.1vw, 34px)");
     expect(styles).toContain("font-size: clamp(16px, 1.15vw, 18px)");
+    expect(styles).toContain("margin-left: 15px");
     expect(styles).toContain("font-size: clamp(17px, 1.15vw, 19px)");
     expect(styles).toContain(".overview-quote figcaption { margin-top: 7px");
-    expect(styles).toContain("min-height: 88px");
-    expect(styles).toContain("grid-template-columns: 54px fit-content(330px)");
+    expect(styles).toContain("height: 105px; max-height: 105px");
+    expect(styles).toContain("width: fit-content; min-width: 230px");
+    expect(styles).toContain("max-width: min(540px, calc(100vw - 42px))");
+    expect(styles).toContain("grid-template-columns: 48px minmax(0, max-content)");
+    expect(styles).toContain("padding: 7px 20px 6px 14px");
+    expect(styles).not.toContain("-webkit-line-clamp: 1");
     expect(styles).toContain("flex-wrap: nowrap");
     expect(styles).toContain("overflow-x: auto");
     expect(styles).toContain("height: 360px");

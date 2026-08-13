@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.10.0] - 2026-08-13
+
+### Added
+
+- Added natural memory correction through Ask AmirOS and the owner WhatsApp bot. The owner can reject an incorrect fact, keep an old fact as historical, forget it, or replace it with a new current fact.
+- Added restart-safe, six-hour reference context for owner WhatsApp answers so follow-ups such as “That’s wrong” apply only to the canonical knowledge behind the latest answer.
+- Added durable correction audit records that preserve source evidence while preventing corrected claims from reopening unchanged.
+
+### Changed
+
+- Established dashboard and owner WhatsApp parity for owner-facing intelligence: both entry points now use the same authoritative memory-correction service.
+- Changed Today’s Focus cards to size themselves around their content within a single horizontal row, with complete titles and compact supporting details.
+
+### Improved
+
+- Improved proactive titles and summaries with tighter AI output limits and deterministic cleanup so cards remain concise without cutting off text.
+- Improved correction safety with bounded candidate sets, owner-only authorization, deterministic handling for explicit corrections, and clarification when several facts could be intended.
+- Improved memory propagation after a correction: canonical retrieval, People profile freshness, and relationship context update from the corrected truth.
+
+### Fixed
+
+- Fixed long proactive summaries overflowing compact Today’s Focus cards.
+- Fixed corrected or forgotten evidence remaining eligible for ordinary current-memory retrieval or returning through repeated analysis.
+
+### Testing
+
+- Added focused state, API, and WhatsApp tests for rejection, replacement, historical conversion, forgetting, ambiguity, restart persistence, evidence preservation, suppression, and non-owner protection.
+- Extended Overview and Proactive Intelligence coverage for concise generated copy, full card titles, compact layouts, and deterministic fallback behavior.
+
 ## [0.9.0] - 2026-08-13
 
 ### Added

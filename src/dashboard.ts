@@ -17,6 +17,10 @@ import whatsappWeb from "whatsapp-web.js";
 import type { Client as WhatsAppClient } from "whatsapp-web.js";
 import { cleanNetworkAnswerText, type AiService } from "./ai.js";
 import {
+  executeMemoryCorrection,
+  looksLikeMemoryCorrection,
+} from "./memory-correction.js";
+import {
   AmirosState,
   type ContactPreferences,
   type TodoTask,
@@ -2268,7 +2272,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
       if (request.method === "POST" && pathname === "/api/intelligence/search") {
         const body = await readJson<{
           query?: string;
-          followUp?: { question?: string; answer?: string };
+          followUp?: { question?: string; answer?: string; sourceRefs?: Array<{ id?: string; chatId?: string; kind?: string }> };
           scope?: { knowledge?: boolean; calendar?: boolean };
         }>(request);
         const query = body.query?.replace(/\s+/g, " ").trim() || "";
@@ -2285,11 +2289,55 @@ export function startAmirosDashboard(options: DashboardOptions) {
         const followUp = body.followUp?.question && body.followUp?.answer ? {
           question: body.followUp.question.replace(/\s+/g, " ").trim().slice(0, 500),
           answer: body.followUp.answer.replace(/\s+/g, " ").trim().slice(0, 2_000),
+          sourceRefs: (Array.isArray(body.followUp.sourceRefs) ? body.followUp.sourceRefs : [])
+            // Only a canonical insight may be corrected. A source reference is
+            // otherwise a message, task, plan, or commitment and must never be
+            // treated as a mutable memory fact.
+            .filter((reference): reference is { id: string; chatId: string; kind: "insight" } => Boolean(reference) && typeof reference.id === "string" && typeof reference.chatId === "string" && reference.kind === "insight")
+            .map((reference) => ({ id: reference.id.slice(0, 120), chatId: reference.chatId.slice(0, 240) }))
+            .slice(0, 12),
         } : undefined;
         const includeKnowledge = body.scope?.knowledge !== false;
         const includeCalendar = body.scope?.calendar !== false;
         if (!includeKnowledge && !includeCalendar) {
           sendJson(response, 400, { error: "Choose at least one knowledge scope" });
+          return;
+        }
+        if (includeKnowledge && looksLikeMemoryCorrection(query, Boolean(followUp?.answer))) {
+          const directRecords = state.searchIntelligence(`${query} ${followUp?.question || ""}`.trim(), 48, archived);
+          // Corrections may only use the evidence attached to this Ask AmirOS
+          // exchange (or facts directly named by the new request). Falling back
+          // to a global answer history could mutate an unrelated person's memory.
+          const priorSources = followUp?.sourceRefs?.length
+            ? state.memoryCorrectionCandidates(followUp.sourceRefs).map((record) => ({ id: record.id, chatId: record.chatId }))
+            : [];
+          // A follow-up such as “That’s wrong” refers to the cited answer, not
+          // every similarly worded fact in the local index. Only fall back to
+          // direct search when the owner did not carry an answer's insight.
+          const candidates = priorSources.length
+            ? state.memoryCorrectionCandidates(priorSources)
+            : state.memoryCorrectionCandidates(
+              directRecords
+                .filter((record) => record.kind === "insight")
+                .map((record) => ({ id: record.id, chatId: record.chatId })),
+            );
+          const correction = await executeMemoryCorrection({
+            request: query,
+            candidates,
+            previousQuestion: followUp?.question,
+            previousAnswer: followUp?.answer,
+            interpret: (input) => ai.interpretMemoryCorrection(input),
+            apply: (input) => state.applyMemoryCorrection(input),
+          });
+          if (correction.status === "failed") {
+            sendJson(response, 409, { error: correction.answer });
+            return;
+          }
+          if (correction.status === "applied") {
+            state.rememberIntelligenceAnswer(query, correction.answer, []);
+            state.addActivity("system", "Memory corrected", correction.result.previous.content.slice(0, 140));
+          }
+          sendJson(response, 200, { answer: correction.answer, evidenceIds: [], sources: [] });
           return;
         }
         const retrievedRecords = state.searchIntelligence(`${query} ${followUp?.question || ""}`.trim(), 48, archived)

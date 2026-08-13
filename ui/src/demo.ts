@@ -167,16 +167,38 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.8.5",
-    releasedAt: "2026-08-10",
-    headline: "A more dependable, personal daily assistant",
+    version: "0.10.0",
+    releasedAt: "2026-08-13",
+    headline: "Memory you can correct, wherever you use AmirOS",
     notes: [
-      { title: "A polished daily header", detail: "Local weather, saved city clocks, time preferences, and city artwork are clearer, lighter, and more efficient to load." },
-      { title: "Smarter owner actions and to-dos", detail: "Clear WhatsApp commands save directly to AmirOS. New tasks get a concise summary, the right priority, and a fitting emoji." },
-      { title: "More reliable follow-up guidance", detail: "Suggested actions use deterministic reply signals first, with cached AI review only when a conversation is genuinely unclear." },
-      { title: "Release notes that always fit", detail: "What’s new now stays within your screen, with the release details scrolling while its controls remain available." },
+      { title: "Correct AmirOS naturally", detail: "Tell Ask AmirOS or the owner WhatsApp bot that a memory is wrong, historical, unwanted, or newly changed." },
+      { title: "Corrections stay safe and auditable", detail: "Original evidence and appropriate history remain available, while ambiguous requests ask instead of guessing." },
+      { title: "WhatsApp is AmirOS on the go", detail: "The owner bot shares the same memory-correction capability as the dashboard." },
+      { title: "Focus cards fit their message", detail: "Shorter summaries and flexible card widths keep useful context readable in one compact row." },
     ],
     history: [
+      {
+        version: "0.10.0",
+        releasedAt: "2026-08-13",
+        headline: "Memory you can correct, wherever you use AmirOS",
+        notes: [
+          { title: "Correct AmirOS naturally", detail: "Correct, historicize, forget, or replace canonical knowledge through Ask AmirOS or owner WhatsApp." },
+          { title: "Corrections stay safe and auditable", detail: "Evidence is preserved and ambiguous requests ask for clarification." },
+          { title: "WhatsApp is AmirOS on the go", detail: "The bot and dashboard use the same memory-correction capability." },
+          { title: "Focus cards fit their message", detail: "Concise summaries and adaptive widths keep every card readable." },
+        ],
+      },
+      {
+        version: "0.9.0",
+        releasedAt: "2026-08-13",
+        headline: "Intelligence that stays current and helps at the right time",
+        notes: [
+          { title: "Grounded relationships", detail: "People and Ask AmirOS distinguish current context, history, plans, and follow-ups." },
+          { title: "Memory that evolves", detail: "Canonical knowledge reinforces facts, preserves history, and qualifies uncertainty." },
+          { title: "Natural owner actions", detail: "WhatsApp commands manage events, to-dos, and commitments through verified writes." },
+          { title: "Proactive daily focus", detail: "Today’s Focus ranks timely, useful context and learns from dismissals." },
+        ],
+      },
       {
         version: "0.8.5",
         releasedAt: "2026-08-10",

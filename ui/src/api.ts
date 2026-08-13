@@ -281,7 +281,7 @@ export async function getCalendarSubscription(): Promise<CalendarSubscriptionInf
 export async function askIntelligence(
   query: string,
   options?: {
-    followUp?: { question: string; answer: string };
+    followUp?: { question: string; answer: string; sourceRefs?: Array<{ id: string; chatId: string; kind: "insight" }> };
     scope?: { knowledge: boolean; calendar: boolean };
     signal?: AbortSignal;
   },

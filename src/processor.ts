@@ -33,6 +33,12 @@ import {
   type OwnerLifecycleCandidate,
   type OwnerLifecycleRequest,
 } from "./owner-lifecycle.js";
+import {
+  correctionReliesOnPriorAnswer,
+  executeMemoryCorrection,
+  looksLikeCorrectionClarificationReply,
+  looksLikeMemoryCorrection,
+} from "./memory-correction.js";
 
 const { MessageMedia } = whatsappWeb;
 
@@ -460,6 +466,20 @@ export class MessageProcessor {
       const ownerAction = message.fromMe
         ? continuedOwnerAction || (!lifecycleRequest ? parseOwnerActionRequest(command.prompt, currentMessageTimestamp) : undefined)
         : undefined;
+      const priorMemoryContext = message.fromMe && this.amiros
+        ? this.amiros.getOwnerAssistantMemoryContext(chatId, currentMessageTimestamp)
+        : undefined;
+      const priorCorrectionCandidates = priorMemoryContext?.correctionRequest && this.amiros
+        ? this.amiros.memoryCorrectionCandidates(priorMemoryContext.sourceRefs)
+        : [];
+      const continuesMemoryCorrection = Boolean(
+        priorMemoryContext?.correctionRequest &&
+        looksLikeCorrectionClarificationReply(command.prompt, priorCorrectionCandidates),
+      );
+      const isMemoryCorrection = Boolean(
+        message.fromMe && this.amiros && !ownerAction && !lifecycleRequest &&
+        (looksLikeMemoryCorrection(command.prompt, Boolean(priorMemoryContext)) || continuesMemoryCorrection),
+      );
       if (message.fromMe && command.prompt.trim()) {
         this.amiros?.rememberMessage(chatId, {
           role: "user",
@@ -469,13 +489,54 @@ export class MessageProcessor {
           timestamp: currentMessageTimestamp,
           messageId: currentMessageId,
           countAsIncoming: false,
-          extractSignals: !isExplicitSelfChatCommand && !ownerAction && !lifecycleRequest,
-          excludeFromAutomaticLearning: isExplicitSelfChatCommand || Boolean(ownerAction) || Boolean(lifecycleRequest),
+          extractSignals: !isExplicitSelfChatCommand && !ownerAction && !lifecycleRequest && !isMemoryCorrection,
+          excludeFromAutomaticLearning: isExplicitSelfChatCommand || Boolean(ownerAction) || Boolean(lifecycleRequest) || isMemoryCorrection,
         });
-        if (!isExplicitSelfChatCommand && !ownerAction && !lifecycleRequest) {
+        if (!isExplicitSelfChatCommand && !ownerAction && !lifecycleRequest && !isMemoryCorrection) {
           void this.intelligenceLearner?.analyzeIncoming(chatId);
           await this.refreshWritingStyle(chatId);
         }
+      }
+      if (message.fromMe && isMemoryCorrection && this.amiros) {
+        const correctionRequest = continuesMemoryCorrection
+          ? `${priorMemoryContext!.correctionRequest}\nClarification: ${command.prompt}`
+          : command.prompt;
+        const directRecords = this.amiros.searchIntelligence(correctionRequest, 48);
+        const contextualCandidates = priorMemoryContext?.sourceRefs.length
+          ? this.amiros.memoryCorrectionCandidates(priorMemoryContext.sourceRefs)
+          : [];
+        const directCandidates = this.amiros.memoryCorrectionCandidates(
+          directRecords
+            .filter((record) => record.kind === "insight")
+            .map((record) => ({ id: record.id, chatId: record.chatId })),
+        );
+        const candidates = (continuesMemoryCorrection || correctionReliesOnPriorAnswer(command.prompt)) && contextualCandidates.length
+          ? contextualCandidates
+          : directCandidates.length
+            ? directCandidates
+            : contextualCandidates;
+        const correction = await executeMemoryCorrection({
+          request: correctionRequest,
+          candidates,
+          previousQuestion: priorMemoryContext?.question,
+          previousAnswer: priorMemoryContext?.answer,
+          interpret: (input) => this.ai.interpretMemoryCorrection(input),
+          apply: (input) => this.amiros!.applyMemoryCorrection(input),
+        });
+        if (correction.status === "applied") {
+          this.amiros.clearOwnerAssistantMemoryContext(chatId);
+          this.amiros.addActivity("system", "Memory corrected", correction.result.previous.content.slice(0, 140));
+        } else if (candidates.length) {
+          this.amiros.rememberOwnerAssistantMemoryContext(chatId, {
+            question: priorMemoryContext?.question || command.prompt,
+            answer: correction.answer,
+            sourceRefs: candidates.map((candidate) => ({ id: candidate.id, chatId: candidate.chatId })),
+            createdAt: currentMessageTimestamp,
+            correctionRequest,
+          });
+        }
+        await this.sendAuthoritativeReply(message, chatId, correction.answer);
+        return;
       }
       if (message.fromMe && lifecycleRequest && this.amiros) {
         const resolution = selectedLifecycleCandidate
@@ -638,6 +699,26 @@ export class MessageProcessor {
       const answer = message.fromMe && !ownerAction && !hasVerifiedCalendarAction
         ? preventUnverifiedAmirosWriteClaim(aiAnswer)
         : aiAnswer;
+      if (message.fromMe && includeGlobalKnowledge && this.amiros) {
+        const sourceRefs = (globalContext?.knowledge || [])
+          // Keep the bounded retrieval set rather than guessing which prose
+          // fragments the model paraphrased. The correction resolver receives
+          // the prior question and answer and still must choose exactly one
+          // canonical fact at >=85% confidence before any write is allowed.
+          .filter((record) => record.kind === "insight")
+          .slice(0, 12)
+          .map((record) => ({ id: record.id, chatId: record.chatId }));
+        if (sourceRefs.length) {
+          this.amiros.rememberOwnerAssistantMemoryContext(chatId, {
+            question: command.prompt,
+            answer,
+            sourceRefs,
+            createdAt: currentMessageTimestamp,
+          });
+        } else {
+          this.amiros.clearOwnerAssistantMemoryContext(chatId);
+        }
+      }
       if (
         !resolved.explicit &&
         !message.fromMe &&

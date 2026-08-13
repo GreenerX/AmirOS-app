@@ -17,7 +17,6 @@ import {
   PencilLine,
   Search,
   ShieldCheck,
-  Info,
   Sparkles,
   Trash2,
   X,
@@ -460,7 +459,6 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
                   <span dir="auto">{context}</span>
                   {item.source === "whatsapp_bot" ? <span className="whatsapp-origin"><Bot size={12} /> Added by WhatsApp Bot</span> : null}
                   {replyCopy ? <span className="reply-assessment-indicator">{replyCopy.text}</span> : null}
-                  {item.why ? <span className="proactive-why" title={item.why}><Info size={11} /> Why this is here: {item.why}</span> : null}
                   {item.proactive?.aiAssessment ? <span className="reply-assessment-indicator" title={item.proactive.aiAssessment.reason}>AI checked · {item.proactive.aiAssessment.confidence >= 80 ? "High confidence" : "Worth considering"}</span> : null}
                 </span>
               </div>

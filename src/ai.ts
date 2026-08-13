@@ -22,6 +22,7 @@ import { presentTodo } from "./todo-presentation.js";
 import { assessKnowledgeFreshness } from "./memory-maintenance.js";
 import type { RelationshipBrief } from "./relationship-intelligence.js";
 import type { ProactiveAiJudgment, ProactiveCandidate } from "./proactive-intelligence.js";
+import type { MemoryCorrectionCandidate, MemoryCorrectionInterpretation } from "./memory-correction.js";
 import type {
   ContactMemoryItem,
   ContactPreferences,
@@ -1141,6 +1142,57 @@ export class AiService {
     };
   }
 
+  async interpretMemoryCorrection(input: {
+    request: string;
+    candidates: MemoryCorrectionCandidate[];
+    previousQuestion?: string;
+    previousAnswer?: string;
+  }): Promise<MemoryCorrectionInterpretation> {
+    this.assertAvailable();
+    const result = await this.structuredResponse<MemoryCorrectionInterpretation>({
+      name: "memory_correction",
+      instructions: [
+        "Interpret an owner's correction to AmirOS long-term memory.",
+        "Choose only candidate IDs supplied in the input. Never target a message, event, task, commitment, or profile.",
+        "Use reject when the owner says a fact was never true or is wrong. Use forget when they explicitly ask not to remember or use it. Use historical when it used to be true or is no longer current without a supplied replacement. Use replace only when the owner supplies a clear new current fact.",
+        "For replace, write one concise declarative replacementContent that preserves the person's name and exactly the owner's meaning. Do not add details. For every other operation return an empty replacementContent.",
+        "If no candidate is clearly intended, return no target IDs and low confidence. If several candidates are genuinely possible, return no target IDs rather than guessing.",
+        "The reason must be a short plain-language explanation. Confidence is 0 to 100.",
+      ].join(" "),
+      input: JSON.stringify({
+        request: input.request.slice(0, 1_000),
+        previousExchange: input.previousQuestion && input.previousAnswer ? {
+          question: input.previousQuestion.slice(0, 500),
+          answer: input.previousAnswer.slice(0, 2_000),
+        } : undefined,
+        candidates: input.candidates.slice(0, 12),
+      }),
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          operation: { type: "string", enum: ["reject", "forget", "historical", "replace"] },
+          targetIds: { type: "array", maxItems: 2, items: { type: "string" } },
+          replacementContent: { type: "string", maxLength: 1_000 },
+          confidence: { type: "number", minimum: 0, maximum: 100 },
+          reason: { type: "string", maxLength: 160 },
+        },
+        required: ["operation", "targetIds", "replacementContent", "confidence", "reason"],
+      },
+      maxOutputTokens: 320,
+    });
+    const allowedIds = new Set(input.candidates.map((candidate) => candidate.id));
+    return {
+      operation: result.operation,
+      targetIds: [...new Set(result.targetIds.filter((id) => allowedIds.has(id)))],
+      replacementContent: result.operation === "replace"
+        ? result.replacementContent?.replace(/\s+/gu, " ").trim().slice(0, 1_000)
+        : undefined,
+      confidence: Math.max(0, Math.min(100, Math.round(result.confidence))),
+      reason: result.reason.replace(/\s+/gu, " ").trim().slice(0, 160),
+    };
+  }
+
   async summarizeDashboardActionMessage(message: string): Promise<string> {
     this.assertAvailable();
     const source = message.replace(/\s+/g, " ").trim();
@@ -1185,7 +1237,9 @@ export class AiService {
         "For each candidate, decide whether it is genuinely useful now, score usefulness 0-100, and give confidence 0-100.",
         "Suppress noise, stale-feeling repetition, trivial observations, and items that do not suggest useful preparation or follow-up.",
         "Merge only candidates about the same contact and same real-world situation. Put merged IDs in mergeWithIds; never merge merely because the contact is the same.",
-        "Rewrite title, detail, and why in concise, calm, natural language using only supplied facts. Never add facts, advice, urgency, dates, names, or actions not present.",
+        "Rewrite each title as a complete, natural 3-8 word action or occasion, ideally under 56 characters. Never end a title with an ellipsis.",
+        "Rewrite detail as one useful 4-10 word supporting phrase, ideally under 72 characters. Do not repeat the title, category, or a contact name already stated in the title.",
+        "Keep why to one short internal explanation. Use only supplied facts and never add facts, advice, urgency, dates, names, or actions not present.",
         "Return exactly one judgment for every supplied ID. Do not create IDs.",
       ].join(" "),
       input: JSON.stringify({ candidates: safeCandidates }),
@@ -1208,9 +1262,9 @@ export class AiService {
                 show: { type: "boolean" },
                 usefulness: { type: "number", minimum: 0, maximum: 100 },
                 confidence: { type: "number", minimum: 0, maximum: 100 },
-                title: { type: "string", maxLength: 100 },
-                detail: { type: "string", maxLength: 170 },
-                why: { type: "string", maxLength: 220 },
+                title: { type: "string", maxLength: 64 },
+                detail: { type: "string", maxLength: 72 },
+                why: { type: "string", maxLength: 140 },
                 reason: { type: "string", maxLength: 120 },
                 mergeWithIds: { type: "array", maxItems: 6, items: { type: "string", maxLength: 300 } },
               },

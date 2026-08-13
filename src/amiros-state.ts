@@ -7,6 +7,7 @@ import type { CachedReplyAssessment } from "./reply-needed.js";
 import { presentTodo } from "./todo-presentation.js";
 import { assessKnowledgeFreshness, type KnowledgeFreshness } from "./memory-maintenance.js";
 import { explainContactInsight, type MemoryExplanation } from "./memory-explainability.js";
+import type { MemoryCorrectionCandidate, MemoryCorrectionOperation } from "./memory-correction.js";
 import {
   buildRelationshipIntelligence,
   filterRelationshipRecordsForQuestion,
@@ -280,6 +281,29 @@ export type IntelligenceQuestionHistoryItem = {
   createdAt: number;
 };
 
+export type MemoryCorrection = {
+  id: string;
+  chatId: string;
+  targetInsightId: string;
+  targetClusterId?: string;
+  canonicalKey?: string;
+  targetContent: string;
+  evidenceMessageIds: string[];
+  contentFingerprint: string;
+  operation: MemoryCorrectionOperation;
+  replacementInsightId?: string;
+  replacementContent?: string;
+  sourceText: string;
+  createdAt: number;
+};
+
+export type AppliedMemoryCorrection = {
+  correction: MemoryCorrection;
+  previous: ContactInsight;
+  current?: ContactInsight;
+  affectedChatIds: string[];
+};
+
 export type WritingStyleProfile = {
   summary: string;
   messageLength: string;
@@ -313,6 +337,7 @@ type ConversationMemory = {
   pendingOwnerActionClarification?: PendingOwnerActionClarification;
   pendingOwnerLifecycleClarification?: PendingOwnerLifecycleClarification;
   ownerRecordReferences?: OwnerRecordReference[];
+  ownerAssistantMemoryContext?: OwnerAssistantMemoryContext;
   styleProfile?: WritingStyleProfile;
   groupSummary?: GroupConversationSummary;
   /** Cursor for automatic relationship analysis, so old messages are never re-scanned. */
@@ -321,6 +346,16 @@ type ConversationMemory = {
   incomingMessageCount: number;
   updatedAt: number;
 };
+
+export type OwnerAssistantMemoryContext = {
+  question: string;
+  answer: string;
+  sourceRefs: Array<{ id: string; chatId: string }>;
+  createdAt: number;
+  correctionRequest?: string;
+};
+
+const OWNER_ASSISTANT_MEMORY_CONTEXT_TTL_MS = 6 * 60 * 60_000;
 
 export type PendingOwnerActionClarification = {
   kind: "todo";
@@ -450,6 +485,8 @@ type PersistedState = {
   /** AI decisions for only ambiguous reply cases; keyed by one chat and a context fingerprint. */
   replyAssessments: Record<string, CachedReplyAssessment>;
   intelligenceHistory: IntelligenceQuestionHistoryItem[];
+  /** Durable owner corrections prevent reviewed knowledge from resurfacing unchanged. */
+  memoryCorrections: MemoryCorrection[];
   quietHours: {
     enabled: boolean;
     start: string;
@@ -519,6 +556,7 @@ const DEFAULT_STATE: PersistedState = {
   memories: {},
   replyAssessments: {},
   intelligenceHistory: [],
+  memoryCorrections: [],
   quietHours: { enabled: false, start: "23:00", end: "07:00" },
   monthlyBudgetUsd: 20,
   monthlySpend: undefined,
@@ -1183,6 +1221,24 @@ export class AmirosState {
               : undefined;
             const pendingOwnerLifecycleClarification = normalizePendingOwnerLifecycleClarification(memory.pendingOwnerLifecycleClarification);
             const ownerRecordReferences = normalizeOwnerRecordReferences(memory.ownerRecordReferences);
+            const ownerAssistantMemoryContextRaw = memory.ownerAssistantMemoryContext as Partial<OwnerAssistantMemoryContext> | undefined;
+            const ownerAssistantMemoryContext = typeof ownerAssistantMemoryContextRaw?.question === "string"
+              && typeof ownerAssistantMemoryContextRaw.answer === "string"
+              && Array.isArray(ownerAssistantMemoryContextRaw.sourceRefs)
+              && Number.isFinite(ownerAssistantMemoryContextRaw.createdAt)
+              ? {
+                  question: ownerAssistantMemoryContextRaw.question.replace(/\s+/g, " ").trim().slice(0, 500),
+                  answer: ownerAssistantMemoryContextRaw.answer.replace(/\s+/g, " ").trim().slice(0, 2_000),
+                  sourceRefs: ownerAssistantMemoryContextRaw.sourceRefs.flatMap((reference) =>
+                    reference && typeof reference.id === "string" && typeof reference.chatId === "string"
+                      ? [{ id: reference.id.slice(0, 120), chatId: reference.chatId.slice(0, 240) }]
+                      : []).slice(0, 12),
+                  createdAt: Number(ownerAssistantMemoryContextRaw.createdAt),
+                  correctionRequest: typeof ownerAssistantMemoryContextRaw.correctionRequest === "string"
+                    ? ownerAssistantMemoryContextRaw.correctionRequest.replace(/\s+/g, " ").trim().slice(0, 1_000) || undefined
+                    : undefined,
+                }
+              : undefined;
             const styleProfile = memory.styleProfile && typeof memory.styleProfile.summary === "string"
               ? {
                   summary: memory.styleProfile.summary.trim().slice(0, 4_000),
@@ -1208,7 +1264,7 @@ export class AmirosState {
                   sourceMessageCount: Number.isFinite(memory.groupSummary.sourceMessageCount) ? memory.groupSummary.sourceMessageCount : 0,
                 }
               : undefined;
-            return entries.length > 0 || manualItems.length > 0 || profile || insights.length > 0 || commitments.length > 0 || events.length > 0 || todos.length > 0 || pendingOwnerActionClarification || pendingOwnerLifecycleClarification || ownerRecordReferences.length > 0 || styleProfile || groupSummary
+            return entries.length > 0 || manualItems.length > 0 || profile || insights.length > 0 || commitments.length > 0 || events.length > 0 || todos.length > 0 || pendingOwnerActionClarification || pendingOwnerLifecycleClarification || ownerRecordReferences.length > 0 || ownerAssistantMemoryContext || styleProfile || groupSummary
               ? [[chatId, {
                   chatName: memory.chatName?.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
                   entries,
@@ -1221,6 +1277,7 @@ export class AmirosState {
                   pendingOwnerActionClarification,
                   pendingOwnerLifecycleClarification,
                   ownerRecordReferences,
+                  ownerAssistantMemoryContext,
                   styleProfile,
                   groupSummary,
                   // Legacy histories have already been reviewed. Starting the
@@ -1278,6 +1335,28 @@ export class AmirosState {
             createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
           }))
           .filter((item) => item.question && item.answer),
+        memoryCorrections: (Array.isArray(parsed.memoryCorrections) ? parsed.memoryCorrections : [])
+          .filter((item): item is MemoryCorrection => Boolean(item) && typeof item.chatId === "string" && typeof item.targetInsightId === "string" && typeof item.targetContent === "string")
+          .slice(-500)
+          .map((item) => ({
+            id: typeof item.id === "string" ? item.id.slice(0, 120) : randomUUID(),
+            chatId: item.chatId.slice(0, 240),
+            targetInsightId: item.targetInsightId.slice(0, 120),
+            targetClusterId: typeof item.targetClusterId === "string" ? item.targetClusterId.slice(0, 120) : undefined,
+            canonicalKey: typeof item.canonicalKey === "string" ? this.normalizeCanonicalKnowledgeKey(item.canonicalKey) : undefined,
+            targetContent: item.targetContent.replace(/\s+/gu, " ").trim().slice(0, 1_000),
+            evidenceMessageIds: (Array.isArray(item.evidenceMessageIds) ? item.evidenceMessageIds : [])
+              .filter((value): value is string => typeof value === "string")
+              .map((value) => value.slice(0, 240)).slice(0, 50),
+            contentFingerprint: typeof item.contentFingerprint === "string" && /^[a-f0-9]{24}$/iu.test(item.contentFingerprint)
+              ? item.contentFingerprint.toLocaleLowerCase()
+              : this.knowledgeContentFingerprint(item.targetContent),
+            operation: item.operation === "forget" || item.operation === "historical" || item.operation === "replace" ? item.operation : "reject",
+            replacementInsightId: typeof item.replacementInsightId === "string" ? item.replacementInsightId.slice(0, 120) : undefined,
+            replacementContent: typeof item.replacementContent === "string" ? item.replacementContent.replace(/\s+/gu, " ").trim().slice(0, 1_000) || undefined : undefined,
+            sourceText: typeof item.sourceText === "string" ? item.sourceText.replace(/\s+/gu, " ").trim().slice(0, 1_000) : "Owner correction",
+            createdAt: Number.isFinite(item.createdAt) ? Number(item.createdAt) : Date.now(),
+          })),
         quietHours: {
           enabled: parsed.quietHours?.enabled ?? DEFAULT_STATE.quietHours.enabled,
           start: parsed.quietHours?.start || DEFAULT_STATE.quietHours.start,
@@ -1606,6 +1685,55 @@ export class AmirosState {
     if (!this.getContact(chatId).memoryEnabled) return [];
     const safeLimit = Math.max(1, Math.min(400, Math.floor(limit)));
     return structuredClone(this.persisted.memories[chatId]?.entries.slice(-safeLimit) || []);
+  }
+
+  rememberOwnerAssistantMemoryContext(
+    ownerChatId: string,
+    input: Omit<OwnerAssistantMemoryContext, "createdAt"> & { createdAt?: number },
+  ): OwnerAssistantMemoryContext | undefined {
+    const sourceRefs = [...new Map(input.sourceRefs
+      .filter((reference) => reference?.id && reference?.chatId)
+      .map((reference) => [`${reference.chatId}:${reference.id}`, {
+        id: reference.id.slice(0, 120),
+        chatId: reference.chatId.slice(0, 240),
+      }])).values()].slice(0, 12);
+    if (!sourceRefs.length) {
+      this.clearOwnerAssistantMemoryContext(ownerChatId);
+      return undefined;
+    }
+    const memory = this.ensureMemory(ownerChatId);
+    memory.ownerAssistantMemoryContext = {
+      question: input.question.replace(/\s+/g, " ").trim().slice(0, 500),
+      answer: input.answer.replace(/\s+/g, " ").trim().slice(0, 2_000),
+      sourceRefs,
+      createdAt: input.createdAt ?? Date.now(),
+      correctionRequest: input.correctionRequest?.replace(/\s+/g, " ").trim().slice(0, 1_000) || undefined,
+    };
+    memory.updatedAt = Date.now();
+    this.save();
+    return structuredClone(memory.ownerAssistantMemoryContext);
+  }
+
+  getOwnerAssistantMemoryContext(ownerChatId: string, now = Date.now()): OwnerAssistantMemoryContext | undefined {
+    const memory = this.persisted.memories[ownerChatId];
+    const context = memory?.ownerAssistantMemoryContext;
+    if (!context) return undefined;
+    if (now - context.createdAt > OWNER_ASSISTANT_MEMORY_CONTEXT_TTL_MS) {
+      delete memory.ownerAssistantMemoryContext;
+      memory.updatedAt = now;
+      this.save();
+      return undefined;
+    }
+    return structuredClone(context);
+  }
+
+  clearOwnerAssistantMemoryContext(ownerChatId: string): boolean {
+    const memory = this.persisted.memories[ownerChatId];
+    if (!memory?.ownerAssistantMemoryContext) return false;
+    delete memory.ownerAssistantMemoryContext;
+    memory.updatedAt = Date.now();
+    this.save();
+    return true;
   }
 
   getReplyAssessment(chatId: string, contextKey: string): CachedReplyAssessment | undefined {
@@ -2215,6 +2343,118 @@ export class AmirosState {
     return structuredClone(item);
   }
 
+  memoryCorrectionCandidates(
+    references: Array<{ id: string; chatId: string }>,
+  ): MemoryCorrectionCandidate[] {
+    const seen = new Set<string>();
+    const candidates: MemoryCorrectionCandidate[] = [];
+    for (const reference of references) {
+      const insight = this.persisted.memories[reference.chatId]?.insights.find((item) => item.id === reference.id);
+      if (!insight || insight.status === "outdated") continue;
+      const identity = insight.clusterId || `${reference.chatId}:${insight.id}`;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      candidates.push({
+        id: insight.id,
+        chatId: reference.chatId,
+        content: insight.content,
+        status: insight.status,
+        knowledgeValidity: insight.validity || "current",
+        canonicalKey: insight.canonicalKey,
+        kind: insight.kind,
+      });
+    }
+    return candidates;
+  }
+
+  applyMemoryCorrection(input: {
+    chatId: string;
+    insightId: string;
+    operation: MemoryCorrectionOperation;
+    replacementContent?: string;
+    sourceText: string;
+  }): AppliedMemoryCorrection | undefined {
+    const primaryMemory = this.persisted.memories[input.chatId];
+    const primary = primaryMemory?.insights.find((item) => item.id === input.insightId);
+    if (!primaryMemory || !primary || primary.status === "outdated") return undefined;
+
+    const now = Date.now();
+    const clusterId = primary.clusterId;
+    const targets = Object.entries(this.persisted.memories).flatMap(([chatId, memory]) => memory.insights
+      .filter((item) => item.id === primary.id || Boolean(clusterId && item.clusterId === clusterId))
+      .map((insight) => ({ chatId, memory, insight })));
+    if (!targets.length) return undefined;
+
+    const replacementContent = input.replacementContent?.replace(/\s+/gu, " ").trim().slice(0, 1_000);
+    if (input.operation === "replace" && !replacementContent) return undefined;
+    const previous = structuredClone(primary);
+    const affectedChatIds = [...new Set(targets.map((target) => target.chatId))];
+    const correctedEvidenceMessageIds = [...new Set(targets.flatMap((target) => [
+      target.insight.evidence.messageId,
+      ...(target.insight.evidenceHistory || []).map((item) => item.messageId),
+    ]).filter((value): value is string => Boolean(value)))];
+    let current: ContactInsight | undefined;
+    const replacementClusterId = input.operation === "replace" ? randomUUID() : undefined;
+
+    for (const target of targets) {
+      if (input.operation === "reject" || input.operation === "forget") {
+        target.insight.status = "outdated";
+      } else {
+        target.insight.status = "confirmed";
+        target.insight.validity = "historical";
+      }
+      target.insight.updatedAt = now;
+      if (input.operation === "replace" && replacementContent && replacementClusterId) {
+        const replacement = this.upsertInsight(target.memory.insights, {
+          clusterId: replacementClusterId,
+          subjectChatIds: affectedChatIds,
+          subjectNames: primary.subjectNames,
+          kind: primary.kind,
+          content: replacementContent,
+          topicTitle: undefined,
+          canonicalKey: primary.canonicalKey,
+          validity: "current",
+          evolution: "replace",
+          status: "confirmed",
+          confidence: 1,
+          evidence: { excerpt: input.sourceText, senderName: this.persisted.ownerProfile.displayName, timestamp: now },
+        }, now, target.chatId).insight;
+        // Keep exactly one current version of a replaceable canonical fact in
+        // each affected conversation, including a pre-existing equivalent.
+        this.reconcileConfirmedCanonicalInsight(target.chatId, replacement, now);
+        target.insight.supersededById = replacement.id;
+        target.insight.supersededAt = now;
+        if (target.chatId === input.chatId) current = replacement;
+      }
+      target.memory.updatedAt = now;
+    }
+
+    const correction: MemoryCorrection = {
+      id: randomUUID(),
+      chatId: input.chatId,
+      targetInsightId: primary.id,
+      targetClusterId: primary.clusterId,
+      canonicalKey: primary.canonicalKey,
+      targetContent: previous.content,
+      evidenceMessageIds: correctedEvidenceMessageIds,
+      contentFingerprint: this.knowledgeContentFingerprint(previous.content),
+      operation: input.operation,
+      replacementInsightId: current?.id,
+      replacementContent,
+      sourceText: input.sourceText.replace(/\s+/gu, " ").trim().slice(0, 1_000),
+      createdAt: now,
+    };
+    this.persisted.memoryCorrections.push(correction);
+    this.persisted.memoryCorrections = this.persisted.memoryCorrections.slice(-500);
+    this.maintainKnowledge(now, false);
+    this.save();
+    return { correction: structuredClone(correction), previous, current: current ? structuredClone(current) : undefined, affectedChatIds };
+  }
+
+  memoryCorrectionHistory(limit = 50): MemoryCorrection[] {
+    return structuredClone(this.persisted.memoryCorrections.slice(-Math.max(1, Math.min(200, limit))).reverse());
+  }
+
   getWritingStyleProfile(chatId: string): WritingStyleProfile | undefined {
     const profile = this.persisted.memories[chatId]?.styleProfile;
     return profile ? structuredClone(profile) : undefined;
@@ -2384,7 +2624,12 @@ export class AmirosState {
       ])];
       // A reviewed decision is a durable tombstone. Re-analysis may find the
       // same fact in another message, but it must not reopen the suggestion.
-      if (existing?.status === "outdated") continue;
+      if (existing?.status === "outdated" || this.isDurablyCorrectedKnowledge({
+        content: insight.content,
+        clusterId: existing?.clusterId,
+        canonicalKey: insight.canonicalKey,
+        evidence: insight.evidence,
+      })) continue;
       const autonomousConfirmation = this.autonomousConfirmationFor(sourceChatId, insight);
       const routed: RoutedInsight = {
         ...insight,
@@ -2665,7 +2910,11 @@ export class AmirosState {
         const recency = Math.max(0, 1 - (now - record.timestamp) / (180 * 86_400_000));
         records.push({ ...record, contactName: memory.chatName, score: matches + recency + boost });
       };
+      const correctedEvidenceIds = new Set(this.persisted.memoryCorrections
+        .filter((correction) => correction.chatId === chatId)
+        .flatMap((correction) => correction.evidenceMessageIds));
       memory.entries.forEach((entry, index) => {
+        if (entry.messageId && correctedEvidenceIds.has(entry.messageId)) return;
         const sourceAuthor = entry.author === "owner" || entry.author === "contact" || entry.author === "group_member"
           ? entry.author
           : entry.role === "user"
@@ -2692,7 +2941,7 @@ export class AmirosState {
         status: "confirmed",
         timestamp: item.createdAt,
       }, 18, item.createdAt));
-      memory.insights.filter((item) => item.status !== "outdated").forEach((item) => {
+      memory.insights.filter((item) => item.status !== "outdated" && (historicalIntent || (item.validity || "current") !== "historical")).forEach((item) => {
         const freshness = assessKnowledgeFreshness(item, now);
         const baseBoost = (item.validity || "current") === "historical"
           ? historicalIntent ? 18 : 1
@@ -3483,6 +3732,27 @@ export class AmirosState {
     const normalized = value?.normalize("NFKD").toLocaleLowerCase().replace(/\p{M}/gu, "")
       .replace(/[^\p{L}\p{N}]+/gu, "_").replace(/^_+|_+$/gu, "").slice(0, 80);
     return normalized || undefined;
+  }
+
+  private knowledgeContentFingerprint(value: string): string {
+    return createHash("sha256")
+      .update(value.normalize("NFKD").toLocaleLowerCase().replace(/\p{M}/gu, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim())
+      .digest("hex")
+      .slice(0, 24);
+  }
+
+  private isDurablyCorrectedKnowledge(candidate: Pick<ContactInsight, "content" | "clusterId" | "canonicalKey" | "evidence">): boolean {
+    const fingerprint = this.knowledgeContentFingerprint(candidate.content);
+    const evidenceAt = candidate.evidence.timestamp > 0 && candidate.evidence.timestamp < 10_000_000_000
+      ? candidate.evidence.timestamp * 1_000
+      : candidate.evidence.timestamp;
+    return this.persisted.memoryCorrections.some((correction) =>
+      Boolean(candidate.clusterId && correction.targetClusterId === candidate.clusterId) ||
+      Boolean(candidate.evidence.messageId && correction.evidenceMessageIds.includes(candidate.evidence.messageId)) ||
+      (correction.operation !== "historical" && correction.contentFingerprint === fingerprint && (
+        correction.operation === "forget" || evidenceAt <= correction.createdAt
+      )),
+    );
   }
 
   /**

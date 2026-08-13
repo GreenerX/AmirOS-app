@@ -41,7 +41,7 @@ type FloatingAssistantProps = {
   loading: boolean;
   onRefresh: () => Promise<void>;
   onAsk: (query: string, options?: {
-    followUp?: { question: string; answer: string };
+    followUp?: { question: string; answer: string; sourceRefs?: Array<{ id: string; chatId: string; kind: "insight" }> };
     scope?: { knowledge: boolean; calendar: boolean };
     signal?: AbortSignal;
   }) => Promise<IntelligenceSearchResult>;
@@ -99,7 +99,13 @@ export function FloatingAssistant({
     abortRef.current = controller;
     setQuery(question); setLastQuestion(question); setSearching(true); setProgress("Searching saved knowledge…"); setError(undefined); setCopied(false); setSaved(false); setEvidenceOpen(false);
     try {
-      const followUp = answer && lastQuestion ? { question: lastQuestion, answer: answer.answer } : undefined;
+      const followUp = answer && lastQuestion ? {
+        question: lastQuestion,
+        answer: answer.answer,
+        sourceRefs: answer.sources
+          .filter((source) => source.kind === "insight")
+          .map((source) => ({ id: source.id, chatId: source.chatId, kind: "insight" as const })),
+      } : undefined;
       setAnswer(await onAsk(question, { followUp, scope, signal: controller.signal }));
     } catch (searchError) {
       if ((searchError as Error)?.name !== "AbortError") setError(searchError instanceof Error ? searchError.message : "Could not search your saved conversations");
@@ -156,6 +162,7 @@ export function FloatingAssistant({
           {firstSource ? <button onClick={() => void saveKnowledge()}><BookmarkPlus size={13} />{saved ? "Saved" : "Save as knowledge"}</button> : null}
           {firstSource ? <button onClick={() => { onInsertReply(firstSource.chatId, answer.answer); setOpen(false); }}><MessageSquarePlus size={13} />Insert reply</button> : null}
         </div>
+        {evidenceSources.some((source) => source.kind === "insight") ? <p className="floating-ai-correction-hint">Something here is wrong or outdated? Ask naturally—“That’s wrong,” “That used to be true,” or “Forget that.”</p> : null}
         {evidenceSources.some((source) => source.explanation) ? <details className="floating-ai-memory-explanation">
           <summary><Sparkles size={13} />Why AmirOS believes this<ChevronDown size={13} /></summary>
           <div>{evidenceSources.filter((source) => source.explanation).slice(0, 3).map((source) => <article key={`explain-${source.id}`}>

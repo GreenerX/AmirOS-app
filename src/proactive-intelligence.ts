@@ -80,7 +80,7 @@ export type ProactiveAiJudgmentBatch = {
   judgments: ProactiveAiJudgment[];
 };
 
-export const PROACTIVE_AI_POLICY_VERSION = "proactive-judgment-v1";
+export const PROACTIVE_AI_POLICY_VERSION = "proactive-judgment-v2";
 
 export type ProactiveCandidateOptions = {
   /** Defaults to off: normal dashboard refreshes should not create relationship anxiety. */
@@ -138,6 +138,8 @@ function addCandidate(
   const { fingerprintValues, ...candidate } = input;
   values.push({
     ...candidate,
+    title: cleanFocusCardCopy(candidate.title, candidate.title, 64),
+    detail: cleanFocusCardCopy(candidate.detail, candidate.detail, 72),
     fingerprint: stableFingerprint(candidate.kind, candidate.sourceIds, fingerprintValues),
   });
 }
@@ -371,6 +373,13 @@ function cleanJudgmentCopy(value: string, fallback: string, max: number): string
   return compact(value || fallback, max) || fallback;
 }
 
+function cleanFocusCardCopy(value: string, fallback: string, max: number): string {
+  const normalized = (value || fallback).replace(/\s+/gu, " ").trim().replace(/[…]+$/u, "");
+  if (normalized.length <= max) return normalized;
+  const boundary = normalized.slice(0, max + 1).lastIndexOf(" ");
+  return normalized.slice(0, boundary > max / 2 ? boundary : max).trimEnd().replace(/[,;:—-]+$/u, "");
+}
+
 /**
  * Applies a cached, bounded AI judgment to already-safe deterministic candidates.
  * Unknown IDs and cross-contact merge requests are ignored; AI cannot introduce
@@ -417,9 +426,9 @@ export function applyProactiveAiJudgment(
       ...candidate,
       fingerprint,
       priority: Math.max(0, Math.min(40, Math.round((100 - judgment.usefulness) * .4))),
-      title: cleanJudgmentCopy(judgment.title, candidate.title, 100),
-      detail: cleanJudgmentCopy(judgment.detail, candidate.detail, 170),
-      why: cleanJudgmentCopy(judgment.why, candidate.why, 220),
+      title: cleanFocusCardCopy(judgment.title, candidate.title, 64),
+      detail: cleanFocusCardCopy(judgment.detail, candidate.detail, 72),
+      why: cleanJudgmentCopy(judgment.why, candidate.why, 140),
       sourceIds: [...new Set(members.flatMap((item) => item.sourceIds))],
       aiAssessment: judgment.confidence > 0 ? {
         confidence: Math.max(1, Math.min(100, Math.round(judgment.confidence))),

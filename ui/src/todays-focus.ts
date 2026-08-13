@@ -166,7 +166,7 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
       type: "reply",
       priority: 3,
       title: `Reply to ${chat.contactName}`,
-      detail: "A message is waiting for your reply",
+      detail: "A message is waiting",
       chatId: chat.chatId,
       contactName: chat.contactName,
       messageId: chat.lastIncoming?.messageId,

@@ -30,23 +30,23 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-13",
-  headline: "Intelligence that stays current and helps at the right time",
+  headline: "Memory you can correct, wherever you use AmirOS",
   notes: [
     {
-      title: "Relationships, grounded in what actually happened",
-      detail: "People profiles and Ask AmirOS now organize current plans, follow-ups, important topics, relationship changes, and their supporting evidence without treating old context as current truth.",
+      title: "Correct AmirOS naturally",
+      detail: "Tell Ask AmirOS or the owner WhatsApp bot that a memory is wrong, historical, unwanted, or newly changed. AmirOS updates canonical knowledge only after the intended fact is clear.",
     },
     {
-      title: "Memory that evolves with people",
-      detail: "Canonical knowledge can reinforce durable facts, preserve earlier truth as history, qualify uncertainty, and keep People summaries aligned as relationships and circumstances change.",
+      title: "Corrections stay safe and auditable",
+      detail: "Original evidence and appropriate history remain available, corrected claims stay suppressed, profile text refreshes when truth changes, and ambiguous requests ask for clarification instead of guessing.",
     },
     {
-      title: "Natural control from your own WhatsApp chat",
-      detail: "Create, clarify, complete, cancel, rename, reprioritize, and reschedule calendar events, to-dos, and commitments with verified writes and truthful confirmations.",
+      title: "WhatsApp is AmirOS on the go",
+      detail: "The owner bot now shares the same memory-correction capability as the dashboard and carries a bounded, restart-safe reference to the knowledge behind its latest answer.",
     },
     {
-      title: "A more useful Today’s Focus",
-      detail: "AmirOS safely ranks timely plans, commitments, replies, and relationship context, explains why each item appears, learns from dismissals, and shifts to tomorrow only when tonight is genuinely clear.",
+      title: "Focus cards fit their message",
+      detail: "Today’s Focus uses shorter AI-assisted summaries, flexible card widths, complete titles, and less supporting chrome so useful context remains readable in one compact row.",
     },
   ],
 };
@@ -57,6 +57,29 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.9.0",
+    releasedAt: "2026-08-13",
+    headline: "Intelligence that stays current and helps at the right time",
+    notes: [
+      {
+        title: "Relationships, grounded in what actually happened",
+        detail: "People profiles and Ask AmirOS organize current plans, follow-ups, important topics, relationship changes, and supporting evidence without treating old context as current truth.",
+      },
+      {
+        title: "Memory that evolves with people",
+        detail: "Canonical knowledge reinforces durable facts, preserves earlier truth as history, qualifies uncertainty, and keeps People summaries aligned as circumstances change.",
+      },
+      {
+        title: "Natural control from your own WhatsApp chat",
+        detail: "Create, clarify, complete, cancel, rename, reprioritize, and reschedule calendar events, to-dos, and commitments with verified writes and truthful confirmations.",
+      },
+      {
+        title: "A more useful Today’s Focus",
+        detail: "AmirOS ranks timely plans, commitments, replies, and relationship context, learns from dismissals, and shifts to tomorrow only when tonight is genuinely clear.",
+      },
+    ],
+  },
   {
     version: "0.8.5",
     releasedAt: "2026-08-10",
