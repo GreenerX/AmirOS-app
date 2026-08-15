@@ -188,10 +188,11 @@ The persistent **Help & feedback** action lets a tester prepare a bug report,
 feedback note, feature request, or setup question. It is deliberately
 user-initiated: AmirOS does not send telemetry or reports in the background.
 
-Set a monitored email destination in `.env.local` before enabling this for testers:
+The official private-beta package includes the monitored beta support email.
+To change it for a different private beta, set the destination in `.env.local`:
 
 ```dotenv
-AMIROS_BETA_SUPPORT_EMAIL=beta-support@example.com
+AMIROS_BETA_SUPPORT_EMAIL=amirfriedman@icloud.com
 # Optional fallback if email is deliberately not configured:
 AMIROS_BETA_SUPPORT_URL=https://support.example.com/amiros-beta
 ```

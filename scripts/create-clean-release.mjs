@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,6 +50,20 @@ for (const entry of included) {
   const source = resolve(root, entry);
   if (!existsSync(source)) throw new Error(`Missing release file: ${entry}`);
   cpSync(source, resolve(releaseRoot, entry), { recursive: true, filter: includeReleasePath });
+}
+
+// The official beta ZIP needs one safe, non-secret support destination from
+// its tracked example configuration. It lets first-time testers reach support
+// immediately, while `.env.local` remains private and always takes precedence.
+const exampleEnvironment = readFileSync(resolve(root, ".env.example"), "utf8");
+const betaSupportLines = ["AMIROS_BETA_SUPPORT_EMAIL", "AMIROS_BETA_SUPPORT_URL"]
+  .flatMap((name) => exampleEnvironment.match(new RegExp(`^${name}=.+$`, "m"))?.[0] || []);
+if (betaSupportLines.length > 0) {
+  writeFileSync(resolve(releaseRoot, ".env"), [
+    "# AmirOS private-beta support destination. You may override this in .env.local.",
+    ...betaSupportLines,
+    "",
+  ].join("\n"), { encoding: "utf8", mode: 0o600 });
 }
 
 writeFileSync(resolve(releaseRoot, "CUSTOMER-START-HERE.md"), `# Welcome to AmirOS

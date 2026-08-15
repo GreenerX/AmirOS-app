@@ -114,11 +114,12 @@ You do not need a GitHub account, and you do not need to copy files manually.
 
 ## Beta help and feedback
 
-For a private beta, the person running AmirOS can configure a monitored support
-email address in `.env.local` before starting AmirOS:
+The official private-beta package includes the monitored beta support email.
+To change it for a different private beta, add a monitored support address in
+`.env.local` before starting AmirOS:
 
 ```dotenv
-AMIROS_BETA_SUPPORT_EMAIL=beta-support@example.com
+AMIROS_BETA_SUPPORT_EMAIL=amirfriedman@icloud.com
 # Optional fallback if email is deliberately not configured:
 AMIROS_BETA_SUPPORT_URL=https://support.example.com/amiros-beta
 ```
