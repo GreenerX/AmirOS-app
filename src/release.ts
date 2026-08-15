@@ -30,23 +30,19 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-15",
-  headline: "A fuller daily focus and four world clocks",
+  headline: "A safer, more personal start for private beta",
   notes: [
     {
-      title: "See the complete day at a glance",
-      detail: "Today’s Focus keeps every eligible event and action in one horizontal rail instead of hiding additional cards until another one is dismissed.",
+      title: "Start with the people who matter most",
+      detail: "First-run setup can suggest up to 12 recent one-to-one chats, placing your Favorites first. AmirOS reads only the newest 150 messages from people you explicitly choose.",
     },
     {
-      title: "Clearer visual identities",
-      detail: "Generated event artwork and contact photos are larger, while adaptive card widths keep complete titles and concise supporting details readable.",
+      title: "Help is always close",
+      detail: "The new Help & feedback action prepares a clear bug report, feedback note, feature request, or setup question for your beta support contact—only when you choose to send it.",
     },
     {
-      title: "Dismiss once",
-      detail: "Dismissing a proactive card also hides equivalent cards backed by the same event, task, or commitment instead of letting the same item immediately return in another form.",
-    },
-    {
-      title: "Keep four cities close",
-      detail: "The Overview world clock now supports up to four saved timezone cards with the same weather, artwork, and persistent preferences.",
+      title: "People descriptions feel personal",
+      detail: "Contact summaries now speak directly to you, so relationship context reads naturally instead of referring to you in the third person.",
     },
   ],
 };
@@ -57,6 +53,29 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.10.1",
+    releasedAt: "2026-08-15",
+    headline: "A fuller daily focus and four world clocks",
+    notes: [
+      {
+        title: "See the complete day at a glance",
+        detail: "Today’s Focus keeps every eligible event and action in one horizontal rail instead of hiding additional cards until another one is dismissed.",
+      },
+      {
+        title: "Clearer visual identities",
+        detail: "Generated event artwork and contact photos are larger, while adaptive card widths keep complete titles and concise supporting details readable.",
+      },
+      {
+        title: "Dismiss once",
+        detail: "Dismissing a proactive card also hides equivalent cards backed by the same event, task, or commitment instead of letting the same item immediately return in another form.",
+      },
+      {
+        title: "Keep four cities close",
+        detail: "The Overview world clock now supports up to four saved timezone cards with the same weather, artwork, and persistent preferences.",
+      },
+    ],
+  },
   {
     version: "0.10.0",
     releasedAt: "2026-08-13",

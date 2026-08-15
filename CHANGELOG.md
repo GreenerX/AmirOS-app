@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.10.2] - 2026-08-15
+
+### Added
+
+- Added an optional first-run People setup step. It suggests up to 12 recent direct chats, prioritizes Favorites, and reads only the newest 150 messages from people the user explicitly selects.
+- Added a persistent **Help & feedback** action for private beta testers, with separate bug, feedback, feature-request, and setup-help forms.
+
+### Changed
+
+- Changed generated People summaries to describe relationships directly to the owner using “you” and “your,” rather than referring to the owner in the third person.
+
+### Privacy
+
+- Beta reports are always user-initiated and use a configured email draft or support URL. Optional diagnostics are safe, bounded metadata only; no chats, contacts, credentials, sessions, QR codes, saved state, or complete logs are included.
+- Screenshots remain on the tester’s computer until they choose to attach one in their email app.
+
+### Fixed
+
+- Prevented first-run history analysis from being duplicated by the normal incremental learner after setup.
+
+### Testing
+
+- Added coverage for feedback reporting, safe redaction, destination fallbacks, diagnostics opt-in, first-run chat suggestions, Favorites prioritization, bounded history, and deduplicated learning.
+
 ## [0.10.1] - 2026-08-15
 
 ### Added

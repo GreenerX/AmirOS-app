@@ -167,16 +167,25 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.10.1",
+    version: "0.10.2",
     releasedAt: "2026-08-15",
-    headline: "A fuller daily focus and four world clocks",
+    headline: "A safer, more personal start for private beta",
     notes: [
-      { title: "See the complete day at a glance", detail: "Every eligible Focus item stays available in one horizontal rail." },
-      { title: "Clearer visual identities", detail: "Larger artwork and contact photos make each Focus card easier to recognize." },
-      { title: "Dismiss once", detail: "Equivalent cards backed by the same source stay hidden together." },
-      { title: "Keep four cities close", detail: "The world clock now supports four saved timezone cards." },
+      { title: "Start with the people who matter most", detail: "Choose up to 12 recent direct chats to start your People directory, with Favorites first and a clear 150-message limit." },
+      { title: "Help is always close", detail: "Prepare a bug report, feedback note, feature request, or setup question for your beta support contact when you choose to send it." },
+      { title: "People descriptions feel personal", detail: "Contact summaries now speak directly to you rather than referring to you in the third person." },
     ],
     history: [
+      {
+        version: "0.10.2",
+        releasedAt: "2026-08-15",
+        headline: "A safer, more personal start for private beta",
+        notes: [
+          { title: "Start with the people who matter most", detail: "Choose up to 12 recent direct chats to start your People directory, with Favorites first and a clear 150-message limit." },
+          { title: "Help is always close", detail: "Prepare a bug report, feedback note, feature request, or setup question for your beta support contact when you choose to send it." },
+          { title: "People descriptions feel personal", detail: "Contact summaries now speak directly to you rather than referring to you in the third person." },
+        ],
+      },
       {
         version: "0.10.1",
         releasedAt: "2026-08-15",
