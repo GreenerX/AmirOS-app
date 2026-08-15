@@ -2,6 +2,12 @@
 
 ## What currently works
 
+- Private beta testers have a persistent Help & feedback entry. Reports are
+  explicitly user-initiated, use a configured email draft or support URL, and
+  fall back transparently to copying when beta support is not configured.
+- Optional diagnostics are limited to safe metadata; AmirOS does not attach
+  chats, contacts, credentials, sessions, saved state, QR codes, or full logs.
+
 - AmirOS runs as a local TypeScript service with a Vite/React dashboard for WhatsApp, contact intelligence, calendar items, tasks, and reminders.
 - The Overview now treats person-centred Today’s Focus items as identity cards: a contact photo is the leading visual when available, with the relevant birthday, reply, task, calendar, or reminder icon otherwise. Today’s next confirmed event leads the Focus cards, replacing the former Next event / Inbox pulse / AI model strip.
 - Overview keeps its equal-height to-do card beside an Agenda that shows confirmed events scheduled for the current local day in chronological order as a compact timeline. Suggested action stays alongside that row; Current session, Reply modes, and Recent activity form a three-card row directly underneath. The former Quick actions card is removed. The Agenda includes a clear empty state and a link to the full agenda.
@@ -29,6 +35,10 @@
 - Native macOS packaging and broader operational checks remain future work.
 
 ## Architectural decisions
+
+- Beta support is a client-side handoff only. `AMIROS_BETA_SUPPORT_EMAIL` is
+  preferred over `AMIROS_BETA_SUPPORT_URL`; no outbound service or telemetry
+  is introduced.
 
 - `ui/src/components/Overview.tsx` keeps the UI-specific day filter local, reusing `buildIntelligenceSnapshot` as the canonical source of confirmed, chronological calendar events.
 - Contact photos are sourced from the existing chat avatar pipeline through `ContactAvatar`; non-person Today’s Focus cards request a relevant `gpt-image-1.5` icon and cache it privately under `work/todays-focus-icons`, while semantic icons remain the immediate and failure-safe fallback.

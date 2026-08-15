@@ -182,6 +182,34 @@ environment requires it and you understand the reduced browser isolation.
 
 ## Production notes
 
+## Private beta support
+
+The persistent **Help & feedback** action lets a tester prepare a bug report,
+feedback note, feature request, or setup question. It is deliberately
+user-initiated: AmirOS does not send telemetry or reports in the background.
+
+Set a monitored email destination in `.env.local` before enabling this for testers:
+
+```dotenv
+AMIROS_BETA_SUPPORT_EMAIL=beta-support@example.com
+# Optional fallback if email is deliberately not configured:
+AMIROS_BETA_SUPPORT_URL=https://support.example.com/amiros-beta
+```
+
+The email draft takes precedence when both are configured. The tester reviews
+the report, then AmirOS opens an email draft with the report prefilled; the
+tester can attach a screenshot there and must send it themselves. With neither
+value configured, AmirOS clearly offers
+**Copy feedback report** and does not imply that a report was sent.
+
+The report contains only the chosen category, feature area, the text the
+tester writes and—only after checking the opt-in box—version/build, timestamp,
+broad device/browser label, broad connection state, and selected area.
+Screenshots remain local until the tester attaches them in their email app.
+AmirOS never automatically adds API
+keys, `.env.local`, WhatsApp access files or QR codes, conversation content,
+contact names or identifiers, `amiros-state.json`, or complete activity data.
+
 - The linked-device route can break when WhatsApp Web changes and carries account
   restriction risk. The official WhatsApp Business Cloud API remains the supported
   option for business-critical or high-volume use.

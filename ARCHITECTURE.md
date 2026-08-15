@@ -663,6 +663,26 @@ This separation is intentional and should not be collapsed casually.
 
 ## Build and deployment model
 
+## Private beta support flow
+
+The dashboard has one persistent Help & feedback entry in the sidebar. It is a
+client-side report composer, not a telemetry or support service. The dashboard
+API exposes only a configured `AMIROS_BETA_SUPPORT_EMAIL` (preferred) or
+`AMIROS_BETA_SUPPORT_URL` fallback and a short UI build fingerprint. The
+configuration parser accepts only credential-free HTTPS support URLs with no
+query or fragment, and validates the email fallback.
+
+The client builds a bounded report from fields the tester explicitly enters.
+Diagnostics are off by default and contain only version/build, timestamp, a
+broad browser/device label, broad connection state (`ready`, `qr`, or
+`disconnected`), and selected feature area. It never reads state files,
+messages, contact records, sessions, QR data, API credentials, or full logs.
+Screenshots are never read or uploaded by AmirOS; the tester attaches one
+manually in their email app. An email draft opens with the report prefilled;
+when email is unavailable, a URL opens a new form with a copied report. When no
+destination exists, the UI offers a copy-only fallback and never shows a false
+sent state.
+
 Key scripts:
 
 - `pnpm build` -> `scripts/build-backend.mjs`

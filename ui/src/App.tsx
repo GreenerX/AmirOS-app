@@ -50,7 +50,9 @@ import { TerminalView } from "./components/TerminalView";
 import { CalendarView } from "./components/CalendarView";
 import { FloatingAssistant } from "./components/FloatingAssistant";
 import { ReleaseExperience } from "./components/ReleaseExperience";
+import { BetaSupportExperience } from "./components/BetaSupportExperience";
 import { UpdatePrompt } from "./components/UpdatePrompt";
+import { buildFirstRunPeopleDirectory } from "./onboarding-people";
 import {
   AutomationsView,
   ContactsView,
@@ -160,6 +162,7 @@ export function App() {
     queueFilter: "todo";
   }>();
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
+  const [betaSupportOpen, setBetaSupportOpen] = useState(false);
   const hydratedTimeFormat = useRef(false);
   useEffect(() => {
     const savedTimeFormat = dashboard?.settings.assistant.timeFormat;
@@ -703,6 +706,21 @@ export function App() {
     return { scanned: result.scanned, added: result.added };
   };
 
+  const setupFirstRunPeopleDirectory = async (
+    chatIds: string[],
+    onProgress: (completed: number, total: number) => void,
+  ) => {
+    await buildFirstRunPeopleDirectory(chatIds, {
+      onProgress,
+      enableKnowledgeTracking: async (chatId) => { await updateContact(chatId, { knowledgeTracking: "enabled" }); },
+      scanHistory: scanChatHistory,
+      analyzeRelationship: async (chatId, messageLimit, advanceLearningCursor) => {
+        await analyzeContactIntelligence(chatId, messageLimit, advanceLearningCursor);
+      },
+    });
+    await Promise.all([refresh(), refreshIntelligence()]);
+  };
+
   const deleteQuestion = async (id: string) => {
     await deleteIntelligenceQuestion(id);
     await refreshIntelligence();
@@ -772,7 +790,7 @@ export function App() {
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`} data-time-format={timeFormat}>
-      <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} updateAvailable={updateStatus?.status === "available"} connection={dashboard.connection} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} />
+      <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} updateAvailable={updateStatus?.status === "available"} connection={dashboard.connection} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} onOpenBetaSupport={() => setBetaSupportOpen(true)} />
       <div className="app-body">
         {error ? <div className="error-banner"><AlertTriangle size={17} />{error}<button onClick={() => setError(undefined)}>Dismiss</button></div> : null}
 {view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onTrackingDecision={decideKnowledgeTracking} onOpenTrackingChat={(chatId) => openChat(chatId)} onOpenNextBestAction={openChat} onOpenTodoReview={openTodoReview} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onCalendarStatus={changeCalendarStatus} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onDismissNextBestAction={dismissNextBestAction} onProactiveDecision={decideProactiveIntelligence} /> : null}
@@ -785,7 +803,8 @@ export function App() {
         {view === "terminal" ? <TerminalView connection={dashboard.connection} loadLog={getTerminalLog} subscribeLog={subscribeTerminalLog} /> : null}
         {view === "settings" ? <SettingsView data={dashboard} onSave={saveSettings} onSaveApiKey={saveApiKey} onRelink={async () => { await relink(); }} onPause={togglePaused} /> : null}
         <FloatingAssistant data={intelligence} loading={loadingIntelligence} onRefresh={refreshIntelligence} onAsk={askRelationships} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onSaveKnowledge={addMemory} onInsertReply={(chatId, body) => { setAssistantComposerDraft({ chatId, body }); openChat(chatId); }} />
-        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} theme={dashboard.settings.theme} ownerProfile={dashboard.settings.ownerProfile} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onFinishOnboarding={async (choice, theme) => saveSettings({ knowledgeTrackingDefault: choice, theme })} onSaveOwnerProfile={async (ownerProfile) => saveSettings({ ownerProfile })} update={updateStatus} onStartUpdate={startDashboardUpdate} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
+        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} theme={dashboard.settings.theme} ownerProfile={dashboard.settings.ownerProfile} chats={chats} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onFinishOnboarding={async (choice, theme) => saveSettings({ knowledgeTrackingDefault: choice, theme })} onBuildPeopleDirectory={setupFirstRunPeopleDirectory} onSaveOwnerProfile={async (ownerProfile) => saveSettings({ ownerProfile })} update={updateStatus} onStartUpdate={startDashboardUpdate} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
+        <BetaSupportExperience open={betaSupportOpen} onClose={() => setBetaSupportOpen(false)} destination={dashboard.betaSupport ?? {}} version={dashboard.release.version} connection={dashboard.connection} currentView={view} />
         <UpdatePrompt update={updateStatus} onStartUpdate={startDashboardUpdate} />
       </div>
     </div>

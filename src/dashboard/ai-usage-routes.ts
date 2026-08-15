@@ -3,6 +3,7 @@ import type { AiService } from "../ai.js";
 import { type AmirosState, type TodoTask } from "../amiros-state.js";
 import type { AppConfig } from "../config.js";
 import { CURRENT_RELEASE, RELEASE_HISTORY } from "../release.js";
+import { uiBuildFingerprint } from "../ui-build-runtime.js";
 import { MODEL_OPTIONS } from "./settings-routes.js";
 
 type SendJson = (response: ServerResponse, status: number, value: unknown) => void;
@@ -65,6 +66,11 @@ export async function handleAiUsageApiRoute(options: AiUsageRouteOptions): Promi
     usage,
     monthlySpendUsd: state.monthlySpendUsd(),
     release: { ...CURRENT_RELEASE, history: RELEASE_HISTORY },
+    betaSupport: config.betaSupportEmail
+      ? { email: config.betaSupportEmail, build: uiBuildFingerprint()?.slice(0, 12) }
+      : config.betaSupportUrl
+        ? { url: config.betaSupportUrl, build: uiBuildFingerprint()?.slice(0, 12) }
+        : { build: uiBuildFingerprint()?.slice(0, 12) },
     drafts: state.listDrafts(),
     todos,
     activities: await activitiesWithContactNames(),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
-import { commitmentCoversReply, commitmentPresentation, compactRelationshipItemTitle, conciseTopicLabel, isOwnerContact, isRelationshipCommitmentNoise, normalizeTopicTitle, personSummary, relationshipItemTemporalText, topicLabelQuality, topicTitleForInsight } from "../ui/src/components/PeopleExperience.js";
+import { commitmentCoversReply, commitmentPresentation, compactRelationshipItemTitle, conciseTopicLabel, isOwnerContact, isRelationshipCommitmentNoise, normalizeTopicTitle, ownerPerspectiveSummary, personSummary, relationshipItemTemporalText, topicLabelQuality, topicTitleForInsight } from "../ui/src/components/PeopleExperience.js";
 import type { IntelligenceChat } from "../ui/src/types.js";
 
 describe("People experience", () => {
@@ -21,6 +21,17 @@ describe("People experience", () => {
 
     expect(isOwnerContact(owner, "Amir Friedman")).toBe(true);
     expect(personSummary(contact, "Amir Friedman")).toBe("Dani is a close friend who checks in regularly.");
+  });
+
+  it("describes contact relationships from the owner's perspective", () => {
+    expect(ownerPerspectiveSummary("Dani is Amir Friedman's partner. Amir and Dani live in Tel Aviv.", "Amir Friedman"))
+      .toBe("Dani is your partner. You and Dani live in Tel Aviv.");
+    expect(ownerPerspectiveSummary("Dani says Amir is reliable.", "Amir Friedman"))
+      .toBe("Dani says you are reliable.");
+    expect(personSummary({
+      contactName: "Dani", isGroup: false,
+      profile: { summary: "Dani is Amir's partner and close friend.", updatedAt: 1, sourceMessageCount: 2 },
+    } as IntelligenceChat, "Amir Friedman")).toBe("Dani is your partner and close friend.");
   });
 
   it("surfaces a newer autonomously confirmed current fact before an older profile is regenerated", () => {

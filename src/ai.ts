@@ -482,6 +482,7 @@ export function buildPersonalizedInstructions(context: ReplyContext, prompt = ""
 export function buildContactProfilePrompt(input: {
   contactName: string;
   relationship: string;
+  ownerName?: string;
   isGroup?: boolean;
   manualMemory: ContactMemoryItem[];
   memory: ConversationMemoryEntry[];
@@ -490,6 +491,7 @@ export function buildContactProfilePrompt(input: {
 }): string {
   const name = cleanInstructionValue(input.contactName, 120) || "This contact";
   const relationship = cleanInstructionValue(input.relationship, 80) || "Contact";
+  const ownerName = cleanInstructionValue(input.ownerName, 120) || "the owner";
   const manualFacts = input.manualMemory
     .slice(-100)
     .map((item) => `- ${cleanInstructionValue(item.content, 1_000)}`)
@@ -517,6 +519,7 @@ export function buildContactProfilePrompt(input: {
     .join("\n");
   return [
     `Create a useful private ${input.isGroup ? "group relationship" : "relationship"} profile for ${name}.`,
+    `Owner: ${ownerName}.`,
     `Configured relationship: ${relationship}.`,
     previous ? `Previous profile to improve:\n${previous}` : "",
     manualFacts ? `Operator-saved facts:\n${manualFacts}` : "",
@@ -821,6 +824,7 @@ export class AiService {
     chatId: string;
     contactName: string;
     relationship: string;
+    ownerName?: string;
     isGroup: boolean;
     manualMemory: ContactMemoryItem[];
     memory: ConversationMemoryEntry[];
@@ -828,15 +832,16 @@ export class AiService {
     previousSummary?: string;
   }): Promise<string> {
     this.assertAvailable();
+    const ownerName = cleanInstructionValue(input.ownerName, 120) || "the owner";
     const response = await this.client.responses.create({
       model: this.options.textModel,
       instructions: [
         input.isGroup ? "You create private group relationship profiles from conversation evidence while preserving participant attribution." : "You create private contact profiles from conversation evidence.",
         input.isGroup
           ? `Write one cohesive plain-text paragraph about ${input.contactName} in 90–170 words. Describe the group's purpose, relationship, communication norms, participant dynamics, and important recurring decisions or plans.`
-          : `Write one cohesive plain-text biographical paragraph about ${input.contactName} in 90–170 words. Begin with the person's name and naturally describe their relationship with Amir, communication style, personality, preferences, and important useful facts.`,
+          : `Write one cohesive plain-text relationship paragraph about ${input.contactName} in 90–170 words. Begin with the person's name and naturally describe their relationship with ${ownerName}, communication style, personality, preferences, and important useful facts. Write from ${ownerName}'s perspective: use “you” and “your” for ${ownerName}; never refer to ${ownerName} by name or in the third person.`,
         "Synthesize all supplied confirmed knowledge, operator-saved facts, conversation evidence, and the previous profile. Current canonical knowledge is authoritative when it conflicts with older conversation evidence or the previous profile. Historical knowledge is past context only and must never be stated as current truth.",
-        "Do not use headings, bullets, labels, lists, Markdown, or advice directed at Amir. Do not enumerate evidence. Mention a meaningful uncertainty naturally only when it materially changes the portrait.",
+        "Do not use headings, bullets, labels, lists, Markdown, or advice. Do not enumerate evidence. Mention a meaningful uncertainty naturally only when it materially changes the portrait.",
         "Separate facts from tentative inferences. Never diagnose health conditions or infer sensitive traits such as religion, ethnicity, sexual orientation, political affiliation, or medical status unless the person explicitly stated the fact and it is directly useful.",
         "Do not invent details. Keep the paragraph warm, specific, readable, and concise.",
       ].join(" "),

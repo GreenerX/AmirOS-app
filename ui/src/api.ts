@@ -294,11 +294,21 @@ export async function askIntelligence(
   });
 }
 
-export async function analyzeContactIntelligence(chatId: string): Promise<{
+export async function analyzeContactIntelligence(
+  chatId: string,
+  messageLimit?: number,
+  advanceLearningCursor = false,
+): Promise<{
   insights: ContactInsight[];
   commitments: RelationshipCommitment[];
 }> {
-  return request(`/api/contacts/${encodeURIComponent(chatId)}/intelligence/analyze`, { method: "POST", body: "{}" });
+  return request(`/api/contacts/${encodeURIComponent(chatId)}/intelligence/analyze`, {
+    method: "POST",
+    body: JSON.stringify({
+      ...(messageLimit ? { messageLimit } : {}),
+      ...(advanceLearningCursor ? { advanceLearningCursor: true } : {}),
+    }),
+  });
 }
 
 export async function updateContactInsight(

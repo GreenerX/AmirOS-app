@@ -65,6 +65,35 @@ function normalizedName(value: string) {
   return value.replace(/\s+/gu, " ").trim().toLocaleLowerCase();
 }
 
+function escapeExpression(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/**
+ * Profiles generated before the owner-perspective prompt may still refer to
+ * the owner by name. Keep those summaries personal while regeneration replaces
+ * their older prose.
+ */
+export function ownerPerspectiveSummary(summary: string, ownerName: string) {
+  const normalizedOwner = ownerName.replace(/\s+/gu, " ").trim();
+  if (!normalizedOwner) return summary;
+  const aliases = [...new Set([normalizedOwner, normalizedOwner.split(" ")[0] || ""])]
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  let personalized = summary;
+  for (const alias of aliases) {
+    const escaped = escapeExpression(alias);
+    personalized = personalized.replace(new RegExp(`\\b${escaped}(?:['’]s)\\b`, "giu"), "your");
+    personalized = personalized.replace(new RegExp(`\\b${escaped}\\b`, "giu"), "you");
+  }
+  return personalized
+    .replace(/\byou is\b/giu, "you are")
+    .replace(/\byou was\b/giu, "you were")
+    .replace(/\byou has\b/giu, "you have")
+    .replace(/\byou does\b/giu, "you do")
+    .replace(/(^|[.!?]\s+)you\b/gu, "$1You");
+}
+
 export function isOwnerContact(person: IntelligenceChat, ownerName: string) {
   const owner = normalizedName(ownerName);
   return Boolean(owner && normalizedName(person.contactName) === owner);
@@ -114,13 +143,14 @@ export function personSummary(person: IntelligenceChat, ownerName: string) {
   const record = person.isGroup ? person.groupSummary : person.profile;
   const owner = normalizedName(ownerName);
   const profileIsUsable = !person.profile?.staleAt || person.isGroup;
-  const candidates = record?.summary && profileIsUsable ? summarySentences(profileSummaryParagraph(
+  const sourceCandidates = record?.summary && profileIsUsable ? summarySentences(profileSummaryParagraph(
     relationshipSummarySource(record.summary),
     person.contactName,
   )).filter((sentence) => {
     const normalizedSentence = normalizedName(sentence);
     return !owner || !normalizedSentence.startsWith(owner);
   }) : [];
+  const candidates = sourceCandidates.map((sentence) => ownerPerspectiveSummary(sentence, ownerName));
   const relationshipOnly = candidates.filter(isRelationshipSentence);
   const selected = relationshipOnly.length ? relationshipOnly : candidates;
   // Profiles are derived and generated on demand. Canonical facts remain the

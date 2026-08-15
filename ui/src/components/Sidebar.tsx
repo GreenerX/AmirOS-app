@@ -1,4 +1,4 @@
-import { BarChart3, CalendarDays, ChevronDown, ContactRound, Home, ListChecks, Mail, PanelLeftClose, PanelLeftOpen, Settings, TerminalSquare, UsersRound } from "lucide-react";
+import { BarChart3, CalendarDays, ChevronDown, ContactRound, Home, LifeBuoy, ListChecks, Mail, PanelLeftClose, PanelLeftOpen, Settings, TerminalSquare, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import type { DashboardData, ViewName } from "../types";
@@ -39,9 +39,10 @@ type SidebarProps = {
   updateAvailable?: boolean;
   connection: DashboardData["connection"];
   onOpenReleaseNotes: () => void;
+  onOpenBetaSupport: () => void;
 };
 
-export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleCollapsed, profile, version, updateAvailable = false, connection, onOpenReleaseNotes }: SidebarProps) {
+export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleCollapsed, profile, version, updateAvailable = false, connection, onOpenReleaseNotes, onOpenBetaSupport }: SidebarProps) {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
 
@@ -124,6 +125,7 @@ export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleC
           <ChevronDown className={profileMenuOpen ? "profile-button-chevron open" : "profile-button-chevron"} size={18} aria-hidden="true" />
         </button>
       </div>
+      <button className="sidebar-support" type="button" onClick={onOpenBetaSupport} aria-label="Help and feedback"><LifeBuoy size={16} /><span>Help &amp; feedback</span></button>
       <button className={updateAvailable ? "sidebar-version update-available" : "sidebar-version"} type="button" onClick={onOpenReleaseNotes} title={updateAvailable ? "An AmirOS update is ready" : "View release notes"}>v{version}<span>{updateAvailable ? "Update ready" : "What’s new"}</span></button>
       <small className="sidebar-rights">© 2026 Amir Friedman.<br />All rights reserved.</small>
     </aside>

@@ -112,6 +112,22 @@ You do not need a GitHub account, and you do not need to copy files manually.
 
 ## Your private data
 
+## Beta help and feedback
+
+For a private beta, the person running AmirOS can configure a monitored support
+email address in `.env.local` before starting AmirOS:
+
+```dotenv
+AMIROS_BETA_SUPPORT_EMAIL=beta-support@example.com
+# Optional fallback if email is deliberately not configured:
+AMIROS_BETA_SUPPORT_URL=https://support.example.com/amiros-beta
+```
+
+The **Help & feedback** action prepares a report but never sends one by itself.
+Testers choose what to write and whether to include basic technical details.
+Any screenshot stays on their computer until they attach it in their email app.
+Do not ask testers to include API keys, QR codes, or private conversations.
+
 These items are never included in app updates and must never be shared:
 
 - `.env.local` — OpenAI API key and local settings

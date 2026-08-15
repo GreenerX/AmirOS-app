@@ -1,7 +1,8 @@
-import { Brain, Check, ChevronLeft, ChevronRight, KeyRound, LoaderCircle, MessageCircleMore, Palette, QrCode, Rocket, Sparkles, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Brain, Check, ChevronLeft, ChevronRight, Heart, KeyRound, LoaderCircle, MessageCircleMore, Palette, QrCode, Rocket, Sparkles, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { whatsappQrUrl } from "../api";
-import type { AmirOSRelease, AmirOSUpdateStatus, DashboardData, KnowledgeTrackingDefault, ThemeName } from "../types";
+import { FIRST_RUN_PEOPLE_SCAN_LIMIT, suggestedFirstRunPeople } from "../onboarding-people";
+import type { AmirOSRelease, AmirOSUpdateStatus, ChatSummary, DashboardData, KnowledgeTrackingDefault, ThemeName } from "../types";
 
 const ONBOARDING_KEY = "amiros.onboarding.completed";
 const RELEASE_KEY = "amiros.release-notes.seen";
@@ -11,7 +12,9 @@ type ReleaseExperienceProps = {
   knowledgeTrackingDefault: KnowledgeTrackingDefault;
   theme: ThemeName;
   ownerProfile: DashboardData["settings"]["ownerProfile"];
+  chats: ChatSummary[];
   onFinishOnboarding: (choice: KnowledgeTrackingDefault, theme: ThemeName) => Promise<void>;
+  onBuildPeopleDirectory: (chatIds: string[], onProgress: (completed: number, total: number) => void) => Promise<void>;
   onSaveOwnerProfile: (profile: DashboardData["settings"]["ownerProfile"]) => Promise<void>;
   apiKeyConfigured: boolean;
   connection: DashboardData["connection"];
@@ -35,12 +38,12 @@ const onboardingThemes: Array<{ id: ThemeName; name: string; colors: [string, st
 ];
 
 function StepProgress({ current }: { current: number }) {
-  return <div className="release-step-progress" aria-label={`Step ${current + 1} of 4`}>
-    {[0, 1, 2, 3].map((step) => <span key={step} className={step <= current ? "active" : ""} />)}
+  return <div className="release-step-progress" aria-label={`Step ${current + 1} of 5`}>
+    {[0, 1, 2, 3, 4].map((step) => <span key={step} className={step <= current ? "active" : ""} />)}
   </div>;
 }
 
-export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ownerProfile, onFinishOnboarding, onSaveOwnerProfile, apiKeyConfigured, connection, onSaveApiKey, onRelinkWhatsApp, update, onStartUpdate, forceReleaseOpen = false, onReleaseNotesClosed }: ReleaseExperienceProps) {
+export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ownerProfile, chats, onFinishOnboarding, onBuildPeopleDirectory, onSaveOwnerProfile, apiKeyConfigured, connection, onSaveApiKey, onRelinkWhatsApp, update, onStartUpdate, forceReleaseOpen = false, onReleaseNotesClosed }: ReleaseExperienceProps) {
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [step, setStep] = useState(0);
@@ -60,8 +63,16 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
   const [ownerProfileError, setOwnerProfileError] = useState<string>();
   const [startingUpdate, setStartingUpdate] = useState(false);
   const [updateError, setUpdateError] = useState<string>();
+  const [selectedPersonIds, setSelectedPersonIds] = useState<string[]>([]);
+  const [buildingPeopleDirectory, setBuildingPeopleDirectory] = useState(false);
+  const [peopleSetupError, setPeopleSetupError] = useState<string>();
+  const [peopleSetupProgress, setPeopleSetupProgress] = useState<{ completed: number; total: number }>();
   const releases = release.history?.length ? release.history : [release];
   const selectedRelease = releases.find((item) => item.version === selectedVersion) ?? release;
+  const suggestedPeople = useMemo(
+    () => suggestedFirstRunPeople(chats, ownerProfile.displayName),
+    [chats, ownerProfile.displayName],
+  );
 
   useEffect(() => {
     setSelectedVersion(release.version);
@@ -80,6 +91,11 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
   useEffect(() => {
     if (ownerProfile.displayName !== "You") setOwnerName(ownerProfile.displayName);
   }, [ownerProfile.displayName]);
+
+  useEffect(() => {
+    const suggestionIds = new Set(suggestedPeople.map((chat) => chat.id));
+    setSelectedPersonIds((current) => current.filter((chatId) => suggestionIds.has(chatId)));
+  }, [suggestedPeople]);
 
   useEffect(() => {
     if (connection.status !== "starting") setWaitingForQr(false);
@@ -120,6 +136,34 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
       finishOnboarding();
     } finally {
       setSavingTrackingChoice(false);
+    }
+  };
+
+  const toggleSuggestedPerson = (chatId: string) => {
+    if (buildingPeopleDirectory) return;
+    setPeopleSetupError(undefined);
+    setSelectedPersonIds((current) => current.includes(chatId)
+      ? current.filter((id) => id !== chatId)
+      : [...current, chatId]);
+  };
+
+  const finishWithPeopleSelection = async () => {
+    const chatIds = selectedPersonIds.filter((chatId) => suggestedPeople.some((chat) => chat.id === chatId));
+    if (chatIds.length === 0) {
+      await finishWithTrackingChoice();
+      return;
+    }
+    setBuildingPeopleDirectory(true);
+    setPeopleSetupError(undefined);
+    setPeopleSetupProgress({ completed: 0, total: chatIds.length });
+    try {
+      await onBuildPeopleDirectory(chatIds, (completed, total) => setPeopleSetupProgress({ completed, total }));
+      await onFinishOnboarding(trackingChoice, selectedTheme);
+      finishOnboarding();
+    } catch (error) {
+      setPeopleSetupError(error instanceof Error ? error.message : "AmirOS could not prepare those people yet.");
+    } finally {
+      setBuildingPeopleDirectory(false);
     }
   };
 
@@ -192,10 +236,13 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
           <label className={trackingChoice === "private" ? "selected" : ""}><input type="radio" name="knowledge-tracking" value="private" checked={trackingChoice === "private"} onChange={() => setTrackingChoice("private")} /><span><strong>Track private chats</strong><small>New one-to-one chats are tracked automatically. Groups still need approval.</small></span></label>
           <label className={trackingChoice === "off" ? "selected" : ""}><input type="radio" name="knowledge-tracking" value="off" checked={trackingChoice === "off"} onChange={() => setTrackingChoice("off")} /><span><strong>Keep tracking off</strong><small>AmirOS will not make new knowledge suggestions unless you enable a chat.</small></span></label>
         </div><div className="onboarding-theme-picker"><div><Palette size={17} /><span><strong>Choose a color theme</strong><small>All themes are available in Settings later.</small></span></div><div role="radiogroup" aria-label="AmirOS color theme">{onboardingThemes.map((option) => <button key={option.id} type="button" role="radio" aria-checked={selectedTheme === option.id} className={selectedTheme === option.id ? "selected" : ""} onClick={() => { setSelectedTheme(option.id); document.documentElement.dataset.theme = option.id; }}><span className="onboarding-theme-swatches" aria-hidden="true">{option.colors.map((color) => <i key={color} style={{ background: color }} />)}</span><span>{option.name}</span>{selectedTheme === option.id ? <Check size={13} /> : null}</button>)}</div></div></> : null}
+        {step === 4 ? <><div className="onboarding-intro"><span className="onboarding-hero-icon"><Brain size={34} /></span><div><h3>Start with the people you talk to most.</h3><p>Choose who AmirOS should get to know first. It will only read the newest {FIRST_RUN_PEOPLE_SCAN_LIMIT} messages in chats you select.</p></div></div>
+          {!apiKeyConfigured ? <div className="onboarding-people-empty"><strong>Add an OpenAI API key to build your People directory.</strong><small>You can still finish setup now and choose people later.</small></div> : connection.status !== "ready" ? <div className="onboarding-people-empty"><strong>Link WhatsApp to choose people.</strong><small>You can still finish setup now and choose people later.</small></div> : suggestedPeople.length === 0 ? <div className="onboarding-people-empty"><strong>No recent direct chats are ready yet.</strong><small>Once WhatsApp finishes syncing, you can choose people from Inbox.</small></div> : <><div className="onboarding-people-toolbar"><span>{suggestedPeople.length} recent people · favorites first</span><button type="button" disabled={buildingPeopleDirectory} onClick={() => setSelectedPersonIds((current) => current.length === suggestedPeople.length ? [] : suggestedPeople.map((chat) => chat.id))}>{selectedPersonIds.length === suggestedPeople.length ? "Clear" : "Select all"}</button></div><div className="onboarding-people-list" role="group" aria-label="People to learn about">{suggestedPeople.map((chat) => <label key={chat.id} className={selectedPersonIds.includes(chat.id) ? "selected" : ""}><input type="checkbox" checked={selectedPersonIds.includes(chat.id)} disabled={buildingPeopleDirectory} onChange={() => toggleSuggestedPerson(chat.id)} /><img src={chat.avatarUrl} alt="" /><span><strong>{chat.name}</strong><small>{chat.pinned ? <><Heart size={12} fill="currentColor" /> Favorite</> : "Recent conversation"}</small></span></label>)}</div><small className="onboarding-people-note">Nothing is read from people you leave unselected. Groups are always set up separately.</small></>}
+          {peopleSetupProgress ? <div className="onboarding-people-progress" role="status"><LoaderCircle className={buildingPeopleDirectory ? "spin" : ""} size={17} /><span><strong>{buildingPeopleDirectory ? `Preparing ${peopleSetupProgress.completed + 1} of ${peopleSetupProgress.total}` : "People setup is ready"}</strong><small>AmirOS is building private relationship context on this computer.</small></span></div> : null}{peopleSetupError ? <p className="onboarding-inline-error" role="alert">{peopleSetupError}</p> : null}</> : null}
       </div>
       <footer>
         <button className="button compact ghost" type="button" disabled={step === 0} onClick={() => setStep((current) => Math.max(0, current - 1))}><ChevronLeft size={16} /> Back</button>
-        {step < 3 ? <button className="button primary compact" type="button" disabled={step === 0 && savingOwnerProfile} onClick={() => step === 0 ? void continueFromWelcome() : setStep((current) => Math.min(3, current + 1))}>{step === 0 && savingOwnerProfile ? "Saving…" : "Continue"} <ChevronRight size={16} /></button> : <button className="button primary compact" type="button" disabled={savingTrackingChoice} onClick={() => void finishWithTrackingChoice()}>{savingTrackingChoice ? "Saving…" : "Open AmirOS"} <Check size={16} /></button>}
+        {step < 4 ? <button className="button primary compact" type="button" disabled={step === 0 && savingOwnerProfile} onClick={() => step === 0 ? void continueFromWelcome() : setStep((current) => Math.min(4, current + 1))}>{step === 0 && savingOwnerProfile ? "Saving…" : "Continue"} <ChevronRight size={16} /></button> : <button className="button primary compact" type="button" disabled={savingTrackingChoice || buildingPeopleDirectory} onClick={() => void finishWithPeopleSelection()}>{buildingPeopleDirectory ? "Building your People…" : selectedPersonIds.length ? "Build my People directory" : savingTrackingChoice ? "Saving…" : "Open AmirOS"} {buildingPeopleDirectory ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}</button>}
       </footer>
     </section> : null}
     {releaseOpen ? <section className="release-dialog release-notes-dialog" role="dialog" aria-modal="true" aria-labelledby="amiros-release-title">

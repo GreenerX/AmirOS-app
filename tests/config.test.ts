@@ -56,6 +56,13 @@ describe("model presets", () => {
     })).toThrow(/valid http or https URL/);
   });
 
+  it("accepts a safe beta support destination and validates its optional email fallback", () => {
+    expect(loadConfig({ OPENAI_API_KEY: "test", AMIROS_BETA_SUPPORT_URL: "https://support.example.com/amiros/" }).betaSupportUrl).toBe("https://support.example.com/amiros");
+    expect(loadConfig({ OPENAI_API_KEY: "test", AMIROS_BETA_SUPPORT_EMAIL: "beta@example.com" }).betaSupportEmail).toBe("beta@example.com");
+    expect(() => loadConfig({ OPENAI_API_KEY: "test", AMIROS_BETA_SUPPORT_URL: "http://support.example.com" })).toThrow(/https URL/);
+    expect(() => loadConfig({ OPENAI_API_KEY: "test", AMIROS_BETA_SUPPORT_URL: "https://support.example.com/?token=secret" })).toThrow(/query parameters/);
+  });
+
   it("stores a customer key only in the local env file and replaces an existing value", () => {
     const directory = mkdtempSync(join(tmpdir(), "amiros-config-test-"));
     const envPath = join(directory, ".env.local");

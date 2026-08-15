@@ -982,6 +982,7 @@ async function listChats(
         timestamp,
         preview: safeMessagePreview(replaceMentionIdsWithNames(chat.lastMessage?.body || "", previewMentions)),
         mode: state.getContact(id).mode,
+        pinned: state.getContact(id).pinned,
         avatarUrl: `/api/chats/${encodeURIComponent(id)}/avatar`,
         archived: Boolean(chat.archived || chat.archive),
       };
@@ -2806,6 +2807,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
           chatId,
           contactName: contactName || "WhatsApp contact",
           relationship: contact.relationship,
+          ownerName: state.getSettings().ownerProfile.displayName,
           isGroup: chatId.endsWith("@g.us"),
           manualMemory,
           memory,
@@ -2827,7 +2829,12 @@ export function startAmirosDashboard(options: DashboardOptions) {
       const analyzeMatch = pathname.match(/^\/api\/contacts\/([^/]+)\/intelligence\/analyze$/);
       if (request.method === "POST" && analyzeMatch?.[1]) {
         const chatId = decodeURIComponent(analyzeMatch[1]);
-        const memory = state.getConversationMemory(chatId, 400);
+        const body = await readJson<{ messageLimit?: number; advanceLearningCursor?: boolean }>(request);
+        const requestedMessageLimit = Number(body.messageLimit);
+        const messageLimit = Number.isFinite(requestedMessageLimit)
+          ? Math.max(2, Math.min(400, Math.floor(requestedMessageLimit)))
+          : 400;
+        const memory = state.getConversationMemory(chatId, messageLimit);
         if (memory.length < 2) {
           sendJson(response, 400, { error: "At least two saved messages are needed for relationship analysis" });
           return;
@@ -2847,6 +2854,13 @@ export function startAmirosDashboard(options: DashboardOptions) {
           knownSubjectNames: state.getKnownKnowledgeSubjectNames(),
         });
         const intelligence = state.mergeRoutedAnalyzedIntelligence(chatId, analysis).source;
+        // The first-run flow deliberately scans a bounded batch before
+        // enabling normal tracking. Its analysis can explicitly advance the
+        // learner cursor, which prevents the future automatic learner from
+        // paying to analyze that same imported batch again.
+        if (body.advanceLearningCursor === true || state.getContact(chatId).knowledgeTracking === "enabled") {
+          state.markKnowledgeMessagesAnalyzed(chatId, memory);
+        }
         ai.clearConversation(chatId);
         state.addActivity("system", "Relationship intelligence refreshed", contactName);
         sendJson(response, 200, intelligence);

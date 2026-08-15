@@ -325,6 +325,7 @@ export const demoDashboard: DashboardData = {
       },
     ],
   },
+  betaSupport: {},
   connection: { status: "ready", detail: "Listening for WhatsApp messages" },
   paused: false,
   preset: "economy",

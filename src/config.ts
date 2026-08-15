@@ -76,6 +76,8 @@ export type AppConfig = {
   allowGroups: boolean;
   amirosPort: number;
   amirosPublicUrl?: string;
+  betaSupportUrl?: string;
+  betaSupportEmail?: string;
   whatsappSessionPath: string;
   puppeteerExecutablePath?: string;
   puppeteerNoSandbox: boolean;
@@ -134,6 +136,25 @@ function publicAmirosUrl(env: NodeJS.ProcessEnv): string | undefined {
   } catch {
     throw new Error("AMIROS_PUBLIC_URL must be a valid http or https URL");
   }
+}
+
+function betaSupportUrl(env: NodeJS.ProcessEnv): string | undefined {
+  const value = optional(env, "AMIROS_BETA_SUPPORT_URL");
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error();
+    return url.toString().replace(/\/$/u, "");
+  } catch {
+    throw new Error("AMIROS_BETA_SUPPORT_URL must be an https URL without credentials, query parameters, or fragments");
+  }
+}
+
+function betaSupportEmail(env: NodeJS.ProcessEnv): string | undefined {
+  const value = optional(env, "AMIROS_BETA_SUPPORT_EMAIL");
+  if (!value) return undefined;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) throw new Error("AMIROS_BETA_SUPPORT_EMAIL must be a valid email address");
+  return value;
 }
 
 function booleanValue(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {
@@ -237,6 +258,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     allowGroups: booleanValue(env, "ALLOW_GROUPS", false),
     amirosPort: positiveInteger(env, "AMIROS_PORT", 3789),
     amirosPublicUrl: publicAmirosUrl(env),
+    betaSupportUrl: betaSupportUrl(env),
+    betaSupportEmail: betaSupportEmail(env),
     whatsappSessionPath: optional(env, "WHATSAPP_SESSION_PATH") || ".wwebjs_auth",
     puppeteerExecutablePath:
       optional(env, "PUPPETEER_EXECUTABLE_PATH") || defaultChromePath(),

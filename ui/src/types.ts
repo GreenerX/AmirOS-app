@@ -92,6 +92,7 @@ export type Activity = {
 
 export type DashboardData = {
   release: AmirOSRelease;
+  betaSupport: { url?: string; email?: string; build?: string };
   connection: {
     status: "starting" | "qr" | "authenticated" | "ready" | "disconnected";
     detail: string;
@@ -149,6 +150,8 @@ export type ChatSummary = {
   id: string;
   name: string;
   isGroup: boolean;
+  /** Existing favorite state; used to prioritize first-run People suggestions. */
+  pinned?: boolean;
   unreadCount: number;
   timestamp: number;
   preview: string;
