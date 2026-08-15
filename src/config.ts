@@ -150,8 +150,26 @@ function betaSupportUrl(env: NodeJS.ProcessEnv): string | undefined {
   }
 }
 
+/**
+ * The official private-beta destination is public configuration, not customer
+ * data. Reading it from the tracked example file lets an updated installation
+ * gain the support destination even when its updater correctly preserves an
+ * older private `.env` file. Local environment values always take precedence.
+ */
+export function betaSupportEmailFromExample(filePath = resolve(".env.example")): string | undefined {
+  if (!existsSync(filePath)) return undefined;
+  try {
+    return dotenv.parse(readFileSync(filePath, "utf8")).AMIROS_BETA_SUPPORT_EMAIL?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function betaSupportEmail(env: NodeJS.ProcessEnv): string | undefined {
-  const value = optional(env, "AMIROS_BETA_SUPPORT_EMAIL");
+  const value = optional(env, "AMIROS_BETA_SUPPORT_EMAIL")
+    // Unit tests and isolated callers pass an explicit environment object.
+    // Only the real runtime may inherit the tracked public beta default.
+    || (env === process.env ? betaSupportEmailFromExample() : undefined);
   if (!value) return undefined;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) throw new Error("AMIROS_BETA_SUPPORT_EMAIL must be a valid email address");
   return value;

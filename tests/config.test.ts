@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, normalizeOpenAiApiKey, saveOpenAiApiKey } from "../src/config.js";
+import { betaSupportEmailFromExample, loadConfig, normalizeOpenAiApiKey, saveOpenAiApiKey } from "../src/config.js";
 
 describe("model presets", () => {
   it("uses economy by default", () => {
@@ -61,6 +61,18 @@ describe("model presets", () => {
     expect(loadConfig({ OPENAI_API_KEY: "test", AMIROS_BETA_SUPPORT_EMAIL: "beta@example.com" }).betaSupportEmail).toBe("beta@example.com");
     expect(() => loadConfig({ OPENAI_API_KEY: "test", AMIROS_BETA_SUPPORT_URL: "http://support.example.com" })).toThrow(/https URL/);
     expect(() => loadConfig({ OPENAI_API_KEY: "test", AMIROS_BETA_SUPPORT_URL: "https://support.example.com/?token=secret" })).toThrow(/query parameters/);
+  });
+
+  it("can read the public beta support default without treating private environment data as configuration", () => {
+    const directory = mkdtempSync(join(tmpdir(), "amiros-beta-support-test-"));
+    const examplePath = join(directory, ".env.example");
+    try {
+      writeFileSync(examplePath, "AMIROS_BETA_SUPPORT_EMAIL=beta@example.com\n", "utf8");
+      expect(betaSupportEmailFromExample(examplePath)).toBe("beta@example.com");
+      expect(loadConfig({ OPENAI_API_KEY: "test" }).betaSupportEmail).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("stores a customer key only in the local env file and replaces an existing value", () => {

@@ -708,11 +708,13 @@ export function App() {
 
   const setupFirstRunPeopleDirectory = async (
     chatIds: string[],
+    futureTracking: KnowledgeTrackingStatus,
     onProgress: (completed: number, total: number) => void,
   ) => {
     await buildFirstRunPeopleDirectory(chatIds, {
       onProgress,
-      enableKnowledgeTracking: async (chatId) => { await updateContact(chatId, { knowledgeTracking: "enabled" }); },
+      futureTracking,
+      setKnowledgeTracking: async (chatId, status) => { await updateContact(chatId, { knowledgeTracking: status }); },
       scanHistory: scanChatHistory,
       analyzeRelationship: async (chatId, messageLimit, advanceLearningCursor) => {
         await analyzeContactIntelligence(chatId, messageLimit, advanceLearningCursor);

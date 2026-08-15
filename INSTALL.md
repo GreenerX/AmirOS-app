@@ -114,9 +114,11 @@ You do not need a GitHub account, and you do not need to copy files manually.
 
 ## Beta help and feedback
 
-The official private-beta package includes the monitored beta support email.
-To change it for a different private beta, add a monitored support address in
-`.env.local` before starting AmirOS:
+The official private-beta support address is stored in the tracked
+`.env.example`. This lets an existing install receive the official destination
+after an update without replacing its private `.env` file. To change it for a
+different private beta, add a monitored support address in `.env.local` before
+starting AmirOS:
 
 ```dotenv
 AMIROS_BETA_SUPPORT_EMAIL=amirfriedman@icloud.com
@@ -124,7 +126,8 @@ AMIROS_BETA_SUPPORT_EMAIL=amirfriedman@icloud.com
 AMIROS_BETA_SUPPORT_URL=https://support.example.com/amiros-beta
 ```
 
-The **Help & feedback** action prepares a report but never sends one by itself.
+An explicit `.env.local` or `.env` value takes precedence over the official
+default. The **Help & feedback** action prepares a report but never sends one by itself.
 Testers choose what to write and whether to include basic technical details.
 Any screenshot stays on their computer until they attach it in their email app.
 Do not ask testers to include API keys, QR codes, or private conversations.

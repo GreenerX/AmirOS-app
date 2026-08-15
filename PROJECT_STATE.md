@@ -38,7 +38,15 @@
 
 - Beta support is a client-side handoff only. `AMIROS_BETA_SUPPORT_EMAIL` is
   preferred over `AMIROS_BETA_SUPPORT_URL`; no outbound service or telemetry
-  is introduced.
+  is introduced. The official public beta email lives in `.env.example` as a
+  safe runtime fallback so an update can supply it without overwriting a
+  tester’s private `.env`; explicit `.env.local` and `.env` settings win.
+
+- First-run People setup is intentionally two choices: a selected chat gets a
+  bounded, one-time AI profile only after the owner explicitly consents to
+  sending up to 150 newest messages to their configured OpenAI account. Future
+  knowledge tracking is separate and defaults to the owner’s tracking choice;
+  it is never silently enabled merely because a one-time profile was selected.
 
 - `ui/src/components/Overview.tsx` keeps the UI-specific day filter local, reusing `buildIntelligenceSnapshot` as the canonical source of confirmed, chronological calendar events.
 - Contact photos are sourced from the existing chat avatar pipeline through `ContactAvatar`; non-person Today’s Focus cards request a relevant `gpt-image-1.5` icon and cache it privately under `work/todays-focus-icons`, while semantic icons remain the immediate and failure-safe fallback.

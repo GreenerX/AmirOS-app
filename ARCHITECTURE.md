@@ -668,9 +668,13 @@ This separation is intentional and should not be collapsed casually.
 The dashboard has one persistent Help & feedback entry in the sidebar. It is a
 client-side report composer, not a telemetry or support service. The dashboard
 API exposes only a configured `AMIROS_BETA_SUPPORT_EMAIL` (preferred) or
-`AMIROS_BETA_SUPPORT_URL` fallback and a short UI build fingerprint. The
-configuration parser accepts only credential-free HTTPS support URLs with no
-query or fragment, and validates the email fallback.
+`AMIROS_BETA_SUPPORT_URL` fallback and a short UI build fingerprint. For the
+official private beta, the public support email may be read from the tracked
+`.env.example` when no local destination exists; explicit `.env.local` and
+`.env` values still take precedence. This makes the destination available to
+existing installs after a code update without replacing their private config.
+The configuration parser accepts only credential-free HTTPS support URLs with
+no query or fragment, and validates the email fallback.
 
 The client builds a bounded report from fields the tester explicitly enters.
 Diagnostics are off by default and contain only version/build, timestamp, a

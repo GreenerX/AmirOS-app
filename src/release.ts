@@ -30,19 +30,19 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-15",
-  headline: "A safer, more personal start for private beta",
+  headline: "Clearer consent for private beta",
   notes: [
     {
-      title: "Start with the people who matter most",
-      detail: "First-run setup can suggest up to 12 recent one-to-one chats, placing your Favorites first. AmirOS reads only the newest 150 messages from people you explicitly choose.",
+      title: "Choose a one-time People profile",
+      detail: "Before AmirOS uses your configured OpenAI account for a selected chat, setup clearly shows the 150-message limit and asks for your confirmation.",
     },
     {
-      title: "Help is always close",
-      detail: "The new Help & feedback action prepares a clear bug report, feedback note, feature request, or setup question for your beta support contact—only when you choose to send it.",
+      title: "Learning stays your choice",
+      detail: "A one-time profile no longer turns on future learning. Keep learning is a separate choice, while your existing tracking setting is still respected.",
     },
     {
-      title: "People descriptions feel personal",
-      detail: "Contact summaries now speak directly to you, so relationship context reads naturally instead of referring to you in the third person.",
+      title: "Beta help remains available after updates",
+      detail: "The Help & feedback destination now remains available when an existing AmirOS install updates, without replacing private settings.",
     },
   ],
 };
@@ -53,6 +53,25 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.10.2",
+    releasedAt: "2026-08-15",
+    headline: "A safer, more personal start for private beta",
+    notes: [
+      {
+        title: "Start with the people who matter most",
+        detail: "First-run setup can suggest up to 12 recent one-to-one chats, placing your Favorites first. AmirOS reads only the newest 150 messages from people you explicitly choose.",
+      },
+      {
+        title: "Help is always close",
+        detail: "The new Help & feedback action prepares a clear bug report, feedback note, feature request, or setup question for your beta support contact—only when you choose to send it.",
+      },
+      {
+        title: "People descriptions feel personal",
+        detail: "Contact summaries now speak directly to you, so relationship context reads naturally instead of referring to you in the third person.",
+      },
+    ],
+  },
   {
     version: "0.10.1",
     releasedAt: "2026-08-15",

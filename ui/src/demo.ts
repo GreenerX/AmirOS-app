@@ -167,15 +167,25 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.10.2",
+    version: "0.10.3",
     releasedAt: "2026-08-15",
-    headline: "A safer, more personal start for private beta",
+    headline: "Clearer consent for private beta",
     notes: [
-      { title: "Start with the people who matter most", detail: "Choose up to 12 recent direct chats to start your People directory, with Favorites first and a clear 150-message limit." },
-      { title: "Help is always close", detail: "Prepare a bug report, feedback note, feature request, or setup question for your beta support contact when you choose to send it." },
-      { title: "People descriptions feel personal", detail: "Contact summaries now speak directly to you rather than referring to you in the third person." },
+      { title: "Choose a one-time People profile", detail: "Before a selected chat uses your configured OpenAI account, setup shows the 150-message limit and asks for your confirmation." },
+      { title: "Learning stays your choice", detail: "A one-time profile no longer turns on future learning. Keep learning is a separate choice." },
+      { title: "Beta help remains available after updates", detail: "Help & feedback remains available after an existing AmirOS install updates, without replacing private settings." },
     ],
     history: [
+      {
+        version: "0.10.3",
+        releasedAt: "2026-08-15",
+        headline: "Clearer consent for private beta",
+        notes: [
+          { title: "Choose a one-time People profile", detail: "Before a selected chat uses your configured OpenAI account, setup shows the 150-message limit and asks for your confirmation." },
+          { title: "Learning stays your choice", detail: "A one-time profile no longer turns on future learning. Keep learning is a separate choice." },
+          { title: "Beta help remains available after updates", detail: "Help & feedback remains available after an existing AmirOS install updates, without replacing private settings." },
+        ],
+      },
       {
         version: "0.10.2",
         releasedAt: "2026-08-15",

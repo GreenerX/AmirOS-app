@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.10.3] - 2026-08-15
+
+### Changed
+
+- Separated first-run one-time People profiling from ongoing Knowledge Tracking. Selecting a person never enables future learning by itself.
+- Added an explicit consent step before setup sends up to 150 newest messages from a selected chat to the owner’s configured OpenAI account.
+
+### Fixed
+
+- Fixed the “Keep tracking off” choice being overridden for chats selected during first-run People setup.
+- Fixed the official beta Help & feedback email not reaching existing installs after an update that preserves their private configuration.
+
+### Testing
+
+- Added coverage for the first-run analysis consent gate, tracking-status selection, and the public beta support-destination fallback.
+
 ## [0.10.2] - 2026-08-15
 
 ### Added
