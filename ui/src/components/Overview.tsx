@@ -28,7 +28,7 @@ import { compactNumber, formatDateTime, formatTime, timeOfDayGreeting } from "..
 import { hideIntelligenceAction, readHiddenIntelligenceActions, replyActionId } from "../intelligence-visibility";
 import { buildIntelligenceSnapshot, isKnownIntelligenceContactName } from "../intelligence-snapshot";
 import { replyAssessmentCopy } from "../reply-assessment-copy";
-import { buildTodaysFocus, todaysFocusPresentation, type TodaysFocusItem } from "../todays-focus";
+import { buildTodaysFocus, todaysFocusDismissalIds, todaysFocusPresentation, type TodaysFocusItem } from "../todays-focus";
 import type { Activity, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, ProactiveIntelligenceItem, TodoTask, ViewName } from "../types";
 import { ContactAvatar } from "./ContactAvatar";
 import { TodoEditorDialog } from "./IntelligenceView";
@@ -141,7 +141,7 @@ function compactNextBestText(value: string, maxLength = 96) {
   return `${cut.slice(0, lastSpace > 48 ? lastSpace : maxLength).trimEnd()}…`;
 }
 
-const HIDDEN_TODAYS_FOCUS_STORAGE_KEY = "amiros.hidden-todays-focus.v1";
+const HIDDEN_TODAYS_FOCUS_STORAGE_KEY = "amiros.hidden-todays-focus.v2";
 
 function readHiddenTodaysFocus(): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -348,11 +348,16 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
     onOpenNextBestAction(item.chatId, item.messageId);
   };
 
-  const hideTodaysFocus = (itemId: string) => {
+  const hideTodaysFocus = (itemIds: string[]) => {
     setHiddenTodaysFocus((current) => {
-      if (current.has(itemId)) return current;
       const next = new Set(current);
-      next.add(itemId);
+      let changed = false;
+      for (const itemId of itemIds) {
+        if (next.has(itemId)) continue;
+        next.add(itemId);
+        changed = true;
+      }
+      if (!changed) return current;
       try {
         window.sessionStorage.setItem(HIDDEN_TODAYS_FOCUS_STORAGE_KEY, JSON.stringify([...next]));
       } catch {
@@ -362,11 +367,10 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
     });
   };
   const dismissTodaysFocus = async (item: TodaysFocusItem) => {
+    hideTodaysFocus(todaysFocusDismissalIds(item));
     if (item.proactive) {
       await onProactiveDecision(item.proactive, "dismissed");
-      return;
     }
-    hideTodaysFocus(item.id);
   };
   const removeTodo = async (todo: TodoTask & { contactName: string }) => {
     if (!window.confirm(`Remove “${todo.title}” from your to-do list?`)) return;
@@ -394,10 +398,9 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
               <small>{focusPresentation.subtitle}</small>
             </span>
           </div>
-          {visibleTodaysFocus.length > 4 ? <button className="button compact ghost todays-focus-view-all" type="button" onClick={() => onNavigate("intelligence")}>View all <ArrowRight size={14} /></button> : null}
         </div>
-        {visibleTodaysFocus.length > 0 ? <div className={`overview-reminders-list todays-focus-grid todays-focus-grid-${Math.min(visibleTodaysFocus.length, 4)}`}>
-          {visibleTodaysFocus.slice(0, 4).map((item) => {
+        {visibleTodaysFocus.length > 0 ? <div className="overview-reminders-list todays-focus-grid">
+          {visibleTodaysFocus.map((item) => {
             const category = item.proactive
               ? item.proactive.kind === "upcoming_context" ? "Worth knowing"
                 : item.proactive.kind === "meaningful_change" ? "Recent change"
@@ -412,14 +415,14 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
             const isPersonFocus = Boolean(item.proactive) || isBirthday || item.type === "commitment" || item.action === "reply";
             const chat = isPersonFocus ? chats.find((candidate) => candidate.id === item.chatId) : undefined;
             const itemIcon = isBirthday
-              ? <CakeSlice size={26} />
+              ? <CakeSlice size={30} />
               : item.action === "todo"
-                ? <ListTodo size={26} />
+                ? <ListTodo size={30} />
                 : item.action === "calendar"
-                  ? <CalendarCheck size={26} />
+                  ? <CalendarCheck size={30} />
                   : item.action === "reply"
-                    ? <MessageCircle size={26} />
-                    : <BellRing size={26} />;
+                    ? <MessageCircle size={30} />
+                    : <BellRing size={30} />;
             const openItem = () => openTodaysFocus(item);
             return <article
               className={`overview-reminder todays-focus-item todays-focus-${item.type} ${item.priority === 0 ? "is-overdue" : ""}`}

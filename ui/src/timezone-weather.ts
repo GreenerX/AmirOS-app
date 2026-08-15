@@ -33,6 +33,7 @@ export type WeatherVisual = {
 
 const UNIT_STORAGE_KEY = "amiros.overview-temperature-unit.v1";
 const CITIES_STORAGE_KEY = "amiros.overview-timezones.v1";
+export const MAX_SAVED_TIMEZONE_CITIES = 4;
 
 function validCity(value: unknown): value is SavedTimeZoneCity {
   if (!value || typeof value !== "object") return false;
@@ -60,7 +61,7 @@ export function saveTemperatureUnit(unit: TemperatureUnit): void {
 export function readSavedTimeZoneCities(): SavedTimeZoneCity[] {
   try {
     const value: unknown = JSON.parse(window.localStorage.getItem(CITIES_STORAGE_KEY) || "[]");
-    return Array.isArray(value) ? value.filter(validCity).slice(0, 3) : [];
+    return Array.isArray(value) ? value.filter(validCity).slice(0, MAX_SAVED_TIMEZONE_CITIES) : [];
   } catch {
     return [];
   }
@@ -68,7 +69,7 @@ export function readSavedTimeZoneCities(): SavedTimeZoneCity[] {
 
 export function saveTimeZoneCities(cities: SavedTimeZoneCity[]): void {
   try {
-    window.localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(cities.slice(0, 3)));
+    window.localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(cities.slice(0, MAX_SAVED_TIMEZONE_CITIES)));
   } catch {
     // Cards remain usable for this session if storage is unavailable.
   }

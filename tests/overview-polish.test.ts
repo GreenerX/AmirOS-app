@@ -52,6 +52,9 @@ describe("Overview polish", () => {
     expect(overview).toContain("formatTime(item.timestamp)");
     expect(overview).not.toContain("todays-focus-action");
     expect(overview).not.toContain("Why this is here:");
+    expect(overview).toContain("visibleTodaysFocus.map");
+    expect(overview).not.toContain("visibleTodaysFocus.slice(0, 4)");
+    expect(overview).toContain("todaysFocusDismissalIds(item)");
     expect(overview).not.toContain("overview-action-strip");
     expect(overview).toContain("todaysAgenda.map");
     expect(overview).toContain("data-event-count");
@@ -80,10 +83,11 @@ describe("Overview polish", () => {
     expect(styles).toContain("font-size: clamp(17px, 1.15vw, 19px)");
     expect(styles).toContain(".overview-quote figcaption { margin-top: 7px");
     expect(styles).toContain("height: 105px; max-height: 105px");
-    expect(styles).toContain("width: fit-content; min-width: 230px");
-    expect(styles).toContain("max-width: min(540px, calc(100vw - 42px))");
-    expect(styles).toContain("grid-template-columns: 48px minmax(0, max-content)");
-    expect(styles).toContain("padding: 7px 20px 6px 14px");
+    expect(styles).toContain("width: fit-content; min-width: 250px");
+    expect(styles).toContain("max-width: min(580px, calc(100vw - 42px))");
+    expect(styles).toContain("grid-template-columns: 60px minmax(0, max-content)");
+    expect(styles).toContain("padding: 7px 20px 6px 12px");
+    expect(styles).toContain("width: 60px; height: 60px");
     expect(styles).not.toContain("-webkit-line-clamp: 1");
     expect(styles).toContain("flex-wrap: nowrap");
     expect(styles).toContain("overflow-x: auto");
@@ -125,7 +129,8 @@ describe("Overview polish", () => {
     expect(header).toContain("premium-weather-icon");
     expect(header).toContain('aria-label="Clock format"');
     expect(header).toContain('setTimeFormat("24-hour")');
-    expect(header).toContain("Maximum 3 timezones");
+    expect(header).toContain("Maximum 4 timezones");
+    expect(header).toContain("Up to four cities");
     expect(header).not.toContain("Add timezone placeholder");
     expect(styles).toContain(".overview-timezone-spacer { width: 100%; min-height: 112px; }");
     expect(styles).toContain("--timezone-overlay-strong");

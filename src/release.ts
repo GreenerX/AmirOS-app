@@ -29,24 +29,24 @@ export const AMIROS_VERSION = packageVersion();
 
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
-  releasedAt: "2026-08-13",
-  headline: "Memory you can correct, wherever you use AmirOS",
+  releasedAt: "2026-08-15",
+  headline: "A fuller daily focus and four world clocks",
   notes: [
     {
-      title: "Correct AmirOS naturally",
-      detail: "Tell Ask AmirOS or the owner WhatsApp bot that a memory is wrong, historical, unwanted, or newly changed. AmirOS updates canonical knowledge only after the intended fact is clear.",
+      title: "See the complete day at a glance",
+      detail: "Today’s Focus keeps every eligible event and action in one horizontal rail instead of hiding additional cards until another one is dismissed.",
     },
     {
-      title: "Corrections stay safe and auditable",
-      detail: "Original evidence and appropriate history remain available, corrected claims stay suppressed, profile text refreshes when truth changes, and ambiguous requests ask for clarification instead of guessing.",
+      title: "Clearer visual identities",
+      detail: "Generated event artwork and contact photos are larger, while adaptive card widths keep complete titles and concise supporting details readable.",
     },
     {
-      title: "WhatsApp is AmirOS on the go",
-      detail: "The owner bot now shares the same memory-correction capability as the dashboard and carries a bounded, restart-safe reference to the knowledge behind its latest answer.",
+      title: "Dismiss once",
+      detail: "Dismissing a proactive card also hides equivalent cards backed by the same event, task, or commitment instead of letting the same item immediately return in another form.",
     },
     {
-      title: "Focus cards fit their message",
-      detail: "Today’s Focus uses shorter AI-assisted summaries, flexible card widths, complete titles, and less supporting chrome so useful context remains readable in one compact row.",
+      title: "Keep four cities close",
+      detail: "The Overview world clock now supports up to four saved timezone cards with the same weather, artwork, and persistent preferences.",
     },
   ],
 };
@@ -57,6 +57,29 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.10.0",
+    releasedAt: "2026-08-13",
+    headline: "Memory you can correct, wherever you use AmirOS",
+    notes: [
+      {
+        title: "Correct AmirOS naturally",
+        detail: "Tell Ask AmirOS or the owner WhatsApp bot that a memory is wrong, historical, unwanted, or newly changed. AmirOS updates canonical knowledge only after the intended fact is clear.",
+      },
+      {
+        title: "Corrections stay safe and auditable",
+        detail: "Original evidence and appropriate history remain available, corrected claims stay suppressed, profile text refreshes when truth changes, and ambiguous requests ask for clarification instead of guessing.",
+      },
+      {
+        title: "WhatsApp is AmirOS on the go",
+        detail: "The owner bot shares the same memory-correction capability as the dashboard and carries a bounded, restart-safe reference to the knowledge behind its latest answer.",
+      },
+      {
+        title: "Focus cards fit their message",
+        detail: "Today’s Focus uses shorter AI-assisted summaries, flexible card widths, complete titles, and less supporting chrome so useful context remains readable in one compact row.",
+      },
+    ],
+  },
   {
     version: "0.9.0",
     releasedAt: "2026-08-13",

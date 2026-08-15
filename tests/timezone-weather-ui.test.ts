@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { cityBackgroundPeriod, temperatureLabel, timeZoneBackgroundTone, weatherVisual } from "../ui/src/timezone-weather.js";
+import { cityBackgroundPeriod, MAX_SAVED_TIMEZONE_CITIES, temperatureLabel, timeZoneBackgroundTone, weatherVisual } from "../ui/src/timezone-weather.js";
 
 describe("Overview timezone presentation", () => {
+  it("allows four saved timezone cards", () => {
+    expect(MAX_SAVED_TIMEZONE_CITIES).toBe(4);
+  });
+
   it("converts temperatures without changing the stored Celsius value", () => {
     expect(temperatureLabel(28, "celsius")).toBe("28°C");
     expect(temperatureLabel(28, "fahrenheit")).toBe("82°F");

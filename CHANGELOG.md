@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.10.1] - 2026-08-15
+
+### Added
+
+- Increased the Overview world-clock limit from three saved cities to four.
+
+### Changed
+
+- Changed Today’s Focus to keep every eligible event and action in one horizontally scrollable row instead of revealing additional cards only after another card is dismissed.
+- Increased generated event artwork and contact avatars to make each Focus card’s identity clearer while retaining adaptive widths and complete titles.
+
+### Fixed
+
+- Fixed proactive dismissals allowing an equivalent event, task, or commitment card from the same source to immediately replace the dismissed card.
+
+### Testing
+
+- Extended Focus and Overview coverage for uncapped ranked items, dismissal aliases, larger identity visuals, horizontal scrolling, and the four-city limit.
+
 ## [0.10.0] - 2026-08-13
 
 ### Added

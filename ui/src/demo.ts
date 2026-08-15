@@ -167,16 +167,27 @@ export function demoMessagesForChat(chatId: string): ChatMessage[] {
 
 export const demoDashboard: DashboardData = {
   release: {
-    version: "0.10.0",
-    releasedAt: "2026-08-13",
-    headline: "Memory you can correct, wherever you use AmirOS",
+    version: "0.10.1",
+    releasedAt: "2026-08-15",
+    headline: "A fuller daily focus and four world clocks",
     notes: [
-      { title: "Correct AmirOS naturally", detail: "Tell Ask AmirOS or the owner WhatsApp bot that a memory is wrong, historical, unwanted, or newly changed." },
-      { title: "Corrections stay safe and auditable", detail: "Original evidence and appropriate history remain available, while ambiguous requests ask instead of guessing." },
-      { title: "WhatsApp is AmirOS on the go", detail: "The owner bot shares the same memory-correction capability as the dashboard." },
-      { title: "Focus cards fit their message", detail: "Shorter summaries and flexible card widths keep useful context readable in one compact row." },
+      { title: "See the complete day at a glance", detail: "Every eligible Focus item stays available in one horizontal rail." },
+      { title: "Clearer visual identities", detail: "Larger artwork and contact photos make each Focus card easier to recognize." },
+      { title: "Dismiss once", detail: "Equivalent cards backed by the same source stay hidden together." },
+      { title: "Keep four cities close", detail: "The world clock now supports four saved timezone cards." },
     ],
     history: [
+      {
+        version: "0.10.1",
+        releasedAt: "2026-08-15",
+        headline: "A fuller daily focus and four world clocks",
+        notes: [
+          { title: "Complete Focus rail", detail: "Every eligible event and action stays available without dismissing another card first." },
+          { title: "Clearer visual identities", detail: "Larger artwork and contact photos make each Focus card easier to recognize." },
+          { title: "Reliable dismissals", detail: "Equivalent cards backed by the same source stay hidden together." },
+          { title: "Four world clocks", detail: "Save one additional city with the same weather and artwork experience." },
+        ],
+      },
       {
         version: "0.10.0",
         releasedAt: "2026-08-13",

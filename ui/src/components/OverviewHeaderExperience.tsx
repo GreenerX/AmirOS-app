@@ -20,6 +20,7 @@ import { useTimeFormat } from "../TimeFormatProvider";
 import {
   cityBackgroundPeriod,
   cityTimeLabel,
+  MAX_SAVED_TIMEZONE_CITIES,
   readSavedTimeZoneCities,
   readTemperatureUnit,
   saveTemperatureUnit,
@@ -131,7 +132,7 @@ function updateAndPersistCities(
   update: (current: SavedTimeZoneCity[]) => SavedTimeZoneCity[],
 ) {
   setter((current) => {
-    const next = update(current).slice(0, 3);
+    const next = update(current).slice(0, MAX_SAVED_TIMEZONE_CITIES);
     saveTimeZoneCities(next);
     return next;
   });
@@ -281,7 +282,7 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
   }, [query]);
 
   const addCity = (city: TimeZoneCity) => {
-    updateAndPersistCities(setCities, (current) => current.some((item) => item.id === city.id) || current.length >= 3
+    updateAndPersistCities(setCities, (current) => current.some((item) => item.id === city.id) || current.length >= MAX_SAVED_TIMEZONE_CITIES
       ? current
       : [...current, city]);
     setPickerOpen(false);
@@ -320,7 +321,7 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
             <span className={`local-time-menu-wrap ${timeMenuOpen ? "open" : ""}`} onMouseLeave={() => setTimeMenuOpen(false)}>
               <button className="local-time-menu-trigger" type="button" aria-haspopup="menu" aria-expanded={timeMenuOpen} onClick={() => setTimeMenuOpen((open) => !open)}>Local time <ChevronDown size={13} /></button>
               <span className="local-time-menu" role="menu">
-                <button type="button" role="menuitem" disabled={cities.length >= 3} onClick={() => setPickerOpen(true)}><Plus size={14} />{cities.length >= 3 ? "Maximum 3 timezones" : "Add timezone"}</button>
+                <button type="button" role="menuitem" disabled={cities.length >= MAX_SAVED_TIMEZONE_CITIES} onClick={() => setPickerOpen(true)}><Plus size={14} />{cities.length >= MAX_SAVED_TIMEZONE_CITIES ? "Maximum 4 timezones" : "Add timezone"}</button>
               </span>
             </span>
           </div>
@@ -353,7 +354,7 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
           {!searching && query.trim().length >= 2 && results.length === 0 && !searchError ? <p>No matching cities found.</p> : null}
           {searchError ? <p className="timezone-search-error">{searchError}</p> : null}
         </div>
-        <footer>Up to three cities · backgrounds are generated once and kept locally.</footer>
+        <footer>Up to four cities · backgrounds are generated once and kept locally.</footer>
       </section>
     </div> : null}
   </>;

@@ -27,6 +27,17 @@ export type TodaysFocusPresentation = {
   period: "today" | "tomorrow";
 };
 
+export function todaysFocusDismissalIds(item: TodaysFocusItem): string[] {
+  if (!item.proactive) return [item.id];
+  const sourceAliases = item.proactive.sourceIds.flatMap((sourceId) => [
+    `calendar:${item.chatId}:${sourceId}`,
+    `commitment:${item.chatId}:${sourceId}`,
+    `todo:${item.chatId}:${sourceId}`,
+    `reply:${item.chatId}:${sourceId}`,
+  ]);
+  return [...new Set([item.id, ...sourceAliases])];
+}
+
 function toMilliseconds(value: number) {
   return value < 10_000_000_000 ? value * 1_000 : value;
 }
@@ -218,15 +229,5 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
   const candidates = now.getHours() >= 15 && todayItems.length === 0
     ? tomorrowItems
     : todayItems;
-  const ranked = candidates.sort((left, right) => left.priority - right.priority || left.timestamp - right.timestamp || left.title.localeCompare(right.title));
-  const visible = ranked.slice(0, 4);
-  const bestProactive = ranked.find((item) => item.proactive);
-  if (bestProactive && !visible.some((item) => item.id === bestProactive.id)) {
-    // Agenda already carries the complete event list. Keep one of the four
-    // identity-rich focus cards available for context that AmirOS proactively
-    // judged useful, instead of letting calendar duplication consume the row.
-    visible[Math.max(0, visible.length - 1)] = bestProactive;
-    visible.sort((left, right) => left.priority - right.priority || left.timestamp - right.timestamp || left.title.localeCompare(right.title));
-  }
-  return visible;
+  return candidates.sort((left, right) => left.priority - right.priority || left.timestamp - right.timestamp || left.title.localeCompare(right.title));
 }

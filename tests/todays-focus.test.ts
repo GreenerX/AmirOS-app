@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTodaysFocus, todaysFocusPresentation } from "../ui/src/todays-focus";
+import { buildTodaysFocus, todaysFocusDismissalIds, todaysFocusPresentation } from "../ui/src/todays-focus";
 import type { IntelligenceData } from "../ui/src/types";
 
 const now = new Date(2026, 7, 6, 10, 0, 0);
@@ -135,13 +135,13 @@ describe("buildTodaysFocus", () => {
     expect(buildTodaysFocus(value, now)).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Reply to Mike", type: "reply" })]));
   });
 
-  it("returns at most four items", () => {
+  it("returns every eligible item so the horizontal rail can show the full focus list", () => {
     const value = data();
     for (let index = 0; index < 5; index += 1) {
       value.todos!.push({ id: `todo-${index}`, chatId: "work", contactName: "Work", title: `Task ${index}`, status: "open", priority: "normal", dueAt: at(-1), evidence, createdAt: at(-2), updatedAt: at(-1) });
     }
 
-    expect(buildTodaysFocus(value, now)).toHaveLength(4);
+    expect(buildTodaysFocus(value, now)).toHaveLength(5);
   });
 
   it("places proactive context in Today’s Focus without duplicating its source action", () => {
@@ -169,12 +169,12 @@ describe("buildTodaysFocus", () => {
     })]);
   });
 
-  it("keeps one proactive slot when calendar cards would otherwise fill the row", () => {
+  it("keeps proactive context alongside every eligible calendar card", () => {
     const value = data();
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < 5; index += 1) {
       value.events.push({
         id: `event-${index}`, chatId: "work", contactName: "Work", title: `Event ${index}`,
-        startAt: at(index > 2 ? 1 : 0, 11 + index), allDay: false, status: "confirmed", evidence,
+        startAt: at(0, 11 + index), allDay: false, status: "confirmed", evidence,
         createdAt: at(-1), updatedAt: at(-1),
       });
     }
@@ -185,9 +185,44 @@ describe("buildTodaysFocus", () => {
     }];
 
     const focus = buildTodaysFocus(value, now);
-    expect(focus).toHaveLength(4);
+    expect(focus).toHaveLength(6);
     expect(focus.some((item) => item.proactive?.kind === "meaningful_change")).toBe(true);
-    expect(focus.filter((item) => item.type === "calendar")).toHaveLength(3);
+    expect(focus.filter((item) => item.type === "calendar")).toHaveLength(5);
+  });
+
+  it("suppresses a dismissed proactive card and its underlying source card aliases", () => {
+    const item = {
+      id: "proactive:commitment:dani:send-photos",
+      type: "commitment" as const,
+      priority: 1,
+      title: "Send photos",
+      detail: "Still open with Dani",
+      chatId: "dani",
+      contactName: "Dani",
+      action: "chat" as const,
+      timestamp: at(-1),
+      proactive: {
+        id: "proactive:commitment:dani:send-photos",
+        fingerprint: "a".repeat(24),
+        kind: "commitment" as const,
+        priority: 1,
+        title: "Send photos",
+        detail: "Still open with Dani",
+        why: "The commitment is open.",
+        chatId: "dani",
+        contactName: "Dani",
+        sourceIds: ["send-photos"],
+        action: "chat" as const,
+        timestamp: at(-1),
+      },
+    };
+
+    expect(todaysFocusDismissalIds(item)).toEqual(expect.arrayContaining([
+      item.id,
+      "commitment:dani:send-photos",
+      "calendar:dani:send-photos",
+      "todo:dani:send-photos",
+    ]));
   });
 });
 
