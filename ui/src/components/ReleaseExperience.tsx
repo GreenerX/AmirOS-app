@@ -2,6 +2,7 @@ import { Brain, Check, ChevronLeft, ChevronRight, Heart, KeyRound, LoaderCircle,
 import { useEffect, useMemo, useState } from "react";
 import { whatsappQrUrl } from "../api";
 import { canBuildFirstRunPeopleDirectory, firstRunFutureTracking, FIRST_RUN_PEOPLE_SCAN_LIMIT, suggestedFirstRunPeople } from "../onboarding-people";
+import { accountSetupRequired, canShowReleaseNotes, shouldMarkInstalledReleaseSeen, shouldShowOnboarding } from "../release-visibility";
 import type { AmirOSRelease, AmirOSUpdateStatus, ChatSummary, DashboardData, KnowledgeTrackingDefault, KnowledgeTrackingStatus, ThemeName } from "../types";
 
 const ONBOARDING_KEY = "amiros.onboarding.completed";
@@ -71,6 +72,7 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
   const [peopleSetupProgress, setPeopleSetupProgress] = useState<{ completed: number; total: number }>();
   const releases = release.history?.length ? release.history : [release];
   const selectedRelease = releases.find((item) => item.version === selectedVersion) ?? release;
+  const setupRequired = accountSetupRequired(apiKeyConfigured, connection.status);
   const suggestedPeople = useMemo(
     () => suggestedFirstRunPeople(chats, ownerProfile.displayName),
     [chats, ownerProfile.displayName],
@@ -80,12 +82,26 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
     setSelectedVersion(release.version);
     const onboardingComplete = window.localStorage.getItem(ONBOARDING_KEY) === "true";
     const seenVersion = window.localStorage.getItem(RELEASE_KEY);
-    if (!onboardingComplete) {
+    const visibility = {
+      onboardingComplete,
+      apiKeyConfigured,
+      connectionStatus: connection.status,
+      seenVersion,
+      currentVersion: release.version,
+    };
+    if (shouldShowOnboarding(visibility)) {
+      setReleaseOpen(false);
       setOnboardingOpen(true);
       return;
     }
-    if (seenVersion !== release.version) setReleaseOpen(true);
-  }, [release.version]);
+    setOnboardingOpen(false);
+    if (shouldMarkInstalledReleaseSeen(visibility)) {
+      window.localStorage.setItem(RELEASE_KEY, release.version);
+      setReleaseOpen(false);
+      return;
+    }
+    if (canShowReleaseNotes(visibility)) setReleaseOpen(true);
+  }, [apiKeyConfigured, connection.status, release.version]);
 
   useEffect(() => setTrackingChoice(knowledgeTrackingDefault), [knowledgeTrackingDefault]);
   useEffect(() => setSelectedTheme(theme), [theme]);
@@ -111,8 +127,14 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
   }, [connection.status]);
 
   useEffect(() => {
-    if (forceReleaseOpen) setReleaseOpen(true);
-  }, [forceReleaseOpen]);
+    if (!forceReleaseOpen) return;
+    if (setupRequired) {
+      setReleaseOpen(false);
+      setOnboardingOpen(true);
+      return;
+    }
+    setReleaseOpen(true);
+  }, [forceReleaseOpen, setupRequired]);
 
   const closeRelease = () => {
     window.localStorage.setItem(RELEASE_KEY, release.version);
@@ -134,8 +156,11 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
 
   const finishOnboarding = () => {
     window.localStorage.setItem(ONBOARDING_KEY, "true");
+    // The release installed with a person's first setup is not an update.
+    // Record it now so they start in AmirOS rather than in release notes.
+    window.localStorage.setItem(RELEASE_KEY, release.version);
     setOnboardingOpen(false);
-    if (window.localStorage.getItem(RELEASE_KEY) !== release.version) setReleaseOpen(true);
+    setReleaseOpen(false);
   };
 
   const finishWithTrackingChoice = async () => {

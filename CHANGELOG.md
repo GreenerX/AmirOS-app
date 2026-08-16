@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.7] - 2026-08-16
+
+### Fixed
+
+- Fixed new or reinstalled accounts seeing release notes before account setup. Missing API-key or WhatsApp setup now always takes priority.
+- First setup now records the installed version as a baseline. Release notes open automatically only after a later update installs a newer version.
+
+### Testing
+
+- Added release-visibility coverage for new accounts, incomplete setup, completed setup, and later version changes.
+
 ## [0.10.6] - 2026-08-16
 
 ### Fixed

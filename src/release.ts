@@ -30,15 +30,15 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-16",
-  headline: "A beta install that recovers even after an old copy is moved",
+  headline: "A calmer first start",
   notes: [
     {
-      title: "Recover after an older folder is moved or deleted",
-      detail: "The installer can now confirm an existing local dashboard belongs to AmirOS through its own safe response, then stop that verified stale service before opening the new installation.",
+      title: "Start with setup, not release notes",
+      detail: "A new AmirOS account now begins with its setup steps. The version it starts on is recorded quietly instead of interrupting the first experience with What’s new.",
     },
     {
-      title: "Keep other local apps safe",
-      detail: "Process-folder verification remains the first check. The dashboard response is used only when an earlier AmirOS folder is no longer available.",
+      title: "Updates still stay visible",
+      detail: "After setup, AmirOS opens What’s new only when you later install a newer release.",
     },
   ],
 };
@@ -49,6 +49,21 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.10.6",
+    releasedAt: "2026-08-16",
+    headline: "A beta install that recovers even after an old copy is moved",
+    notes: [
+      {
+        title: "Recover after an older folder is moved or deleted",
+        detail: "The installer can confirm an existing local dashboard belongs to AmirOS through its own safe response, then stop that verified stale service before opening the new installation.",
+      },
+      {
+        title: "Keep other local apps safe",
+        detail: "Process-folder verification remains the first check. The dashboard response is used only when an earlier AmirOS folder is no longer available.",
+      },
+    ],
+  },
   {
     version: "0.10.5",
     releasedAt: "2026-08-16",
