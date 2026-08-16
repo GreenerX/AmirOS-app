@@ -13,6 +13,9 @@ const server = createServer((request, response) => {
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({
       connection: { status: "ready", detail: "Safe runtime recovery test" },
+      release: { version: "test" },
+      models: {},
+      settings: {},
       runtimeRecoveryTestServerPid: process.pid,
     }));
     return;

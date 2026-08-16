@@ -164,9 +164,9 @@ async function startStaleAmiros(project: string, port: number): Promise<void> {
   await waitForDashboard(port, project);
 }
 
-async function startOrphanedDashboard(project: string, port: number): Promise<number> {
+async function startOrphanedDashboard(project: string, port: number, workingDirectory = project): Promise<number> {
   const child = spawn(process.execPath, [safeServerPath], {
-    cwd: project,
+    cwd: workingDirectory,
     detached: true,
     stdio: "ignore",
     env: {
@@ -291,7 +291,24 @@ try {
   assert.throws(() => process.kill(orphanedPid, 0), { code: "ESRCH" }, "The orphaned backend should be stopped before the new dashboard starts.");
   await stopInstalledAmiros(repairedProject);
 
-  console.log("Installer upgrade test passed: clean install, prior-data upgrade, stale watchdog, and orphaned dashboard recovery all launched safely.");
+  // Moving an old app folder to Trash can leave the backend's original
+  // working directory unavailable. The dashboard response is then the safe
+  // fallback that identifies it as AmirOS before the installer stops it.
+  const deletedFolderProject = resolve(testDirectory, "Desktop", "AmirOS moved to trash");
+  copyZipFixture(deletedFolderProject);
+  const apiVerifiedProject = resolve(testDirectory, "Documents", "AmirOS api verified install");
+  copyZipFixture(apiVerifiedProject);
+  installedProjects.push(apiVerifiedProject);
+  const apiVerifiedPort = await reservePort();
+  const apiVerifiedPid = await startOrphanedDashboard(deletedFolderProject, apiVerifiedPort, testDirectory);
+  const apiVerifiedOutput = await runInstaller(apiVerifiedProject, apiVerifiedPort, testBin);
+  assert.match(apiVerifiedOutput, /Stopping an earlier AmirOS dashboard service/, "Installer should verify an orphaned dashboard through its local AmirOS response.");
+  await waitForDashboard(apiVerifiedPort, apiVerifiedProject);
+  assertBuildAndRuntime(apiVerifiedProject);
+  assert.throws(() => process.kill(apiVerifiedPid, 0), { code: "ESRCH" }, "The API-verified orphaned dashboard should be stopped before the new dashboard starts.");
+  await stopInstalledAmiros(apiVerifiedProject);
+
+  console.log("Installer upgrade test passed: clean install, prior-data upgrade, stale watchdog, folder-verified, and API-verified orphaned dashboard recovery all launched safely.");
 } finally {
   for (const project of installedProjects) {
     await stopInstalledAmiros(project).catch(() => undefined);

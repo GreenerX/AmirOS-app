@@ -30,15 +30,15 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-16",
-  headline: "A beta install that recovers the dashboard reliably",
+  headline: "A beta install that recovers even after an old copy is moved",
   notes: [
     {
-      title: "Recover from an interrupted earlier install",
-      detail: "The installer now recognizes and stops a verified older AmirOS dashboard even when its background monitor is no longer running, then opens the newly installed dashboard.",
+      title: "Recover after an older folder is moved or deleted",
+      detail: "The installer can now confirm an existing local dashboard belongs to AmirOS through its own safe response, then stop that verified stale service before opening the new installation.",
     },
     {
-      title: "No more silent stale-dashboard conflict",
-      detail: "The installer verifies the dashboard process belongs to AmirOS before stopping it, so an unrelated local app is never interrupted.",
+      title: "Keep other local apps safe",
+      detail: "Process-folder verification remains the first check. The dashboard response is used only when an earlier AmirOS folder is no longer available.",
     },
   ],
 };
@@ -49,6 +49,21 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.10.5",
+    releasedAt: "2026-08-16",
+    headline: "A beta install that recovers the dashboard reliably",
+    notes: [
+      {
+        title: "Recover from an interrupted earlier install",
+        detail: "The installer recognizes and stops a verified older AmirOS dashboard even when its background monitor is no longer running, then opens the newly installed dashboard.",
+      },
+      {
+        title: "No more silent stale-dashboard conflict",
+        detail: "The installer verifies the dashboard process belongs to AmirOS before stopping it, so an unrelated local app is never interrupted.",
+      },
+    ],
+  },
   {
     version: "0.10.4",
     releasedAt: "2026-08-16",

@@ -31,6 +31,15 @@ process_is_in_installer_test_root() {
   [[ "$working_directory" == "${AMIROS_INSTALL_TEST_WATCHDOG_ROOT}"/* ]]
 }
 
+dashboard_identifies_as_amiros() {
+  local response
+  response="$(/usr/bin/curl --noproxy '*' --fail --silent --max-time 2 "http://127.0.0.1:${AMIROS_PORT}/api/dashboard" 2>/dev/null || true)"
+  # This is a deliberately narrow, non-secret signature from AmirOS's local
+  # dashboard summary. It covers a moved/deleted old folder where macOS can no
+  # longer expose the process's original package.json through its working dir.
+  [[ "$response" == *'"connection":'* && "$response" == *'"release":'* && "$response" == *'"models":'* && "$response" == *'"settings":'* ]]
+}
+
 # A normal AmirOS service is a watchdog with a child backend. If an older
 # watchdog exited unexpectedly, however, its child backend can still own the
 # dashboard port. Confirming the process's working directory contains the
@@ -42,8 +51,10 @@ process_is_amiros() {
   process_is_in_installer_test_root "$candidate" || return 1
   [[ "$command_line" == *"/scripts/amiros-watchdog.mjs"* ]] && return 0
   working_directory="$(process_working_directory "$candidate")"
-  [[ -f "$working_directory/package.json" ]] || return 1
-  /usr/bin/grep -Eq '"name"[[:space:]]*:[[:space:]]*"whatsapp-openai-bot"' "$working_directory/package.json"
+  if [[ -f "$working_directory/package.json" ]] && /usr/bin/grep -Eq '"name"[[:space:]]*:[[:space:]]*"whatsapp-openai-bot"' "$working_directory/package.json"; then
+    return 0
+  fi
+  dashboard_identifies_as_amiros
 }
 
 process_parent_pid() {

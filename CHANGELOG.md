@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.10.6] - 2026-08-16
+
+### Fixed
+
+- Fixed the beta installer failing to recognize a stale AmirOS dashboard after the earlier app folder had been moved or deleted. It now verifies the existing local dashboard through its safe AmirOS response before stopping it.
+
+### Testing
+
+- Added regression coverage for recovery when the stale service no longer has a readable AmirOS project folder.
+
 ## [0.10.5] - 2026-08-16
 
 ### Fixed
