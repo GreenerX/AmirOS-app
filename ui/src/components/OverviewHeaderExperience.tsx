@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ensureTimeZoneBackgrounds, getCurrentWeather, searchTimeZoneCities } from "../api";
+import { readClockSecondsHidden, saveClockSecondsHidden } from "../clock-preferences";
 import { formatDeviceClock } from "../format";
 import { useTimeFormat } from "../TimeFormatProvider";
 import {
@@ -36,6 +37,8 @@ import {
 } from "../timezone-weather";
 
 const WEATHER_REFRESH_MS = 10 * 60_000;
+const ANDREW_MODE_TOAST_DELAY_MS = 1_750;
+const ANDREW_MODE_TOAST_DURATION_MS = 4_200;
 
 function WeatherIcon({ weather, size = 34, className = "" }: { weather?: CurrentWeather; size?: number; className?: string }) {
   const visual = weather ? weatherVisual(weather.weatherCode) : { kind: "partly-cloudy" as const };
@@ -148,15 +151,44 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
   const [cityWeather, setCityWeather] = useState<Record<number, CurrentWeather>>({});
   const [pickerOpen, setPickerOpen] = useState(false);
   const [timeMenuOpen, setTimeMenuOpen] = useState(false);
+  const [secondsHidden, setSecondsHidden] = useState(readClockSecondsHidden);
+  const [andrewModeVisible, setAndrewModeVisible] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<TimeZoneCity[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
   const backgroundRequests = useRef(new Set<number>());
+  const andrewModeTimer = useRef<number | undefined>(undefined);
+  const andrewModeRevealTimer = useRef<number | undefined>(undefined);
 
   const chooseUnit = (next: TemperatureUnit) => {
     setUnit(next);
     saveTemperatureUnit(next);
+  };
+
+  const clearAndrewModeTimers = () => {
+    if (andrewModeTimer.current) window.clearTimeout(andrewModeTimer.current);
+    if (andrewModeRevealTimer.current) window.clearTimeout(andrewModeRevealTimer.current);
+  };
+
+  useEffect(() => () => {
+    clearAndrewModeTimers();
+  }, []);
+
+  const toggleClockSeconds = () => {
+    const next = !secondsHidden;
+    setSecondsHidden(next);
+    saveClockSecondsHidden(next);
+    clearAndrewModeTimers();
+    if (!next) {
+      setAndrewModeVisible(false);
+      return;
+    }
+    setAndrewModeVisible(false);
+    andrewModeRevealTimer.current = window.setTimeout(() => {
+      setAndrewModeVisible(true);
+      andrewModeTimer.current = window.setTimeout(() => setAndrewModeVisible(false), ANDREW_MODE_TOAST_DURATION_MS);
+    }, ANDREW_MODE_TOAST_DELAY_MS);
   };
 
   useEffect(() => {
@@ -306,7 +338,21 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
           <span><strong>{localWeather ? temperatureLabel(localWeather.temperatureC, unit) : "--°"}</strong><small>{localWeatherUnavailable ? "Local weather unavailable" : localVisual?.condition || "Finding local weather…"}</small></span>
         </section>
         <section className="overview-clock-block" aria-label="Local clock">
-          <time className="overview-current-time" dateTime={now.toISOString()} aria-label={`Current device time ${formatDeviceClock(now, timeFormat)}`}><strong>{formatDeviceClock(now, timeFormat)}</strong></time>
+          <time
+            className={`overview-current-time ${secondsHidden ? "is-andrew-mode" : ""}`}
+            dateTime={now.toISOString()}
+            role="button"
+            tabIndex={0}
+            aria-pressed={secondsHidden}
+            aria-label={`Current device time ${formatDeviceClock(now, timeFormat, !secondsHidden)}. Double-click to toggle Andrew Mode.`}
+            title="Double-click for Andrew Mode"
+            onDoubleClick={toggleClockSeconds}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              toggleClockSeconds();
+            }}
+          ><strong>{formatDeviceClock(now, timeFormat, !secondsHidden)}</strong></time>
           <div className="overview-clock-controls">
             <span className="overview-unit-controls">
               <span className="temperature-unit-toggle" role="group" aria-label="Temperature unit">
@@ -340,6 +386,8 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
         />)}
       </section> : <div className="overview-timezone-spacer" aria-hidden="true" />}
     </div>
+
+    {andrewModeVisible ? <span className="andrew-mode-toast" role="status"><span className="andrew-mode-toast-icon"><Moon size={16} aria-hidden="true" /></span><span><strong>Andrew Mode</strong><small>The seconds can wait.</small></span></span> : null}
 
     {pickerOpen ? <div className="timezone-picker-backdrop" role="presentation" onClick={() => setPickerOpen(false)}>
       <section className="timezone-picker" role="dialog" aria-modal="true" aria-labelledby="timezone-picker-title" onClick={(event) => event.stopPropagation()}>

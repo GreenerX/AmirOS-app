@@ -36,11 +36,11 @@ export function timeOfDayGreeting(date: Date): "Good morning" | "Good afternoon"
   return "Good night";
 }
 
-export function formatDeviceClock(date: Date, timeFormat: TimeFormat = readTimeFormat()): string {
+export function formatDeviceClock(date: Date, timeFormat: TimeFormat = readTimeFormat(), includeSeconds = true): string {
   return formatDateTime(date, {
     hour: "numeric",
     minute: "2-digit",
-    second: "2-digit",
+    ...(includeSeconds ? { second: "2-digit" } : {}),
   }, timeFormat);
 }
 

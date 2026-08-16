@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildFirstRunPeopleDirectory,
   canBuildFirstRunPeopleDirectory,
-  firstRunFutureTracking,
+  firstRunSelectedPeopleTracking,
+  firstRunPeopleProgressLabel,
   FIRST_RUN_PEOPLE_SCAN_LIMIT,
   FIRST_RUN_PEOPLE_SUGGESTION_LIMIT,
   suggestedFirstRunPeople,
@@ -29,11 +30,15 @@ describe("first-run People setup", () => {
     expect(canBuildFirstRunPeopleDirectory(1, true)).toBe(true);
   });
 
-  it("does not silently opt selected people into future learning", () => {
-    expect(firstRunFutureTracking("ask", false)).toBe("pending");
-    expect(firstRunFutureTracking("off", false)).toBe("disabled");
-    expect(firstRunFutureTracking("private", false)).toBe("enabled");
-    expect(firstRunFutureTracking("off", true)).toBe("enabled");
+  it("keeps learning from chats the owner explicitly selected during setup", () => {
+    expect(firstRunSelectedPeopleTracking()).toBe("enabled");
+  });
+
+  it("never renders an impossible People setup progress count", () => {
+    expect(firstRunPeopleProgressLabel(0, 6)).toBe("Preparing 1 of 6");
+    expect(firstRunPeopleProgressLabel(5, 6)).toBe("Preparing 6 of 6");
+    expect(firstRunPeopleProgressLabel(6, 6)).toBe("Finishing People setup");
+    expect(firstRunPeopleProgressLabel(7, 6)).toBe("Finishing People setup");
   });
 
   it("suggests up to twelve direct chats, with favorites before newer ordinary chats", () => {
@@ -52,12 +57,12 @@ describe("first-run People setup", () => {
     expect(suggested.some((item) => item.isGroup)).toBe(false);
   });
 
-  it("keeps one-time setup separate from future learning and uses the bounded first-run window once", async () => {
+  it("uses the bounded first-run window once and then preserves selected chats for future learning", async () => {
     const calls: string[] = [];
     const progress: Array<[number, number]> = [];
 
     await buildFirstRunPeopleDirectory(["dani@c.us", "dani@c.us", "short@c.us"], {
-      futureTracking: "pending",
+      futureTracking: "enabled",
       setKnowledgeTracking: async (chatId, status) => { calls.push(`tracking:${chatId}:${status}`); },
       scanHistory: async (chatId, limit) => {
         calls.push(`scan:${chatId}:${limit}`);
@@ -70,8 +75,8 @@ describe("first-run People setup", () => {
     });
 
     expect(calls).toEqual([
-      `scan:dani@c.us:${FIRST_RUN_PEOPLE_SCAN_LIMIT}`, `analyze:dani@c.us:${FIRST_RUN_PEOPLE_SCAN_LIMIT}:true`, `tracking:dani@c.us:pending`,
-      `scan:short@c.us:${FIRST_RUN_PEOPLE_SCAN_LIMIT}`, `tracking:short@c.us:pending`,
+      `scan:dani@c.us:${FIRST_RUN_PEOPLE_SCAN_LIMIT}`, `analyze:dani@c.us:${FIRST_RUN_PEOPLE_SCAN_LIMIT}:true`, `tracking:dani@c.us:enabled`,
+      `scan:short@c.us:${FIRST_RUN_PEOPLE_SCAN_LIMIT}`, `tracking:short@c.us:enabled`,
     ]);
     expect(progress).toEqual([[0, 2], [1, 2], [1, 2], [2, 2]]);
   });

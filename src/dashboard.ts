@@ -22,6 +22,8 @@ import {
 } from "./memory-correction.js";
 import {
   AmirosState,
+  type CalendarEvent,
+  type ContactInsight,
   type ContactPreferences,
   type TodoTask,
 } from "./amiros-state.js";
@@ -102,6 +104,29 @@ type DashboardOptions = {
 };
 
 type VisibleTodoTask = Pick<TodoTask, "status" | "priority" | "dueAt" | "createdAt" | "updatedAt" | "completedAt">;
+
+/**
+ * Suggested actions are a current review queue, not a replay of imported
+ * conversation history. Durable records keep their evidence indefinitely;
+ * only unreviewed, message-driven suggestions use this freshness window.
+ */
+export const SUGGESTED_ACTION_MESSAGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1_000;
+
+function timestampMilliseconds(timestamp: number): number {
+  return timestamp > 0 && timestamp < 10_000_000_000 ? timestamp * 1_000 : timestamp;
+}
+
+export function hasFreshSuggestedActionEvidence(
+  item: Pick<TodoTask, "evidence"> | Pick<CalendarEvent, "evidence"> | Pick<ContactInsight, "evidence">,
+  now = Date.now(),
+): boolean {
+  const sourceAt = timestampMilliseconds(item.evidence.timestamp);
+  // Clock skew should not make a new message disappear, but a far-future
+  // timestamp is not a trustworthy source for a present-day action.
+  return Number.isFinite(sourceAt)
+    && sourceAt <= now + 5 * 60_000
+    && sourceAt >= now - SUGGESTED_ACTION_MESSAGE_WINDOW_MS;
+}
 
 /**
  * Reviewed to-dos are history, not disposable queue items. Keep completed
@@ -1592,6 +1617,10 @@ export function rememberDashboardMessages(
       messageId: message.id,
       countAsIncoming: !message.fromMe,
       extractSignals: message.fromMe,
+      // This path is called when the dashboard loads or scans chat history.
+      // It is relationship context, not a live notification that should open
+      // a new action suggestion.
+      eligibleForActionSuggestions: false,
     }];
   }));
 }
@@ -2079,6 +2108,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
               contactName,
               todos: item.todos.map((todo) => ({ ...todo, chatId: item.chatId, contactName })),
               isGroup: item.chatId.endsWith("@g.us"),
+              knowledgeTracking: state.getContact(item.chatId).knowledgeTracking,
               replyAssessment,
             };
           })
@@ -2131,12 +2161,17 @@ export function startAmirosDashboard(options: DashboardOptions) {
           // Confirmed plans are calendar history. Inferred plans are a review
           // queue, so retain the existing one-day freshness window for them.
           .filter((event) => event.status === "confirmed" || (
-            event.status === "inferred" && event.startAt >= assessedAt - 86_400_000
+            event.status === "inferred" && event.startAt >= assessedAt - 86_400_000 && (
+              hasFreshSuggestedActionEvidence(event, assessedAt) || event.startAt >= assessedAt
+            )
           ))
           .map((event) => ({ ...event, chatId: item.chatId, contactName: item.contactName })))
           .sort((a, b) => a.startAt - b.startAt);
         const events = calendarEvents.filter((event) => event.startAt >= assessedAt - 86_400_000);
         const todos = visibleTodoTasks(chats.flatMap((item) => item.todos
+          .filter((todo) => todo.status !== "inferred" || (
+            item.knowledgeTracking === "enabled" && hasFreshSuggestedActionEvidence(todo, assessedAt)
+          ))
           .map((todo) => ({ ...todo, chatId: item.chatId, contactName: item.contactName }))));
         const proactiveDelivery = state.proactiveDeliveryDecisions();
         const proactiveCandidates = buildProactiveCandidates(chats.map((item) => ({
@@ -2194,7 +2229,12 @@ export function startAmirosDashboard(options: DashboardOptions) {
           subjectChatIds: string[];
         }>();
         for (const chat of chats) {
-          for (const insight of chat.insights.filter((item) => item.status === "inferred" && (item.validity || "current") !== "historical")) {
+          for (const insight of chat.insights.filter((item) =>
+            item.status === "inferred" &&
+            (item.validity || "current") !== "historical" &&
+            chat.knowledgeTracking === "enabled" &&
+            hasFreshSuggestedActionEvidence(item, assessedAt),
+          )) {
             const clusterKey = insight.clusterId || `${chat.chatId}:${insight.id}`;
             const current = changesByCluster.get(clusterKey);
             const subjectChatIds = [...new Set([...(current?.subjectChatIds || []), ...(insight.subjectChatIds || [chat.chatId])])];

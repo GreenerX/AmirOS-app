@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.10.8] - 2026-08-16
+
+### Added
+
+- Added an Inbox control for directly getting to know a person from up to 150 recent messages, then continuing to learn from new messages in that selected chat.
+- Added **Andrew Mode**: double-click the Overview clock to temporarily hide seconds with a calmer visual transition.
+
+### Changed
+
+- Selected People setup chats now establish a bounded initial profile and continue learning from new messages in those chats.
+- Improved Overview responsiveness: weather, clock controls, world-clock cards, and Today's Focus adapt more cleanly across desktop widths.
+
+### Fixed
+
+- Prevented older history imported by opening or reviewing a chat from creating unattended commitment, calendar, or to-do suggestions.
+- Suggested actions now show the source message date and time, so their recency is clear.
+- Prevented the first-run People progress indicator from showing an impossible count while setup finishes.
+
+### Testing
+
+- Added coverage for current suggested-action evidence, history-import safety, clock preferences, device clock formats, first-run People progress, and delayed People setup visibility.
+
 ## [0.10.7] - 2026-08-16
 
 ### Fixed

@@ -444,9 +444,9 @@ export function App() {
     }
   };
 
-  const analyzeIntelligence = async (chatId: string) => {
+  const analyzeIntelligence = async (chatId: string, messageLimit?: number) => {
     try {
-      const result = await analyzeContactIntelligence(chatId);
+      const result = await analyzeContactIntelligence(chatId, messageLimit);
       if (chatId === selectedChatId) {
         setInsights(result.insights);
       }
@@ -696,8 +696,8 @@ export function App() {
     await forwardMessage(chatId, messageId, targetChatId);
   };
 
-  const scanHistory = async (chatId: string) => {
-    const result = await scanChatHistory(chatId);
+  const scanHistory = async (chatId: string, limit?: number) => {
+    const result = await scanChatHistory(chatId, limit);
     if (chatId === selectedChatId) {
       setMessages((current) => preserveLocalMessageState(current, result.messages));
       setMemory(result.memory);

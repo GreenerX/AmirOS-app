@@ -1,19 +1,16 @@
-import type { ChatSummary, KnowledgeTrackingDefault, KnowledgeTrackingStatus } from "./types";
+import type { ChatSummary, KnowledgeTrackingStatus } from "./types";
 
 /** A useful relationship window without turning first-run setup into a deep archive scan. */
 export const FIRST_RUN_PEOPLE_SCAN_LIMIT = 150;
 export const FIRST_RUN_PEOPLE_SUGGESTION_LIMIT = 12;
 
 /**
- * A first-run profile is a one-time, explicitly consented action. This helper
- * controls only whether the owner also allowed future message learning.
+ * Selecting a person during first-run setup is explicit consent to establish
+ * their profile from a bounded history and then learn from new messages in
+ * that selected chat. The separate default controls future, unselected chats.
  */
-export function firstRunFutureTracking(
-  defaultTracking: KnowledgeTrackingDefault,
-  keepLearningFromSelectedPeople: boolean,
-): KnowledgeTrackingStatus {
-  if (defaultTracking === "private" || keepLearningFromSelectedPeople) return "enabled";
-  return defaultTracking === "ask" ? "pending" : "disabled";
+export function firstRunSelectedPeopleTracking(): KnowledgeTrackingStatus {
+  return "enabled";
 }
 
 /** A selected-chat analysis cannot start until the owner explicitly agrees. */
@@ -22,6 +19,16 @@ export function canBuildFirstRunPeopleDirectory(
   hasOneTimeAnalysisConsent: boolean,
 ): boolean {
   return selectedPeopleCount === 0 || hasOneTimeAnalysisConsent;
+}
+
+/** Never render an impossible progress count while the final write completes. */
+export function firstRunPeopleProgressLabel(completed: number, total: number): string {
+  const safeTotal = Math.max(0, Math.floor(total));
+  if (safeTotal === 0) return "Preparing People setup";
+  const safeCompleted = Math.min(safeTotal, Math.max(0, Math.floor(completed)));
+  return safeCompleted < safeTotal
+    ? `Preparing ${safeCompleted + 1} of ${safeTotal}`
+    : "Finishing People setup";
 }
 
 function normalizedName(value: string) {
@@ -50,8 +57,8 @@ export function suggestedFirstRunPeople(chats: ChatSummary[], ownerName: string)
 
 type FirstRunPeopleBuildDependencies = {
   /**
-   * Applies the owner's separate choice for learning from future messages only
-   * after the explicit one-time first-run analysis is complete.
+   * Applies the selected person's explicit ongoing-learning choice after their
+   * bounded first-run analysis is complete.
    */
   setKnowledgeTracking: (chatId: string, status: KnowledgeTrackingStatus) => Promise<void>;
   futureTracking: KnowledgeTrackingStatus;
@@ -62,8 +69,8 @@ type FirstRunPeopleBuildDependencies = {
 
 /**
  * Performs one intentional, bounded analysis per explicitly selected person.
- * The caller must obtain explicit consent before invoking this function. Future
- * learning is a separate preference, represented by `futureTracking`.
+ * The caller must obtain explicit consent before invoking this function and
+ * passes the selected chats' ongoing-learning status as `futureTracking`.
  */
 export async function buildFirstRunPeopleDirectory(
   chatIds: string[],
@@ -74,12 +81,10 @@ export async function buildFirstRunPeopleDirectory(
     dependencies.onProgress(index, selections.length);
     const result = await dependencies.scanHistory(chatId, FIRST_RUN_PEOPLE_SCAN_LIMIT);
     // Very short conversations do not have enough context for a meaningful
-    // first profile, but still receive the owner's separate future preference.
+    // first profile, but remain selected for ongoing learning.
     if (result.messages.length >= 2) {
       await dependencies.analyzeRelationship(chatId, FIRST_RUN_PEOPLE_SCAN_LIMIT, true);
     }
-    // This is deliberately not always "enabled". A selected first-run profile
-    // must never silently opt a person into ongoing knowledge tracking.
     await dependencies.setKnowledgeTracking(chatId, dependencies.futureTracking);
     dependencies.onProgress(index + 1, selections.length);
   }

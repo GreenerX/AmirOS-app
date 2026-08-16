@@ -500,6 +500,7 @@ export class MessageProcessor {
           countAsIncoming: false,
           extractSignals: !isExplicitSelfChatCommand && !ownerAction && !lifecycleRequest && !isMemoryCorrection,
           excludeFromAutomaticLearning: isExplicitSelfChatCommand || Boolean(ownerAction) || Boolean(lifecycleRequest) || isMemoryCorrection,
+          eligibleForActionSuggestions: true,
         });
         if (!isExplicitSelfChatCommand && !ownerAction && !lifecycleRequest && !isMemoryCorrection) {
           void this.intelligenceLearner?.analyzeIncoming(chatId);
@@ -1070,6 +1071,7 @@ export class MessageProcessor {
         senderName: identity.senderName,
         timestamp: message.timestamp ? message.timestamp * 1_000 : undefined,
         messageId: message.id?._serialized || message.id?.id,
+        eligibleForActionSuggestions: true,
       });
     }
     return "";
@@ -1152,6 +1154,7 @@ export class MessageProcessor {
       messageId: message.id?._serialized || message.id?.id,
       countAsIncoming: !message.fromMe,
       extractSignals: message.fromMe,
+      eligibleForActionSuggestions: true,
     });
     if (message.fromMe) {
       void this.intelligenceLearner?.analyzeIncoming(chatId);

@@ -120,10 +120,21 @@ function toMilliseconds(timestamp: number) {
 }
 
 function todoTimingLabel(todo: TodoTask) {
+  const sourceAt = todo.evidence?.timestamp;
+  const sourceTime = suggestedSourceTime(sourceAt);
   if (typeof todo.dueAt === "number" && Number.isFinite(todo.dueAt)) {
-    return `Due ${eventDateTime(toMilliseconds(todo.dueAt))}`;
+    return sourceTime
+      ? `Due ${eventDateTime(toMilliseconds(todo.dueAt))} · Suggested from ${sourceTime}`
+      : `Due ${eventDateTime(toMilliseconds(todo.dueAt))}`;
   }
-  return todo.status === "inferred" ? "Suggested from a message" : "No due date";
+  if (todo.status === "inferred") return sourceTime ? `Suggested from ${sourceTime}` : "Suggested from a message";
+  return "No due date";
+}
+
+function suggestedSourceTime(timestamp: number | undefined) {
+  return typeof timestamp === "number" && Number.isFinite(timestamp)
+    ? eventDateTime(toMilliseconds(timestamp))
+    : undefined;
 }
 
 function compactTodoSuggestionTitle(title: string) {
@@ -214,7 +225,9 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
   )), [todoFilter, trackedTodos]);
   const suggestedTodos = useMemo(() => {
     const hidden = readHiddenIntelligenceActions();
-    return (intelligence?.todos || []).filter((todo) => todo.status === "inferred" && !hidden.has(todo.id));
+    return (intelligence?.todos || [])
+      .filter((todo) => todo.status === "inferred" && !hidden.has(todo.id))
+      .sort((left, right) => toMilliseconds(right.evidence.timestamp) - toMilliseconds(left.evidence.timestamp));
   }, [hiddenActionVersion, intelligence]);
   const newSignals = intelligence?.changes.filter((item) => item.status === "inferred" && isKnownIntelligenceContactName(item.contactName)) || [];
   const trackingRequests = data.knowledgeTrackingRequests.filter((item) => item.status === "pending").slice(0, 3);
@@ -267,11 +280,11 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
         replyAssessment: visibleNeedsReply[0].replyAssessment,
       }
     : planSuggestions[0]
-      ? { kind: "Calendar suggestion", title: compactNextBestText(planSuggestions[0].title, 64), detail: `From ${planSuggestions[0].contactName} · ${eventDateTime(planSuggestions[0].startAt)}`, chatId: planSuggestions[0].chatId, contactName: planSuggestions[0].contactName, messageId: planSuggestions[0].evidence.messageId, actionType: "calendar" as const, actionId: planSuggestions[0].id }
+      ? { kind: "Calendar suggestion", title: compactNextBestText(planSuggestions[0].title, 64), detail: `From ${planSuggestions[0].contactName} · ${eventDateTime(planSuggestions[0].startAt)}${suggestedSourceTime(planSuggestions[0].evidence.timestamp) ? ` · Suggested from ${suggestedSourceTime(planSuggestions[0].evidence.timestamp)}` : ""}`, chatId: planSuggestions[0].chatId, contactName: planSuggestions[0].contactName, messageId: planSuggestions[0].evidence.messageId, actionType: "calendar" as const, actionId: planSuggestions[0].id }
       : suggestedTodos[0]
         ? { kind: "To-do suggestion", title: compactTodoSuggestionTitle(suggestedTodos[0].title), detail: `From ${suggestedTodos[0].contactName} · ${todoTimingLabel(suggestedTodos[0])}`, chatId: suggestedTodos[0].chatId, contactName: suggestedTodos[0].contactName, messageId: suggestedTodos[0].evidence.messageId, actionType: "todo" as const, actionId: suggestedTodos[0].id }
         : newSignals[0]
-          ? { kind: "New relationship detail", title: newSignals[0].contactName, detail: compactNextBestText(newSignals[0].content), chatId: newSignals[0].chatId, contactName: newSignals[0].contactName, messageId: newSignals[0].evidence.messageId, actionType: "insight" as const, actionId: newSignals[0].id }
+          ? { kind: "New relationship detail", title: newSignals[0].contactName, detail: `${compactNextBestText(newSignals[0].content, 70)}${suggestedSourceTime(newSignals[0].evidence.timestamp) ? ` · Suggested from ${suggestedSourceTime(newSignals[0].evidence.timestamp)}` : ""}`, chatId: newSignals[0].chatId, contactName: newSignals[0].contactName, messageId: newSignals[0].evidence.messageId, actionType: "insight" as const, actionId: newSignals[0].id }
           : undefined;
   const focusReplyCopy = focus?.actionType === "reply" ? replyAssessmentCopy(focus.replyAssessment) : undefined;
   const focusChat = focus ? chats.find((chat) => chat.id === focus.chatId) : undefined;

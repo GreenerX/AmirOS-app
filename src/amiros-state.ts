@@ -91,6 +91,13 @@ export type ConversationMemoryEntry = {
    * used for explicit self-chat commands sent to AmirOS.
    */
   excludeFromAutomaticLearning?: boolean;
+  /**
+   * True for messages received through the live WhatsApp stream. History
+   * imports remain available for context and relationship learning, but must
+   * not create unattended action suggestions just because a chat was opened.
+   * Older entries without this marker retain their existing behaviour.
+   */
+  eligibleForActionSuggestions?: boolean;
   timestamp: number;
   messageId?: string;
 };
@@ -2827,7 +2834,7 @@ export class AmirosState {
       const sourceEntry = candidate.evidence.messageId
         ? memory.entries.find((entry) => entry.messageId === candidate.evidence.messageId)
         : undefined;
-      if (sourceEntry?.excludeFromAutomaticLearning || !content) continue;
+      if (sourceEntry?.excludeFromAutomaticLearning || sourceEntry?.eligibleForActionSuggestions === false || !content) continue;
       this.upsertCommitment(memory.commitments, {
         ...candidate,
         content,
@@ -2840,7 +2847,7 @@ export class AmirosState {
       const sourceEntry = candidate.evidence.messageId
         ? memory.entries.find((entry) => entry.messageId === candidate.evidence.messageId)
         : undefined;
-      if (sourceEntry?.excludeFromAutomaticLearning) continue;
+      if (sourceEntry?.excludeFromAutomaticLearning || sourceEntry?.eligibleForActionSuggestions === false) continue;
       if (!title || !isOwnerTodoSource(sourceEntry?.content || candidate.evidence.excerpt, {
         isGroup: chatId.endsWith("@g.us"),
         author: sourceEntry?.author,
@@ -2873,6 +2880,10 @@ export class AmirosState {
     }
     for (const candidate of (input.events || []).slice(0, 40)) {
       const title = candidate.title.replace(/\s+/g, " ").trim().slice(0, 240);
+      const sourceEntry = candidate.evidence.messageId
+        ? memory.entries.find((entry) => entry.messageId === candidate.evidence.messageId)
+        : undefined;
+      if (sourceEntry?.excludeFromAutomaticLearning || sourceEntry?.eligibleForActionSuggestions === false) continue;
       if (!title || !Number.isFinite(candidate.startAt) || !hasCalendarPlanIntent(candidate.evidence.excerpt)) continue;
       // Prefer deterministic parsing of the actual source message whenever it
       // contains a calendar date or time. The model still supplies a useful
@@ -3348,12 +3359,18 @@ export class AmirosState {
           : undefined,
         ownerMentioned: entry.ownerMentioned === true || undefined,
         excludeFromAutomaticLearning: entry.excludeFromAutomaticLearning === true || undefined,
+        eligibleForActionSuggestions: entry.eligibleForActionSuggestions === false
+          ? false
+          : entry.eligibleForActionSuggestions === true
+            ? true
+            : undefined,
         timestamp,
         messageId,
       });
       if (
         entry.role === "user" &&
         entry.excludeFromAutomaticLearning !== true &&
+        entry.eligibleForActionSuggestions !== false &&
         this.getContact(chatId).knowledgeTracking === "enabled"
       ) {
         this.reconcileCommitmentLifecycle(memory, {
@@ -3375,6 +3392,7 @@ export class AmirosState {
           senderName: entry.senderName,
           ownerMentioned: entry.ownerMentioned,
           excludeFromAutomaticLearning: entry.excludeFromAutomaticLearning,
+          eligibleForActionSuggestions: entry.eligibleForActionSuggestions,
           timestamp,
           messageId,
         });
@@ -3409,6 +3427,7 @@ export class AmirosState {
       senderName?: string;
       ownerMentioned?: boolean;
       excludeFromAutomaticLearning?: boolean;
+      eligibleForActionSuggestions?: boolean;
       timestamp: number;
       messageId?: string;
     },
@@ -3434,19 +3453,21 @@ export class AmirosState {
       addInsight(/birthday|יום ההולדת/iu.test(lower) ? "important_date" : "fact", 0.72);
     }
 
-    let owner: RelationshipCommitment["owner"] | undefined;
-    if (/\b(can you|could you|would you|please|don't forget|remind me)\b|(?:תוכל|תוכלי|אפשר שת|אל תשכח|אל תשכחי)/iu.test(lower)) {
-      owner = "me";
-    } else if (/\b(i['’]?ll|i will|let me|i can send|i can do)\b|(?:אני א|אני יכול|אני יכולה)/iu.test(lower)) {
-      owner = entry.senderName ? "group_member" : "contact";
+    if (entry.eligibleForActionSuggestions !== false) {
+      let owner: RelationshipCommitment["owner"] | undefined;
+      if (/\b(can you|could you|would you|please|don't forget|remind me)\b|(?:תוכל|תוכלי|אפשר שת|אל תשכח|אל תשכחי)/iu.test(lower)) {
+        owner = "me";
+      } else if (/\b(i['’]?ll|i will|let me|i can send|i can do)\b|(?:אני א|אני יכול|אני יכולה)/iu.test(lower)) {
+        owner = entry.senderName ? "group_member" : "contact";
+      }
+      if (owner) {
+        this.upsertCommitment(memory.commitments, {
+          content: text, owner, assigneeName: entry.senderName, evidence,
+        }, Date.now());
+      }
+      this.addCalendarSignal(memory, entry);
+      this.addTodoSignal(chatId, memory, entry);
     }
-    if (owner) {
-      this.upsertCommitment(memory.commitments, {
-        content: text, owner, assigneeName: entry.senderName, evidence,
-      }, Date.now());
-    }
-    this.addCalendarSignal(memory, entry);
-    this.addTodoSignal(chatId, memory, entry);
     memory.insights = this.dedupeKnowledgeInsights(memory.insights).slice(-200);
     memory.commitments = this.dedupeCommitments(memory.commitments).slice(-200);
     memory.todos = this.dedupeTodoTasks(memory.todos).slice(-400);
@@ -3513,8 +3534,15 @@ export class AmirosState {
 
   private addCalendarSignal(
     memory: ConversationMemory,
-    entry: { content: string; senderName?: string; timestamp: number; messageId?: string },
+    entry: {
+      content: string;
+      senderName?: string;
+      timestamp: number;
+      messageId?: string;
+      eligibleForActionSuggestions?: boolean;
+    },
   ): boolean {
+    if (entry.eligibleForActionSuggestions === false) return false;
     const inferred = inferCalendarEventFromMessage(entry.content, entry.timestamp);
     if (!inferred) return false;
     const sender = entry.senderName?.replace(/\s+/g, " ").trim().split(" ")[0];

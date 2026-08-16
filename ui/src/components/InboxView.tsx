@@ -40,6 +40,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { formatDateTime, formatTime } from "../format";
 import { contactProfilePdfUrl } from "../api";
+import { FIRST_RUN_PEOPLE_SCAN_LIMIT } from "../onboarding-people";
 import { WhatsAppIcon } from "./BrandIcons";
 import { ContactAvatar } from "./ContactAvatar";
 import { ChatMedia } from "./ChatMedia";
@@ -94,7 +95,7 @@ type InboxViewProps = {
   onAddMemory: (chatId: string, content: string) => Promise<void>;
   onRemoveMemory: (chatId: string, itemId: string) => Promise<void>;
   onGenerateProfile: (chatId: string) => Promise<void>;
-  onAnalyzeIntelligence: (chatId: string) => Promise<void>;
+  onAnalyzeIntelligence: (chatId: string, messageLimit?: number) => Promise<void>;
   onInsightChange: (chatId: string, insightId: string, patch: { status?: ContactInsight["status"]; content?: string }) => Promise<void>;
   onGenerateWritingStyle: (chatId: string) => Promise<void>;
   onGenerateGroupSummary: (chatId: string) => Promise<void>;
@@ -106,7 +107,7 @@ type InboxViewProps = {
   onReact: (chatId: string, messageId: string, emoji: string) => Promise<void>;
   onReply: (chatId: string, messageId: string, body: string) => Promise<void>;
   onForward: (chatId: string, messageId: string, targetChatId: string) => Promise<void>;
-  onScanHistory: (chatId: string) => Promise<{ scanned: number; added: number }>;
+  onScanHistory: (chatId: string, limit?: number) => Promise<{ scanned: number; added: number }>;
 };
 
 type Filter = "all" | "unread" | "review" | "auto";
@@ -317,6 +318,8 @@ export function InboxView({
   const [savingMemory, setSavingMemory] = useState(false);
   const [generatingProfile, setGeneratingProfile] = useState(false);
   const [analyzingIntelligence, setAnalyzingIntelligence] = useState(false);
+  const [learningRelationship, setLearningRelationship] = useState(false);
+  const [relationshipLearningError, setRelationshipLearningError] = useState<string>();
   const [learningStyle, setLearningStyle] = useState(false);
   const [summarizingGroup, setSummarizingGroup] = useState(false);
   const [sending, setSending] = useState(false);
@@ -341,6 +344,7 @@ export function InboxView({
   useEffect(() => {
     setInstructionsSaved(false);
     setManualMemoryDraft("");
+    setRelationshipLearningError(undefined);
     setInsertedDraftId(undefined);
     setContactSettingsTab(initialContactSettingsTab);
     if (initialContactSettingsTab !== "configure") {
@@ -572,6 +576,22 @@ export function InboxView({
       await onAnalyzeIntelligence(selectedChat.id);
     } finally {
       setAnalyzingIntelligence(false);
+    }
+  };
+
+  const learnRelationshipFromHistory = async () => {
+    if (!selectedChat || selectedChat.isGroup) return;
+    setLearningRelationship(true);
+    setRelationshipLearningError(undefined);
+    try {
+      await onScanHistory(selectedChat.id, FIRST_RUN_PEOPLE_SCAN_LIMIT);
+      await onAnalyzeIntelligence(selectedChat.id, FIRST_RUN_PEOPLE_SCAN_LIMIT);
+      const saved = await onContactChange(selectedChat.id, { knowledgeTracking: "enabled" });
+      if (!saved) throw new Error("AmirOS could not turn on learning for this chat.");
+    } catch (error) {
+      setRelationshipLearningError(error instanceof Error ? error.message : "AmirOS could not learn from this chat. Please try again.");
+    } finally {
+      setLearningRelationship(false);
     }
   };
 
@@ -1007,10 +1027,17 @@ export function InboxView({
           <section className="contact-accordion-body instruction-card intelligence-contact-card">
           <div className="profile-card-heading">
             <span><Brain size={17} /></span>
-            <div><h3>Evidence-backed intelligence</h3><small>Every incoming message is analyzed automatically. Use this button only to rescan older history.</small></div>
+            <div><h3>Evidence-backed intelligence</h3><small>Every incoming message is analyzed automatically once you turn on learning for this chat.</small></div>
           </div>
-          <button className="button primary compact intelligence-refresh" disabled={analyzingIntelligence || contact?.memoryEnabled === false || memory.length < 2} onClick={() => void refreshIntelligence()}>
-            <Sparkles size={15} />{analyzingIntelligence ? "Reanalyzing…" : "Reanalyze chat history"}
+          {!selectedChat.isGroup ? <div className="relationship-history-learning">
+            <div><strong>{contact?.knowledgeTracking === "enabled" ? "Refresh this person from recent history" : "Get to know this person"}</strong><small>Scans up to {FIRST_RUN_PEOPLE_SCAN_LIMIT} recent messages, creates an initial relationship profile, and turns on learning for new messages in this chat.</small></div>
+            <button className="button primary compact intelligence-refresh" disabled={learningRelationship || contact?.memoryEnabled === false} onClick={() => void learnRelationshipFromHistory()}>
+              <Sparkles size={15} />{learningRelationship ? "Learning…" : contact?.knowledgeTracking === "enabled" ? "Refresh recent history" : "Learn from recent history"}
+            </button>
+            {relationshipLearningError ? <p className="relationship-learning-error" role="alert">{relationshipLearningError}</p> : null}
+          </div> : null}
+          <button className="button compact intelligence-refresh" disabled={analyzingIntelligence || contact?.memoryEnabled === false || memory.length < 2} onClick={() => void refreshIntelligence()}>
+            <Sparkles size={15} />{analyzingIntelligence ? "Reviewing…" : "Review saved messages"}
           </button>
           <div className="contact-intelligence-list">
             {pendingInsights.slice(-10).reverse().map((item) => (

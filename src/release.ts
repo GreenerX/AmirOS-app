@@ -30,15 +30,19 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-16",
-  headline: "A calmer first start",
+  headline: "A calmer, more relevant daily view",
   notes: [
     {
-      title: "Start with setup, not release notes",
-      detail: "A new AmirOS account now begins with its setup steps. The version it starts on is recorded quietly instead of interrupting the first experience with What’s new.",
+      title: "Choose people AmirOS should keep learning from",
+      detail: "The people you select during setup now receive an initial, bounded profile and continue learning from new messages in those chats. You can also start this from any direct chat in Inbox later.",
     },
     {
-      title: "Updates still stay visible",
-      detail: "After setup, AmirOS opens What’s new only when you later install a newer release.",
+      title: "Suggested actions stay timely",
+      detail: "Older chat history can still help AmirOS understand relationships, but it no longer creates unattended action suggestions. New suggestions show when their source message was received.",
+    },
+    {
+      title: "A more comfortable Overview",
+      detail: "World clocks adapt cleanly to your window, weather and time stay aligned, and a double-click on the clock enables Andrew Mode when you want the seconds to disappear for a while.",
     },
   ],
 };
@@ -49,6 +53,21 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.10.7",
+    releasedAt: "2026-08-16",
+    headline: "A calmer first start",
+    notes: [
+      {
+        title: "Start with setup, not release notes",
+        detail: "A new AmirOS account now begins with its setup steps. The version it starts on is recorded quietly instead of interrupting the first experience with What’s new.",
+      },
+      {
+        title: "Updates still stay visible",
+        detail: "After setup, AmirOS opens What’s new only when you later install a newer release.",
+      },
+    ],
+  },
   {
     version: "0.10.6",
     releasedAt: "2026-08-16",
