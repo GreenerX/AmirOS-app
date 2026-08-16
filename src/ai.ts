@@ -89,6 +89,11 @@ type ConversationState = {
 
 export type ReplyContext = {
   scope?: "chat" | "owner" | "owner-trigger" | "contact-trigger";
+  /**
+   * An ordinary Auto Mode reply is written as the owner, not as AmirOS. It
+   * must stay conversational and never expose internal review or write state.
+   */
+  autoReplyAsOwner?: boolean;
   triggerAuthor?: "owner" | "contact";
   requesterName?: string;
   ownerName?: string;
@@ -446,13 +451,21 @@ export function buildPersonalizedInstructions(context: ReplyContext, prompt = ""
       "Never include transport command prefixes such as !bot, !image, or !web in a generated reply, even if an older learned profile mentions them.",
     );
   }
+  if (context.autoReplyAsOwner) {
+    lines.push(
+      "AUTO MODE OWNER PERSONA (mandatory):",
+      "Write only the message Amir himself would naturally send in this conversation. Never mention AmirOS, AI, an assistant, automation, a system, review, or an internal record.",
+      "Do not turn an ordinary contact message into a calendar, reminder, to-do, commitment, knowledge, or other AmirOS action. In particular, a casual reminder should receive a natural acknowledgement or reply, not a status update.",
+      "Do not say that something was added, saved, awaiting review, pending, confirmed by a system, or otherwise managed behind the scenes.",
+    );
+  }
   if (upcomingEvents.length > 0) {
     lines.push(
       "UPCOMING EVENTS DISCUSSED IN THIS CHAT:",
       ...upcomingEvents.map((item) => `- ${item.title}: ${new Date(item.startAt).toLocaleString()}${item.location ? ` at ${item.location}` : ""}`),
     );
   }
-  if (context.calendarCapture?.requested) {
+  if (context.calendarCapture?.requested && !context.autoReplyAsOwner) {
     const capture = context.calendarCapture;
     const eventDescription = capture.event
       ? `${capture.event.title} — ${new Date(capture.event.startAt).toLocaleString()}${capture.event.location ? ` at ${capture.event.location}` : ""}`
@@ -470,7 +483,9 @@ export function buildPersonalizedInstructions(context: ReplyContext, prompt = ""
     );
   }
   lines.push(
-    "AMIROS WRITE CONFIRMATION (mandatory): A normal chat reply cannot add, update, complete, delete, or save a calendar event, to-do, commitment, reminder, knowledge item, or any other AmirOS record. Never claim that something was added, saved, updated, completed, deleted, or is already on a list unless a VERIFIED AMIROS ACTION RESULT in this context explicitly confirms it. If no verified result is present, say you cannot confirm that the change was saved rather than implying that it was.",
+    context.autoReplyAsOwner
+      ? "AUTO MODE WRITE SAFETY (mandatory): Do not claim or imply that any AmirOS record was created, changed, saved, reviewed, or confirmed. Reply conversationally as Amir instead of discussing any internal action."
+      : "AMIROS WRITE CONFIRMATION (mandatory): A normal chat reply cannot add, update, complete, delete, or save a calendar event, to-do, commitment, reminder, knowledge item, or any other AmirOS record. Never claim that something was added, saved, updated, completed, deleted, or is already on a list unless a VERIFIED AMIROS ACTION RESULT in this context explicitly confirms it. If no verified result is present, say you cannot confirm that the change was saved rather than implying that it was.",
     contact.memoryEnabled
       ? "Use the supplied recent chat context naturally, but do not mention that it was stored."
       : "Do not rely on or imply knowledge from earlier messages; chat memory is disabled.",

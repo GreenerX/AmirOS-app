@@ -29,20 +29,20 @@ export const AMIROS_VERSION = packageVersion();
 
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
-  releasedAt: "2026-08-15",
-  headline: "Clearer consent for private beta",
+  releasedAt: "2026-08-16",
+  headline: "A safer beta install and a more useful daily view",
   notes: [
     {
-      title: "Choose a one-time People profile",
-      detail: "Before AmirOS uses your configured OpenAI account for a selected chat, setup clearly shows the 150-message limit and asks for your confirmation.",
+      title: "Install the right AmirOS copy",
+      detail: "Installing a newer download now safely stops an older AmirOS copy, even when it came from another folder, so the dashboard opens the newly installed version.",
     },
     {
-      title: "Learning stays your choice",
-      detail: "A one-time profile no longer turns on future learning. Keep learning is a separate choice, while your existing tracking setting is still respected.",
+      title: "A calendar for looking ahead and back",
+      detail: "Calendar keeps confirmed past plans available and adds Day, Week, and Month views for moving through your schedule naturally.",
     },
     {
-      title: "Beta help remains available after updates",
-      detail: "The Help & feedback destination now remains available when an existing AmirOS install updates, without replacing private settings.",
+      title: "More natural automatic replies",
+      detail: "Auto Mode can wait for your chosen first-response delay and keeps replies in your conversational voice instead of exposing assistant-only status messages.",
     },
   ],
 };
@@ -53,6 +53,25 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.10.3",
+    releasedAt: "2026-08-15",
+    headline: "Clearer consent for private beta",
+    notes: [
+      {
+        title: "Choose a one-time People profile",
+        detail: "Before AmirOS uses your configured OpenAI account for a selected chat, setup clearly shows the 150-message limit and asks for your confirmation.",
+      },
+      {
+        title: "Learning stays your choice",
+        detail: "A one-time profile no longer turns on future learning. Keep learning is a separate choice, while your existing tracking setting is still respected.",
+      },
+      {
+        title: "Beta help remains available after updates",
+        detail: "The Help & feedback destination now remains available when an existing AmirOS install updates, without replacing private settings.",
+      },
+    ],
+  },
   {
     version: "0.10.2",
     releasedAt: "2026-08-15",

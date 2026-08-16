@@ -28,6 +28,7 @@ import {
   ChevronRight,
   ChevronDown,
   Copy,
+  Clock3,
   Forward,
   Reply,
   Smile,
@@ -52,6 +53,7 @@ import type {
   ContactMemoryItem,
   ContactInsight,
   ContactPreferences,
+  AutoReplyInitialDelaySeconds,
   ContactPronouns,
   ContactProfile,
   Draft,
@@ -114,6 +116,8 @@ const NEXT_REPLY_MODE: Record<ReplyMode, ReplyMode> = {
   suggest: "auto",
   auto: "off",
 };
+
+const AUTO_REPLY_DELAY_OPTIONS: AutoReplyInitialDelaySeconds[] = [15, 30, 45, 60, 90];
 
 const RELATIONSHIP_OPTIONS = [
   "Contact",
@@ -736,6 +740,12 @@ export function InboxView({
 
   const activeReplyMode = contact?.mode || selectedChat.mode;
   const nextReplyMode = NEXT_REPLY_MODE[activeReplyMode];
+  const autoReplyInitialDelay = contact?.autoReplyInitialDelaySeconds || 30;
+  const changeAutoReplyInitialDelay = (value: string) => {
+    const delay = Number(value) as AutoReplyInitialDelaySeconds;
+    if (!AUTO_REPLY_DELAY_OPTIONS.includes(delay)) return;
+    void onContactChange(selectedChat.id, { autoReplyInitialDelaySeconds: delay });
+  };
 
   return (
     <main className={`inbox-page ${selectedChatId ? "mobile-chat" : "mobile-list"} ${chatRailCollapsed ? "chat-rail-collapsed" : ""} ${contactRailCollapsed ? "contact-rail-collapsed" : ""}`}>
@@ -771,7 +781,10 @@ export function InboxView({
           <button className="icon-button mobile-back-button" aria-label="Back to conversations" onClick={() => onSelectChat(undefined)}><ArrowLeft size={20} /></button>
           <ContactAvatar name={selectedChat.name} src={selectedChat.avatarUrl} />
           <span className="chat-person"><strong dir="auto">{selectedChat.name}</strong>{selectedChat.isGroup && groupDescription ? <small className="group-description" dir="auto">{groupDescription}</small> : null}<small><WhatsAppIcon size={13} /> Live sync · WhatsApp conversation</small></span>
-          <button className={`mode-select ${activeReplyMode}`} aria-label={`${activeReplyMode} mode. Switch to ${nextReplyMode} mode`} title={`Switch to ${nextReplyMode} mode`} onClick={() => onModeChange(selectedChat.id, nextReplyMode)}>{activeReplyMode === "off" ? <LockKeyhole size={16} /> : activeReplyMode === "suggest" ? <PencilLine size={16} /> : <Bot size={16} />}<span className="capitalize">{activeReplyMode} mode</span></button>
+          <div className="auto-reply-header-control">
+            <button className={`mode-select ${activeReplyMode}`} aria-label={`${activeReplyMode} mode. Switch to ${nextReplyMode} mode`} title={`Switch to ${nextReplyMode} mode`} onClick={() => onModeChange(selectedChat.id, nextReplyMode)}>{activeReplyMode === "off" ? <LockKeyhole size={16} /> : activeReplyMode === "suggest" ? <PencilLine size={16} /> : <Bot size={16} />}<span className="capitalize">{activeReplyMode} mode</span></button>
+            {activeReplyMode === "auto" ? <label className="auto-reply-delay-select"><Clock3 size={14} /><span>First reply</span><select aria-label="First automatic reply delay" value={autoReplyInitialDelay} onChange={(event) => changeAutoReplyInitialDelay(event.target.value)}>{AUTO_REPLY_DELAY_OPTIONS.map((seconds) => <option key={seconds} value={seconds}>{seconds}s</option>)}</select></label> : null}
+          </div>
           <button className="icon-button contact-rail-toggle" aria-label={contactRailCollapsed ? "Show contact settings" : "Hide contact settings"} onClick={toggleContactRail}>{contactRailCollapsed ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}</button>
         </header>
 
@@ -885,6 +898,7 @@ export function InboxView({
               <button key={mode} className={(contact?.mode || selectedChat.mode) === mode ? `selected ${mode}` : ""} onClick={() => onModeChange(selectedChat.id, mode)}>{mode === "off" ? <LockKeyhole size={16} /> : mode === "suggest" ? <PencilLine size={16} /> : <Bot size={16} />}<span className="capitalize">{mode}</span></button>
             ))}
           </div>
+          {(contact?.mode || selectedChat.mode) === "auto" ? <p className="auto-reply-delay-help"><Clock3 size={14} /><span>The first automatic reply waits <strong>{autoReplyInitialDelay} seconds</strong>. Each later automatic reply waits 15 seconds after a new message.</span></p> : null}
           </div>
         </details>
 

@@ -69,8 +69,14 @@ describe("Overview polish", () => {
     expect(overview).toContain('className="intelligence-focus caught-up" role="status"');
     expect(overview).not.toContain('className="intelligence-focus caught-up" onClick={() => onNavigate("intelligence")}');
     expect(calendar).toContain("calendar-day-more");
-    expect(calendar).toContain("Show all ${dayEvents.length} events");
-    expect(calendar).toContain("calendar-day-events-dialog");
+    expect(calendar).toContain("calendar-view-switcher");
+    expect(calendar).toContain('setDisplayMode("day")');
+    expect(calendar).toContain('setDisplayMode("week")');
+    expect(calendar).toContain('setDisplayMode("month")');
+    expect(calendar).toContain("openDay(day)");
+    expect(calendar).toContain("calendar-day-schedule");
+    expect(calendar).toContain("calendar-week-grid");
+    expect(calendar).not.toContain("calendar-confirmed");
     expect(styles).toContain(".overview-timeline-event { display: grid;");
     expect(styles).toContain(".todays-focus-item-avatar");
     expect(styles).toContain(".todays-focus-empty");

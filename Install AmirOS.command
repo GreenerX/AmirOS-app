@@ -9,8 +9,8 @@ NODE_DOWNLOAD_URL="https://nodejs.org/en/download"
 
 # AmirOS keeps every private item beside the app itself. When a person has
 # downloaded a newer ZIP into a second AmirOS folder, look only at sibling
-# AmirOS folders for a prior local installation. This is deliberately narrow:
-# it will never search a whole home folder or copy data from an unrelated app.
+# AmirOS folders for prior private data. This is deliberately narrow: it will
+# never search a whole home folder or copy data from an unrelated app.
 has_private_amiros_data() {
   local directory="$1"
   [[ -f "$directory/.env.local" || -f "$directory/.env" || -d "$directory/.wwebjs_auth" || -f "$directory/work/amiros-state.json" || -d "$directory/work/profile-avatars" ]]
@@ -18,15 +18,23 @@ has_private_amiros_data() {
 
 stop_existing_amiros() {
   local candidate command_line
-  local parent_directory="${PROJECT_DIR:h}"
   for candidate in $(/usr/bin/pgrep -f 'amiros-watchdog\.mjs' 2>/dev/null || true); do
     [[ "$candidate" =~ '^[0-9]+$' ]] || continue
     command_line="$(/bin/ps -p "$candidate" -o command= 2>/dev/null || true)"
-    # Limit this to another AmirOS copy next to the one being installed. It
-    # prevents the new copy from competing for port 3789 without stopping an
-    # unrelated AmirOS installation elsewhere on the computer.
-    if [[ "$command_line" == *"$parent_directory/"* && "$command_line" == *"/amiros-watchdog.mjs"* ]]; then
-      echo "Stopping an earlier AmirOS copy before installing the update..."
+    # An older ZIP is often extracted in a different folder (for example,
+    # Desktop versus Documents). A dashboard from that copy still owns the
+    # normal local port, even after this new copy has built successfully. Only
+    # stop processes that are explicitly AmirOS watchdogs; never stop a
+    # generic process merely because it uses the same port.
+    #
+    # The optional root is used solely by the isolated installer test fixture
+    # so it cannot interact with a developer's real AmirOS process.
+    [[ "$command_line" == *"/scripts/amiros-watchdog.mjs"* ]] || continue
+    if [[ -n "${AMIROS_INSTALL_TEST_WATCHDOG_ROOT:-}" && "$command_line" != *"${AMIROS_INSTALL_TEST_WATCHDOG_ROOT}/"* ]]; then
+      continue
+    fi
+    {
+      echo "Stopping a running AmirOS copy before installing the update..."
       /bin/kill -TERM "$candidate" 2>/dev/null || true
       for _attempt in {1..20}; do
         /bin/kill -0 "$candidate" 2>/dev/null || break
@@ -36,7 +44,7 @@ stop_existing_amiros() {
         echo "AmirOS could not stop the earlier copy. It was left running and this update was not started."
         return 1
       fi
-    fi
+    }
   done
 }
 

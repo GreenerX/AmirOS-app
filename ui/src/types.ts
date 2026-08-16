@@ -10,6 +10,7 @@ export type ViewName =
   | "settings";
 
 export type ReplyMode = "off" | "suggest" | "auto";
+export type AutoReplyInitialDelaySeconds = 15 | 30 | 45 | 60 | 90;
 export type OwnerTriggerAccess = "knowledge" | "calendar";
 export type KnowledgeTrackingStatus = "pending" | "snoozed" | "enabled" | "disabled";
 export type KnowledgeTrackingDefault = "ask" | "private" | "off";
@@ -49,6 +50,7 @@ export type ContactPronouns = "unspecified" | "she/her" | "he/him" | "they/them"
 
 export type ContactPreferences = {
   mode: ReplyMode;
+  autoReplyInitialDelaySeconds?: AutoReplyInitialDelaySeconds;
   relationship: string;
   pinned: boolean;
   hidden: boolean;
@@ -369,6 +371,8 @@ export type IntelligenceData = {
   needsReply: IntelligenceChat[];
   commitments: Array<RelationshipCommitment & { chatId: string; contactName: string }>;
   changes: Array<ContactInsight & { chatId: string; contactName: string }>;
+  /** Confirmed calendar history plus current suggestions. `events` remains the current dashboard feed. */
+  calendarEvents?: Array<CalendarEvent & { chatId: string; contactName: string }>;
   events: Array<CalendarEvent & { chatId: string; contactName: string }>;
   /** Optional while an existing local installation has not yet received the to-do pipeline. */
   todos?: TodoTask[];

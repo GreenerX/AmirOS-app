@@ -27,6 +27,9 @@ import {
 } from "./proactive-intelligence.js";
 
 export type ReplyMode = "off" | "suggest" | "auto";
+export const AUTO_REPLY_INITIAL_DELAY_SECONDS = [15, 30, 45, 60, 90] as const;
+export type AutoReplyInitialDelaySeconds = typeof AUTO_REPLY_INITIAL_DELAY_SECONDS[number];
+export const AUTO_REPLY_FOLLOW_UP_DELAY_MS = 15_000;
 export type OwnerTriggerAccess = "knowledge" | "calendar";
 export type KnowledgeTrackingStatus = "pending" | "snoozed" | "enabled" | "disabled";
 export type KnowledgeTrackingDefault = "ask" | "private" | "off";
@@ -53,6 +56,10 @@ export type ContactPronouns = "unspecified" | "she/her" | "he/him" | "they/them"
 
 export type ContactPreferences = {
   mode: ReplyMode;
+  /** The intentional pause before the first automatic reply after Auto Mode is enabled. */
+  autoReplyInitialDelaySeconds: AutoReplyInitialDelaySeconds;
+  /** Internal delivery state. It resets whenever a chat enters Auto Mode. */
+  autoReplyInitialDelayPending: boolean;
   relationship: string;
   /** Keeps a favorite contact at the top of the People directory. */
   pinned: boolean;
@@ -511,6 +518,8 @@ type PersistedState = {
 
 const DEFAULT_CONTACT: ContactPreferences = {
   mode: "off",
+  autoReplyInitialDelaySeconds: 30,
+  autoReplyInitialDelayPending: false,
   relationship: "Contact",
   pinned: false,
   hidden: false,
@@ -523,6 +532,12 @@ const DEFAULT_CONTACT: ContactPreferences = {
   ownerTriggerAccess: ["knowledge", "calendar"],
   contactTriggerAccess: [],
 };
+
+function normalizeAutoReplyInitialDelay(value: unknown): AutoReplyInitialDelaySeconds {
+  return AUTO_REPLY_INITIAL_DELAY_SECONDS.includes(value as AutoReplyInitialDelaySeconds)
+    ? value as AutoReplyInitialDelaySeconds
+    : DEFAULT_CONTACT.autoReplyInitialDelaySeconds;
+}
 
 function normalizeOwnerTriggerAccess(value: unknown): OwnerTriggerAccess[] {
   if (!Array.isArray(value)) return [...DEFAULT_CONTACT.ownerTriggerAccess];
@@ -1564,6 +1579,8 @@ export class AmirosState {
     return {
       ...DEFAULT_CONTACT,
       ...stored,
+      autoReplyInitialDelaySeconds: normalizeAutoReplyInitialDelay(stored?.autoReplyInitialDelaySeconds),
+      autoReplyInitialDelayPending: stored?.autoReplyInitialDelayPending === true,
       knowledgeTracking: normalizeKnowledgeTracking(stored?.knowledgeTracking, defaultTracking),
       ownerTriggerAccess: normalizeOwnerTriggerAccess(
         stored?.ownerTriggerAccess ?? DEFAULT_CONTACT.ownerTriggerAccess,
@@ -1622,6 +1639,16 @@ export class AmirosState {
     const updated = {
       ...current,
       ...patch,
+      autoReplyInitialDelaySeconds: patch.autoReplyInitialDelaySeconds === undefined
+        ? current.autoReplyInitialDelaySeconds
+        : normalizeAutoReplyInitialDelay(patch.autoReplyInitialDelaySeconds),
+      // Turning Auto Mode on always starts a new first-reply window. The
+      // internal pending state is not accepted from dashboard callers.
+      autoReplyInitialDelayPending: patch.mode === "auto" && current.mode !== "auto"
+        ? true
+        : patch.autoReplyInitialDelayPending === undefined
+          ? current.autoReplyInitialDelayPending
+          : patch.autoReplyInitialDelayPending === true,
       ownerTriggerAccess: patch.ownerTriggerAccess === undefined
         ? current.ownerTriggerAccess
         : normalizeOwnerTriggerAccess(patch.ownerTriggerAccess),
@@ -1642,6 +1669,27 @@ export class AmirosState {
     }
     this.save();
     return updated;
+  }
+
+  /**
+   * Reserves the initial Auto Mode delay exactly once. Reserving before the AI
+   * answer is generated prevents two simultaneous incoming messages from both
+   * claiming the selected first-reply delay. If generation fails, the caller
+   * restores the reservation so the next eligible message still gets it.
+   */
+  claimAutoReplyDelay(chatId: string): { delayMs: number; initial: boolean } {
+    const contact = this.getContact(chatId);
+    if (!contact.autoReplyInitialDelayPending) {
+      return { delayMs: AUTO_REPLY_FOLLOW_UP_DELAY_MS, initial: false };
+    }
+    this.updateContact(chatId, { autoReplyInitialDelayPending: false });
+    return { delayMs: contact.autoReplyInitialDelaySeconds * 1_000, initial: true };
+  }
+
+  restoreInitialAutoReplyDelay(chatId: string): void {
+    if (this.getContact(chatId).mode === "auto") {
+      this.updateContact(chatId, { autoReplyInitialDelayPending: true });
+    }
   }
 
   /**

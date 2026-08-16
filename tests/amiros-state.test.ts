@@ -147,6 +147,30 @@ describe("AmirosState", () => {
     expect(readFileSync(filePath, "utf8")).not.toContain("message body");
   });
 
+  it("uses the selected delay only for the first automatic reply after Auto Mode is enabled", () => {
+    const { state, filePath } = createState();
+    const chatId = "contact@c.us";
+
+    state.updateContact(chatId, { mode: "auto", autoReplyInitialDelaySeconds: 60 });
+    expect(state.getContact(chatId)).toMatchObject({
+      mode: "auto",
+      autoReplyInitialDelaySeconds: 60,
+      autoReplyInitialDelayPending: true,
+    });
+    expect(state.claimAutoReplyDelay(chatId)).toEqual({ delayMs: 60_000, initial: true });
+    expect(state.claimAutoReplyDelay(chatId)).toEqual({ delayMs: 15_000, initial: false });
+
+    state.restoreInitialAutoReplyDelay(chatId);
+    expect(state.getContact(chatId).autoReplyInitialDelayPending).toBe(true);
+    state.updateContact(chatId, { mode: "off" });
+    state.updateContact(chatId, { mode: "auto" });
+    expect(new AmirosState(filePath).getContact(chatId)).toMatchObject({
+      mode: "auto",
+      autoReplyInitialDelaySeconds: 60,
+      autoReplyInitialDelayPending: true,
+    });
+  });
+
   it("persists independent owner and contact trigger resource selections per chat", () => {
     const { state, filePath } = createState();
 

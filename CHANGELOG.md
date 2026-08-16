@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.4] - 2026-08-16
+
+### Changed
+
+- Added Day, Week, and Month views to Calendar. Selecting a date from a Month or Week view opens that day’s schedule.
+- Improved Auto Mode with an adjustable initial reply delay and more natural owner-style replies for regular chats.
+
+### Fixed
+
+- Fixed fresh installs opening an older AmirOS dashboard when another installed copy was still running from a different folder.
+- Restored confirmed past events to Calendar while keeping the Overview agenda focused on the present.
+
+### Testing
+
+- Added a release-installer regression test covering an older running copy in a different folder.
+- Extended Calendar and Auto Mode coverage for the new views, historical events, timing, and reply routing.
+
 ## [0.10.3] - 2026-08-15
 
 ### Changed

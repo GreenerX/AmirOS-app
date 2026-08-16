@@ -34,13 +34,14 @@ function textMessage(input: {
   chatName: string;
   body: string;
   fromMe: boolean;
+  timestamp?: number;
 }) {
   return {
     id: { _serialized: input.id, id: input.id, remote: input.chatId },
     from: input.fromMe ? "owner@c.us" : input.chatId,
     to: input.fromMe ? input.chatId : "owner@c.us",
     fromMe: input.fromMe,
-    timestamp: Math.floor(Date.now() / 1_000),
+    timestamp: input.timestamp ?? Math.floor(Date.now() / 1_000),
     type: "chat",
     body: input.body,
     hasMedia: false,
@@ -265,9 +266,14 @@ describe("AI reply context privacy routing", () => {
       chatName: "Dani",
       body: "What is on Amir's upcoming schedule?",
       fromMe: false,
+      // The real Auto Mode pause is covered by state tests. Use an already
+      // elapsed timestamp here so this privacy-routing test stays immediate.
+      timestamp: Math.floor(Date.now() / 1_000) - 60,
     }), false);
 
     expect(contexts[1]?.scope).toBe("chat");
+    expect(contexts[1]?.autoReplyAsOwner).toBe(true);
+    expect(contexts[1]?.calendarCapture).toBeUndefined();
     expect(contexts[1]?.ownerEvents).toBeUndefined();
     expect(contexts[1]?.ownerKnowledge).toBeUndefined();
   });

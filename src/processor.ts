@@ -264,6 +264,8 @@ export class MessageProcessor {
     const chatId = await resolveConversationId(message);
     if (!chatId) return;
     const isGroup = chatId.endsWith("@g.us");
+    let claimedAutoReplyDelay: { delayMs: number; initial: boolean } | undefined;
+    let autoReplyDueAt: number | undefined;
     let capturedIncomingText = "";
     if (!message.fromMe) {
       try {
@@ -344,6 +346,13 @@ export class MessageProcessor {
         return;
       }
       const { command } = resolved;
+      // Explicit !bot requests remain immediate. The pause applies only to
+      // ordinary replies that Auto Mode decides to send on the owner's behalf.
+      if (!message.fromMe && !isSelfChat && !resolved.explicit && contactMode === "auto" && this.amiros) {
+        claimedAutoReplyDelay = this.amiros.claimAutoReplyDelay(chatId);
+        const receivedAt = message.timestamp ? message.timestamp * 1_000 : Date.now();
+        autoReplyDueAt = receivedAt + claimedAutoReplyDelay.delayMs;
+      }
       console.log("Bot command recognized", { messageId, kind: command.kind });
 
       if (command.kind === "models") {
@@ -612,12 +621,17 @@ export class MessageProcessor {
         );
         return;
       }
-      const calendarCapture = this.amiros?.getCalendarCaptureResult(
-        chatId,
-        command.prompt,
-        currentMessageTimestamp,
-        currentMessageId,
-      );
+      // Capture results are owner-facing operational context. Contact-authored
+      // messages may still be learned from, but Auto Mode must reply as the
+      // owner rather than expose that AmirOS made or reviewed a suggestion.
+      const calendarCapture = message.fromMe
+        ? this.amiros?.getCalendarCaptureResult(
+          chatId,
+          command.prompt,
+          currentMessageTimestamp,
+          currentMessageId,
+        )
+        : undefined;
       const ownerTriggered = message.fromMe && resolved.explicit && !isSelfChat;
       const contactTriggered = !message.fromMe && resolved.explicit && !isSelfChat;
       const ownerTriggerAccess = contact?.ownerTriggerAccess || [];
@@ -661,6 +675,7 @@ export class MessageProcessor {
         command.kind === "web",
         {
           scope: contextScope,
+          autoReplyAsOwner: !message.fromMe && !isSelfChat && !resolved.explicit && contactMode === "auto",
           triggerAuthor,
           requesterName,
           ownerName,
@@ -735,6 +750,10 @@ export class MessageProcessor {
         console.log("AI draft prepared for AmirOS review", { messageId });
         return;
       }
+      if (autoReplyDueAt) {
+        const remainingDelay = Math.max(0, autoReplyDueAt - Date.now());
+        if (remainingDelay > 0) await wait(remainingDelay);
+      }
       this.suppressOutput(chatId, "chat", answer);
       await message.reply(answer, chatId);
       this.amiros?.addActivity(
@@ -758,6 +777,7 @@ export class MessageProcessor {
       }
       console.log("AI reply sent", { messageId });
     } catch (error) {
+      if (claimedAutoReplyDelay?.initial) this.amiros?.restoreInitialAutoReplyDelay(chatId);
       console.error("Failed to process WhatsApp message", {
         messageId,
         error: error instanceof Error ? error.message : String(error),

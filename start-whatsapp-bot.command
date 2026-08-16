@@ -19,6 +19,14 @@ amiros_pid_is_watchdog() {
   /bin/ps -p "$candidate" -o command= 2>/dev/null | /usr/bin/grep -F "$PROJECT_DIR/scripts/amiros-watchdog.mjs" >/dev/null 2>&1
 }
 
+current_copy_is_running() {
+  local recorded_pid=""
+  [[ -f "$PID_FILE" ]] || return 1
+  recorded_pid="$(<"$PID_FILE")"
+  [[ "$recorded_pid" =~ '^[0-9]+$' ]] || return 1
+  /bin/kill -0 "$recorded_pid" 2>/dev/null && amiros_pid_is_watchdog "$recorded_pid"
+}
+
 open_dashboard() {
   if [[ "${AMIROS_NO_OPEN:-0}" != "1" ]] && [[ -x /usr/bin/open ]]; then
     /usr/bin/open "$DASHBOARD_URL"
@@ -60,10 +68,17 @@ if [[ -z "$NODE_BIN" ]]; then
 fi
 
 if amiros_is_available; then
-  echo "AmirOS is already running in the background."
-  echo "Opening the control center at $DASHBOARD_URL"
-  open_dashboard
-  exit 0
+  if current_copy_is_running; then
+    echo "AmirOS is already running in the background."
+    echo "Opening the control center at $DASHBOARD_URL"
+    open_dashboard
+    exit 0
+  fi
+  echo "Another AmirOS copy is already using the local dashboard."
+  echo "Close that copy, then open this AmirOS folder again."
+  echo "This copy was not opened, so you will not see an older dashboard by mistake."
+  read -r "?Press Return to close..."
+  exit 1
 fi
 
 if [[ -f "$PID_FILE" ]]; then
@@ -88,7 +103,7 @@ echo "Use stop-whatsapp-bot.command when you want to stop AmirOS."
 echo "Model selection is available inside AmirOS under Usage."
 
 for _attempt in {1..60}; do
-  if amiros_is_available; then
+  if amiros_is_available && current_copy_is_running; then
     echo "AmirOS is running in the background."
     echo "Logs: $PROJECT_DIR/work/bot.log"
     open_dashboard

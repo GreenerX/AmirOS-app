@@ -111,6 +111,46 @@ describe("AI contact personalization", () => {
     expect(instructions).toContain("Never include transport command prefixes");
   });
 
+  it("keeps automatic contact replies in the owner's voice without exposing AmirOS workflow", () => {
+    const instructions = buildPersonalizedInstructions({
+      ...context,
+      isGroup: false,
+      autoReplyAsOwner: true,
+      calendarCapture: {
+        requested: true,
+        status: "created",
+        event: {
+          id: "dance-1",
+          title: "Dance",
+          startAt: Date.now() + 86_400_000,
+          allDay: false,
+          status: "inferred",
+          evidence: { excerpt: "I have dance tomorrow at 5:30.", timestamp: Date.now() },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+      styleProfile: {
+        summary: "Short, affectionate messages.",
+        messageLength: "One short sentence",
+        emojiUse: "One heart when it feels natural",
+        formality: "Very casual",
+        replyGuidance: ["Use 'babe' naturally."],
+        updatedAt: 100,
+        sourceMessageCount: 5,
+        ownerMessageCountAtUpdate: 5,
+      },
+    });
+
+    expect(instructions).toContain("AUTO MODE OWNER PERSONA (mandatory)");
+    expect(instructions).toContain("Write only the message Amir himself would naturally send");
+    expect(instructions).toContain("Short, affectionate messages");
+    expect(instructions).toContain("Use 'babe' naturally");
+    expect(instructions).not.toContain("VERIFIED CALENDAR ACTION RESULT");
+    expect(instructions).not.toContain("added and is awaiting review");
+    expect(instructions).not.toContain("AMIROS WRITE CONFIRMATION (mandatory)");
+  });
+
   it("makes a rude custom style explicit instead of letting the warm default soften it", () => {
     const instructions = buildPersonalizedInstructions({
       ...context,

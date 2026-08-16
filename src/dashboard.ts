@@ -2123,10 +2123,19 @@ export function startAmirosDashboard(options: DashboardOptions) {
           .filter((commitment) => commitment.status === "open" || commitment.status === "needs_review")
           .map((commitment) => ({ ...commitment, chatId: item.chatId, contactName: item.contactName })))
           .sort((a, b) => b.updatedAt - a.updatedAt);
-        const events = chats.flatMap((item) => item.events
-          .filter((event) => event.status !== "dismissed" && event.startAt >= Date.now() - 86_400_000)
+        // The dashboard queue only needs current plans, while the Calendar is
+        // the user's record of past and future confirmed events. Keep those
+        // two views separate so an old event is not silently hidden from the
+        // calendar just because it is no longer actionable.
+        const calendarEvents = chats.flatMap((item) => item.events
+          // Confirmed plans are calendar history. Inferred plans are a review
+          // queue, so retain the existing one-day freshness window for them.
+          .filter((event) => event.status === "confirmed" || (
+            event.status === "inferred" && event.startAt >= assessedAt - 86_400_000
+          ))
           .map((event) => ({ ...event, chatId: item.chatId, contactName: item.contactName })))
           .sort((a, b) => a.startAt - b.startAt);
+        const events = calendarEvents.filter((event) => event.startAt >= assessedAt - 86_400_000);
         const todos = visibleTodoTasks(chats.flatMap((item) => item.todos
           .map((todo) => ({ ...todo, chatId: item.chatId, contactName: item.contactName }))));
         const proactiveDelivery = state.proactiveDeliveryDecisions();
@@ -2229,6 +2238,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
           ).slice(0, 20),
           commitments,
           events,
+          calendarEvents,
           todos,
           changes: [...changesByCluster.values()]
             .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -2688,6 +2698,25 @@ export function startAmirosDashboard(options: DashboardOptions) {
             sendJson(response, 400, { error: `${key} must be true or false` });
             return;
           }
+        }
+        if (patch.mode !== undefined && patch.mode !== "off" && patch.mode !== "suggest" && patch.mode !== "auto") {
+          sendJson(response, 400, { error: "Reply mode has an unsupported value" });
+          return;
+        }
+        if (
+          patch.autoReplyInitialDelaySeconds !== undefined &&
+          patch.autoReplyInitialDelaySeconds !== 15 &&
+          patch.autoReplyInitialDelaySeconds !== 30 &&
+          patch.autoReplyInitialDelaySeconds !== 45 &&
+          patch.autoReplyInitialDelaySeconds !== 60 &&
+          patch.autoReplyInitialDelaySeconds !== 90
+        ) {
+          sendJson(response, 400, { error: "Choose an Auto Mode delay of 15, 30, 45, 60, or 90 seconds" });
+          return;
+        }
+        if (patch.autoReplyInitialDelayPending !== undefined) {
+          sendJson(response, 400, { error: "Auto Mode delivery state is managed by AmirOS" });
+          return;
         }
         if (patch.customInstructions !== undefined) {
           if (patch.customInstructions.length > 2_000) {

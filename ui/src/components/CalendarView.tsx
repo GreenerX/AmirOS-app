@@ -1,6 +1,6 @@
 import {
   CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, Cloud, Copy, EyeOff,
-  ExternalLink, MapPin, MessageSquareText, PencilLine, RefreshCw,
+  ExternalLink, MessageSquareText, PencilLine, RefreshCw,
   Trash2, Undo2, X,
 } from "lucide-react";
 import { SiApple, SiGooglecalendar } from "react-icons/si";
@@ -13,6 +13,7 @@ import type { CalendarEvent, IntelligenceData } from "../types";
 import { CalendarEventForm, type CalendarEventDraft } from "./CalendarEventForm";
 
 type EnrichedEvent = CalendarEvent & { chatId: string; contactName: string };
+type CalendarDisplayMode = "day" | "week" | "month";
 type CalendarPatch = {
   status?: CalendarEvent["status"];
   title?: string;
@@ -45,9 +46,27 @@ function localDateTime(timestamp: number) {
   return new Date(timestamp - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
-function sameDay(left: Date, timestamp: number) {
-  const right = new Date(timestamp);
-  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
+function atStartOfDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function addDays(value: Date, amount: number) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate() + amount);
+}
+
+function addMonths(value: Date, amount: number) {
+  const targetMonth = value.getMonth() + amount;
+  const lastDay = new Date(value.getFullYear(), targetMonth + 1, 0).getDate();
+  return new Date(value.getFullYear(), targetMonth, Math.min(value.getDate(), lastDay));
+}
+
+function weekStart(value: Date) {
+  return addDays(value, -value.getDay());
+}
+
+function dayKey(value: Date | number) {
+  const date = value instanceof Date ? value : new Date(value);
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 }
 
 function eventEnd(event: CalendarEvent) {
@@ -57,9 +76,9 @@ function eventEnd(event: CalendarEvent) {
 export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: CalendarViewProps) {
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [dates, setDates] = useState<Record<string, string>>({});
-  const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [displayMode, setDisplayMode] = useState<CalendarDisplayMode>("month");
+  const [focusDate, setFocusDate] = useState(() => atStartOfDay(new Date()));
   const [selectedEvent, setSelectedEvent] = useState<EnrichedEvent>();
-  const [selectedMonthDay, setSelectedMonthDay] = useState<{ date: Date; events: EnrichedEvent[] }>();
   const [editDraft, setEditDraft] = useState<CalendarEventDraft>();
   const [deleteCandidate, setDeleteCandidate] = useState<EnrichedEvent>();
   const [deletedEvent, setDeletedEvent] = useState<EnrichedEvent>();
@@ -70,13 +89,31 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
   const [subscriptionError, setSubscriptionError] = useState("");
   const [copied, setCopied] = useState(false);
   const [subscriptionHidden, setSubscriptionHidden] = useState(calendarSubscriptionBannerHidden);
-  const events = data?.events || [];
+  // The Calendar is history as well as a planning surface. Older dashboard
+  // responses do not have calendarEvents yet, so retain the current-feed
+  // fallback for a seamless upgrade.
+  const events = data?.calendarEvents || data?.events || [];
   const confirmed = events.filter((item) => item.status === "confirmed");
   const suggestions = events.filter((item) => item.status === "inferred");
+  const month = useMemo(() => new Date(focusDate.getFullYear(), focusDate.getMonth(), 1), [focusDate]);
   const days = useMemo(() => {
     const start = new Date(month.getFullYear(), month.getMonth(), 1 - month.getDay());
     return Array.from({ length: 42 }, (_, index) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + index));
   }, [month]);
+  const weekDays = useMemo(() => {
+    const start = weekStart(focusDate);
+    return Array.from({ length: 7 }, (_, index) => addDays(start, index));
+  }, [focusDate]);
+  const confirmedByDay = useMemo(() => {
+    const byDay = new Map<string, EnrichedEvent[]>();
+    for (const event of confirmed) {
+      const key = dayKey(event.startAt);
+      byDay.set(key, [...(byDay.get(key) || []), event]);
+    }
+    for (const dayEvents of byDay.values()) dayEvents.sort((left, right) => left.startAt - right.startAt);
+    return byDay;
+  }, [confirmed]);
+  const focusedDayEvents = confirmedByDay.get(dayKey(focusDate)) || [];
 
   useEffect(() => {
     if (subscriptionHidden) return;
@@ -90,16 +127,15 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
   }, [confirmed.length, subscriptionHidden]);
 
   useEffect(() => {
-    if (!selectedEvent && !deleteCandidate && !selectedMonthDay) return;
+    if (!selectedEvent && !deleteCandidate) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (deleteCandidate) setDeleteCandidate(undefined);
-      else if (selectedMonthDay) setSelectedMonthDay(undefined);
       else { setSelectedEvent(undefined); setEditDraft(undefined); }
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [selectedEvent?.id, deleteCandidate?.id, selectedMonthDay?.date.getTime()]);
+  }, [selectedEvent?.id, deleteCandidate?.id]);
 
   useEffect(() => {
     if (!deletedEvent) return;
@@ -202,8 +238,30 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
     }
   };
 
+  const openDay = (date: Date) => {
+    setFocusDate(atStartOfDay(date));
+    setDisplayMode("day");
+  };
+  const moveCalendar = (amount: number) => {
+    setFocusDate((current) => displayMode === "day"
+      ? addDays(current, amount)
+      : displayMode === "week"
+        ? addDays(current, amount * 7)
+        : addMonths(current, amount));
+  };
+  const calendarTitle = displayMode === "day"
+    ? formatDateTime(focusDate, { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+    : displayMode === "week"
+      ? `${formatDateTime(weekDays[0]!, { month: "short", day: "numeric" })} – ${formatDateTime(weekDays[6]!, { month: "short", day: "numeric", year: "numeric" })}`
+      : formatDateTime(month, { month: "long", year: "numeric" });
+  const visiblePlanCount = displayMode === "day"
+    ? focusedDayEvents.length
+    : displayMode === "week"
+      ? weekDays.reduce((count, day) => count + (confirmedByDay.get(dayKey(day))?.length || 0), 0)
+      : confirmed.length;
+
   return <main className="main-content secondary-page calendar-page">
-    <header className="page-header compact-header"><div><h1>Calendar</h1><p>Plans discovered in conversations, with evidence attached.</p></div></header>
+    <header className="page-header compact-header"><div><h1>Calendar</h1><p>Plans discovered in conversations, with evidence attached.</p></div><div className="calendar-view-switcher" role="group" aria-label="Calendar view"><button className={displayMode === "day" ? "active" : ""} type="button" aria-pressed={displayMode === "day"} onClick={() => setDisplayMode("day")}>Day</button><button className={displayMode === "week" ? "active" : ""} type="button" aria-pressed={displayMode === "week"} onClick={() => setDisplayMode("week")}>Week</button><button className={displayMode === "month" ? "active" : ""} type="button" aria-pressed={displayMode === "month"} onClick={() => setDisplayMode("month")}>Month</button></div></header>
 
     {suggestions.length > 0 ? <section className="panel calendar-suggestions calendar-suggestions-top"><div className="panel-heading"><h2>Suggested from messages</h2><small>{suggestions.length} awaiting review</small></div>
       <div className="calendar-agenda">{suggestions.map((event) => { const title = titles[event.id] ?? event.title; const dateValue = dates[event.id] ?? localDateTime(event.startAt); const startAt = new Date(dateValue).getTime(); return <article key={event.id}>
@@ -224,24 +282,14 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
       {subscriptionError ? <small className="subscription-error">{subscriptionError}</small> : null}
     </section> : null}
 
-    <section className="panel calendar-month-panel">
-      <div className="calendar-month-header"><div><h2>{new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(month)}</h2><small>{confirmed.length} confirmed plans</small></div><span><button className="icon-button" aria-label="Previous month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}><ChevronLeft size={17} /></button><button className="button compact" onClick={() => setMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1))}>Today</button><button className="icon-button" aria-label="Next month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}><ChevronRight size={17} /></button></span></div>
-      <div className="calendar-month-grid">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <strong className="calendar-weekday" key={day}>{day}</strong>)}{days.map((day) => { const dayEvents = confirmed.filter((event) => sameDay(day, event.startAt)); const outside = day.getMonth() !== month.getMonth(); const today = sameDay(day, Date.now()); return <div key={day.toISOString()} className={`calendar-day ${outside ? "outside" : ""} ${today ? "today" : ""}`}><span>{day.getDate()}</span>{dayEvents.slice(0, 3).map((event) => <button key={event.id} onClick={() => openEvent(event)} title={`View ${event.title} at ${shortTime(event.startAt)}`}><time>{shortTime(event.startAt)}</time><span>{event.title}</span></button>)}{dayEvents.length > 3 ? <button type="button" className="calendar-day-more" aria-label={`Show all ${dayEvents.length} events on ${new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric" }).format(day)}`} onClick={() => setSelectedMonthDay({ date: day, events: dayEvents })}>+{dayEvents.length - 3} more</button> : null}</div>; })}</div>
-    </section>
+    <section className={`panel calendar-display-panel calendar-display-${displayMode}`}>
+      <div className="calendar-month-header"><div><h2>{calendarTitle}</h2><small>{visiblePlanCount === 1 ? "1 plan" : `${visiblePlanCount} plans`}</small></div><span><button className="icon-button" aria-label={`Previous ${displayMode}`} onClick={() => moveCalendar(-1)}><ChevronLeft size={17} /></button><button className="button compact" onClick={() => setFocusDate(atStartOfDay(new Date()))}>Today</button><button className="icon-button" aria-label={`Next ${displayMode}`} onClick={() => moveCalendar(1)}><ChevronRight size={17} /></button></span></div>
 
-    {selectedMonthDay ? <div className="event-detail-backdrop" role="presentation" onClick={() => setSelectedMonthDay(undefined)}>
-      <section className="event-detail-bubble calendar-day-events-dialog" role="dialog" aria-modal="true" aria-labelledby="calendar-day-events-title" onClick={(event) => event.stopPropagation()}>
-        <header><span className="event-detail-icon"><CalendarDays size={22} /></span><span><small>Day agenda</small><h2 id="calendar-day-events-title">{new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(selectedMonthDay.date)}</h2></span><button className="icon-button" aria-label="Close day agenda" onClick={() => setSelectedMonthDay(undefined)}><X size={17} /></button></header>
-        <div className="calendar-day-events-list">{selectedMonthDay.events.map((event) => <button key={event.id} type="button" onClick={() => { setSelectedMonthDay(undefined); openEvent(event); }}><time>{shortTime(event.startAt)}</time><span><strong>{event.title}</strong><small>{event.location || `With ${event.contactName}`}</small></span><ChevronRight size={16} /></button>)}</div>
-      </section>
-    </div> : null}
+      {displayMode === "day" ? <div className="calendar-day-schedule">{focusedDayEvents.length > 0 ? focusedDayEvents.map((event) => <button key={event.id} className="calendar-schedule-event" type="button" onClick={() => openEvent(event)}><time>{shortTime(event.startAt)}</time><span><strong>{event.title}</strong><small>{event.location || `With ${event.contactName}`}</small></span><ChevronRight size={17} /></button>) : <div className="calendar-view-empty"><CalendarDays size={22} /><span><strong>No plans for this day</strong><small>Choose another day or add an event from a conversation.</small></span></div>}</div> : null}
 
-    <section className="panel calendar-confirmed"><div className="panel-heading"><h2>Confirmed agenda</h2><small>{confirmed.length} plans</small></div>
-        <div className="calendar-agenda">{confirmed.map((event) => <article key={event.id}>
-          <span className="agenda-date"><strong>{new Date(event.startAt).getDate()}</strong><small>{new Intl.DateTimeFormat(undefined, { month: "short" }).format(new Date(event.startAt))}</small><time>{shortTime(event.startAt)}</time></span>
-          <button onClick={() => openEvent(event)}><strong>{event.title}</strong><small>{longDate(event.startAt)}</small>{event.location ? <span><MapPin size={13} />{event.location}</span> : null}<span>From {event.contactName}</span></button>
-          <span className="agenda-export-actions"><a className="icon-button calendar-platform-button google" aria-label="Add to Google Calendar" title="Google Calendar" href={googleCalendarUrl(event, event.contactName)} target="_blank" rel="noreferrer"><SiGooglecalendar className="brand-icon google" size={17} /></a><button className="icon-button calendar-platform-button apple" aria-label="Download for Apple Calendar" title="Apple Calendar (.ics)" onClick={() => downloadIcs(event, event.contactName)}><SiApple className="brand-icon apple" size={17} /></button><button className="icon-button danger" aria-label={`Delete ${event.title}`} title="Delete event" onClick={() => setDeleteCandidate(event)}><Trash2 size={15} /></button></span>
-        </article>)}{confirmed.length === 0 ? <div className="radar-empty"><CalendarDays size={21} /><span><strong>No confirmed plans yet</strong><small>Accept a suggestion to place it here.</small></span></div> : null}</div>
+      {displayMode === "week" ? <div className="calendar-week-grid">{weekDays.map((day) => { const dayEvents = confirmedByDay.get(dayKey(day)) || []; const today = dayKey(day) === dayKey(new Date()); return <section key={day.toISOString()} className={`calendar-week-day ${today ? "today" : ""}`}><button className="calendar-week-date" type="button" aria-label={`Open ${formatDateTime(day, { weekday: "long", month: "long", day: "numeric" })} day view`} onClick={() => openDay(day)}><small>{formatDateTime(day, { weekday: "short" }).toUpperCase()}</small><strong>{day.getDate()}</strong></button><div>{dayEvents.map((event) => <button key={event.id} className="calendar-week-event" type="button" title={`View ${event.title} at ${shortTime(event.startAt)}`} onClick={() => openEvent(event)}><time>{shortTime(event.startAt)}</time><span>{event.title}</span></button>)}</div></section>; })}</div> : null}
+
+      {displayMode === "month" ? <div className="calendar-month-grid">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <strong className="calendar-weekday" key={day}>{day}</strong>)}{days.map((day) => { const dayEvents = confirmedByDay.get(dayKey(day)) || []; const outside = day.getMonth() !== month.getMonth(); const today = dayKey(day) === dayKey(new Date()); return <div key={day.toISOString()} className={`calendar-day ${outside ? "outside" : ""} ${today ? "today" : ""}`}><button className="calendar-day-date" type="button" aria-label={`Open ${formatDateTime(day, { weekday: "long", month: "long", day: "numeric" })} day view`} onClick={() => openDay(day)}>{day.getDate()}</button>{dayEvents.slice(0, 3).map((event) => <button key={event.id} onClick={() => openEvent(event)} title={`View ${event.title} at ${shortTime(event.startAt)}`}><time>{shortTime(event.startAt)}</time><span>{event.title}</span></button>)}{dayEvents.length > 3 ? <button type="button" className="calendar-day-more" aria-label={`Open all ${dayEvents.length} events on ${new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric" }).format(day)} in day view`} onClick={() => openDay(day)}>+{dayEvents.length - 3} more</button> : null}</div>; })}</div> : null}
     </section>
 
     {selectedEvent ? <div className="event-detail-backdrop" role="presentation" onClick={() => { setSelectedEvent(undefined); setEditDraft(undefined); }}>

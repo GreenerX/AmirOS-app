@@ -99,6 +99,10 @@ async function runInstaller(project: string, port: number, testBin: string): Pro
       AMIROS_WATCHDOG_SERVER_PATH: safeServerPath,
       AMIROS_INSTALL_TEST_NODE: process.execPath,
       AMIROS_INSTALL_TEST_SOURCE: projectDirectory,
+      // The release installer intentionally stops old AmirOS copies from any
+      // folder. Scope that production-safe rule to this fixture so a local
+      // developer's real AmirOS process is never touched by the test.
+      AMIROS_INSTALL_TEST_WATCHDOG_ROOT: testDirectory,
       OPENAI_API_KEY: "",
       WHATSAPP_SESSION_PATH: resolve(project, ".wwebjs_auth"),
     },
@@ -140,6 +144,29 @@ async function stopInstalledAmiros(project: string): Promise<void> {
     }
   }
   throw new Error("The test watchdog did not stop cleanly.");
+}
+
+async function startStaleAmiros(project: string, port: number): Promise<void> {
+  const watchdogPath = resolve(project, "scripts/amiros-watchdog.mjs");
+  const child = spawn(process.execPath, [watchdogPath], {
+    cwd: project,
+    detached: true,
+    stdio: "ignore",
+    env: {
+      ...process.env,
+      AMIROS_NO_OPEN: "1",
+      AMIROS_PORT: String(port),
+      AMIROS_WATCHDOG_SERVER_PATH: safeServerPath,
+      WHATSAPP_SESSION_PATH: resolve(project, ".wwebjs_auth"),
+    },
+  });
+  child.unref();
+  await waitForDashboard(port, project);
+}
+
+function assertStopped(project: string): void {
+  const pidPath = resolve(project, "work/amiros.pid");
+  assert.ok(!existsSync(pidPath), "The earlier AmirOS watchdog record should be removed after installation.");
 }
 
 function assertBuildAndRuntime(project: string): void {
@@ -214,7 +241,25 @@ try {
   assert.ok(existsSync(resolve(legacyProject, "work/amiros-state.json")), "Older private state must remain intact.");
   await stopInstalledAmiros(upgradeProject);
 
-  console.log("Installer upgrade test passed: clean install and v0.3.0-style upgrade both built and launched safely.");
+  // A tester can extract the newer ZIP in Documents while an older copy is
+  // still running from Desktop. The installer must stop that existing AmirOS
+  // watchdog before opening the freshly built dashboard; otherwise the port
+  // makes the launcher open the stale copy and falsely report success.
+  const staleProject = resolve(testDirectory, "Desktop", "AmirOS older copy");
+  copyZipFixture(staleProject);
+  const freshProject = resolve(testDirectory, "Documents", "AmirOS new copy");
+  copyZipFixture(freshProject);
+  installedProjects.push(freshProject);
+  const sharedPort = await reservePort();
+  await startStaleAmiros(staleProject, sharedPort);
+  const staleOutput = await runInstaller(freshProject, sharedPort, testBin);
+  assert.match(staleOutput, /Stopping a running AmirOS copy before installing the update/, "Installer should stop a stale AmirOS copy from another folder.");
+  await waitForDashboard(sharedPort, freshProject);
+  assertBuildAndRuntime(freshProject);
+  assertStopped(staleProject);
+  await stopInstalledAmiros(freshProject);
+
+  console.log("Installer upgrade test passed: clean install, prior-data upgrade, and a stale copy in another folder all built and launched safely.");
 } finally {
   for (const project of installedProjects) {
     await stopInstalledAmiros(project).catch(() => undefined);
