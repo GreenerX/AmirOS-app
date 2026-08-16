@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.5] - 2026-08-16
+
+### Fixed
+
+- Fixed the beta installer leaving a verified AmirOS dashboard backend running when its prior background monitor had already exited. The new install now stops that stale service and opens its own dashboard.
+- Kept the repair scoped to verified AmirOS processes, so an unrelated local application using the same port is never stopped.
+
+### Testing
+
+- Added a clean-install regression that simulates a stale AmirOS dashboard backend with no remaining watchdog process.
+
 ## [0.10.4] - 2026-08-16
 
 ### Changed

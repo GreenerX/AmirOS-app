@@ -30,19 +30,15 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-16",
-  headline: "A safer beta install and a more useful daily view",
+  headline: "A beta install that recovers the dashboard reliably",
   notes: [
     {
-      title: "Install the right AmirOS copy",
-      detail: "Installing a newer download now safely stops an older AmirOS copy, even when it came from another folder, so the dashboard opens the newly installed version.",
+      title: "Recover from an interrupted earlier install",
+      detail: "The installer now recognizes and stops a verified older AmirOS dashboard even when its background monitor is no longer running, then opens the newly installed dashboard.",
     },
     {
-      title: "A calendar for looking ahead and back",
-      detail: "Calendar keeps confirmed past plans available and adds Day, Week, and Month views for moving through your schedule naturally.",
-    },
-    {
-      title: "More natural automatic replies",
-      detail: "Auto Mode can wait for your chosen first-response delay and keeps replies in your conversational voice instead of exposing assistant-only status messages.",
+      title: "No more silent stale-dashboard conflict",
+      detail: "The installer verifies the dashboard process belongs to AmirOS before stopping it, so an unrelated local app is never interrupted.",
     },
   ],
 };
@@ -53,6 +49,25 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.10.4",
+    releasedAt: "2026-08-16",
+    headline: "A safer beta install and a more useful daily view",
+    notes: [
+      {
+        title: "Install the right AmirOS copy",
+        detail: "Installing a newer download safely stops an older AmirOS watchdog, even when it came from another folder, so the dashboard opens the newly installed version.",
+      },
+      {
+        title: "A calendar for looking ahead and back",
+        detail: "Calendar keeps confirmed past plans available and adds Day, Week, and Month views for moving through your schedule naturally.",
+      },
+      {
+        title: "More natural automatic replies",
+        detail: "Auto Mode can wait for your chosen first-response delay and keeps replies in your conversational voice instead of exposing assistant-only status messages.",
+      },
+    ],
+  },
   {
     version: "0.10.3",
     releasedAt: "2026-08-15",

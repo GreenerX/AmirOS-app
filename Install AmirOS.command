@@ -6,6 +6,7 @@ set -u
 
 PROJECT_DIR="${0:A:h}"
 NODE_DOWNLOAD_URL="https://nodejs.org/en/download"
+AMIROS_PORT="${AMIROS_PORT:-3789}"
 
 # AmirOS keeps every private item beside the app itself. When a person has
 # downloaded a newer ZIP into a second AmirOS folder, look only at sibling
@@ -16,36 +17,100 @@ has_private_amiros_data() {
   [[ -f "$directory/.env.local" || -f "$directory/.env" || -d "$directory/.wwebjs_auth" || -f "$directory/work/amiros-state.json" || -d "$directory/work/profile-avatars" ]]
 }
 
+process_working_directory() {
+  local candidate="$1"
+  /usr/sbin/lsof -a -p "$candidate" -d cwd -Fn 2>/dev/null | /usr/bin/sed -n 's/^n//p' | /usr/bin/head -n 1
+}
+
+process_is_in_installer_test_root() {
+  local candidate="$1" command_line working_directory
+  [[ -n "${AMIROS_INSTALL_TEST_WATCHDOG_ROOT:-}" ]] || return 0
+  command_line="$(/bin/ps -p "$candidate" -o command= 2>/dev/null || true)"
+  [[ "$command_line" == *"${AMIROS_INSTALL_TEST_WATCHDOG_ROOT}/"* ]] && return 0
+  working_directory="$(process_working_directory "$candidate")"
+  [[ "$working_directory" == "${AMIROS_INSTALL_TEST_WATCHDOG_ROOT}"/* ]]
+}
+
+# A normal AmirOS service is a watchdog with a child backend. If an older
+# watchdog exited unexpectedly, however, its child backend can still own the
+# dashboard port. Confirming the process's working directory contains the
+# AmirOS package name lets us recover that precise stale backend without ever
+# killing an arbitrary application that happens to use a local port.
+process_is_amiros() {
+  local candidate="$1" command_line working_directory
+  command_line="$(/bin/ps -p "$candidate" -o command= 2>/dev/null || true)"
+  process_is_in_installer_test_root "$candidate" || return 1
+  [[ "$command_line" == *"/scripts/amiros-watchdog.mjs"* ]] && return 0
+  working_directory="$(process_working_directory "$candidate")"
+  [[ -f "$working_directory/package.json" ]] || return 1
+  /usr/bin/grep -Eq '"name"[[:space:]]*:[[:space:]]*"whatsapp-openai-bot"' "$working_directory/package.json"
+}
+
+process_parent_pid() {
+  /bin/ps -p "$1" -o ppid= 2>/dev/null | /usr/bin/tr -d '[:space:]'
+}
+
+watchdog_ancestor_pid() {
+  local candidate="$1" command_line parent
+  for _attempt in {1..16}; do
+    command_line="$(/bin/ps -p "$candidate" -o command= 2>/dev/null || true)"
+    if [[ "$command_line" == *"/scripts/amiros-watchdog.mjs"* ]]; then
+      echo "$candidate"
+      return 0
+    fi
+    parent="$(process_parent_pid "$candidate")"
+    [[ "$parent" =~ '^[0-9]+$' && "$parent" != "$candidate" && "$parent" != "1" ]] || return 1
+    candidate="$parent"
+  done
+  return 1
+}
+
+stop_amiros_process() {
+  local candidate="$1" description="$2"
+  echo "$description"
+  /bin/kill -TERM "$candidate" 2>/dev/null || true
+  for _attempt in {1..20}; do
+    /bin/kill -0 "$candidate" 2>/dev/null || return 0
+    sleep 1
+  done
+  # This is a verified AmirOS process that did not respond to a graceful stop.
+  # Do not let it keep an old dashboard alive indefinitely during an install.
+  /bin/kill -KILL "$candidate" 2>/dev/null || true
+  for _attempt in {1..5}; do
+    /bin/kill -0 "$candidate" 2>/dev/null || return 0
+    sleep 1
+  done
+  echo "AmirOS could not stop the earlier copy. It was left running and this update was not started."
+  return 1
+}
+
+dashboard_listener_pids() {
+  /usr/sbin/lsof -nP -iTCP:"$AMIROS_PORT" -sTCP:LISTEN -t 2>/dev/null || true
+}
+
+stop_orphaned_dashboard() {
+  local candidate watchdog
+  for candidate in $(dashboard_listener_pids); do
+    [[ "$candidate" =~ '^[0-9]+$' ]] || continue
+    process_is_amiros "$candidate" || continue
+    watchdog="$(watchdog_ancestor_pid "$candidate" 2>/dev/null || true)"
+    if [[ -n "$watchdog" && "$watchdog" != "$candidate" ]]; then
+      stop_amiros_process "$watchdog" "Stopping a running AmirOS copy before installing the update..." || return 1
+    fi
+    if /bin/kill -0 "$candidate" 2>/dev/null; then
+      stop_amiros_process "$candidate" "Stopping an earlier AmirOS dashboard service before installing the update..." || return 1
+    fi
+  done
+}
+
 stop_existing_amiros() {
-  local candidate command_line
+  local candidate
   for candidate in $(/usr/bin/pgrep -f 'amiros-watchdog\.mjs' 2>/dev/null || true); do
     [[ "$candidate" =~ '^[0-9]+$' ]] || continue
-    command_line="$(/bin/ps -p "$candidate" -o command= 2>/dev/null || true)"
-    # An older ZIP is often extracted in a different folder (for example,
-    # Desktop versus Documents). A dashboard from that copy still owns the
-    # normal local port, even after this new copy has built successfully. Only
-    # stop processes that are explicitly AmirOS watchdogs; never stop a
-    # generic process merely because it uses the same port.
-    #
-    # The optional root is used solely by the isolated installer test fixture
-    # so it cannot interact with a developer's real AmirOS process.
-    [[ "$command_line" == *"/scripts/amiros-watchdog.mjs"* ]] || continue
-    if [[ -n "${AMIROS_INSTALL_TEST_WATCHDOG_ROOT:-}" && "$command_line" != *"${AMIROS_INSTALL_TEST_WATCHDOG_ROOT}/"* ]]; then
-      continue
-    fi
-    {
-      echo "Stopping a running AmirOS copy before installing the update..."
-      /bin/kill -TERM "$candidate" 2>/dev/null || true
-      for _attempt in {1..20}; do
-        /bin/kill -0 "$candidate" 2>/dev/null || break
-        sleep 1
-      done
-      if /bin/kill -0 "$candidate" 2>/dev/null; then
-        echo "AmirOS could not stop the earlier copy. It was left running and this update was not started."
-        return 1
-      fi
-    }
+    process_is_amiros "$candidate" || continue
+    stop_amiros_process "$candidate" "Stopping a running AmirOS copy before installing the update..." || return 1
   done
+  stop_orphaned_dashboard
 }
 
 migrate_private_data_from_sibling() {

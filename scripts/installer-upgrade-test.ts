@@ -164,6 +164,21 @@ async function startStaleAmiros(project: string, port: number): Promise<void> {
   await waitForDashboard(port, project);
 }
 
+async function startOrphanedDashboard(project: string, port: number): Promise<number> {
+  const child = spawn(process.execPath, [safeServerPath], {
+    cwd: project,
+    detached: true,
+    stdio: "ignore",
+    env: {
+      ...process.env,
+      AMIROS_PORT: String(port),
+    },
+  });
+  child.unref();
+  await waitForDashboard(port, project);
+  return child.pid ?? 0;
+}
+
 function assertStopped(project: string): void {
   const pidPath = resolve(project, "work/amiros.pid");
   assert.ok(!existsSync(pidPath), "The earlier AmirOS watchdog record should be removed after installation.");
@@ -259,7 +274,24 @@ try {
   assertStopped(staleProject);
   await stopInstalledAmiros(freshProject);
 
-  console.log("Installer upgrade test passed: clean install, prior-data upgrade, and a stale copy in another folder all built and launched safely.");
+  // The old watchdog can be gone while its backend is still listening. This
+  // is the production failure that would otherwise make the new launcher
+  // refuse to open and leave a tester without a dashboard.
+  const orphanedProject = resolve(testDirectory, "Desktop", "AmirOS orphaned backend");
+  copyZipFixture(orphanedProject);
+  const repairedProject = resolve(testDirectory, "Documents", "AmirOS repaired install");
+  copyZipFixture(repairedProject);
+  installedProjects.push(repairedProject);
+  const orphanedPort = await reservePort();
+  const orphanedPid = await startOrphanedDashboard(orphanedProject, orphanedPort);
+  const orphanedOutput = await runInstaller(repairedProject, orphanedPort, testBin);
+  assert.match(orphanedOutput, /Stopping an earlier AmirOS dashboard service/, "Installer should stop a verified orphaned AmirOS backend.");
+  await waitForDashboard(orphanedPort, repairedProject);
+  assertBuildAndRuntime(repairedProject);
+  assert.throws(() => process.kill(orphanedPid, 0), { code: "ESRCH" }, "The orphaned backend should be stopped before the new dashboard starts.");
+  await stopInstalledAmiros(repairedProject);
+
+  console.log("Installer upgrade test passed: clean install, prior-data upgrade, stale watchdog, and orphaned dashboard recovery all launched safely.");
 } finally {
   for (const project of installedProjects) {
     await stopInstalledAmiros(project).catch(() => undefined);
