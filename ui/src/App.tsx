@@ -1,4 +1,4 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Check, ExternalLink, Laptop, LifeBuoy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   addContactMemory,
@@ -40,6 +40,11 @@ import {
   saveOpenAiApiKey,
   getUpdateStatus,
   startAmirosUpdate,
+  beginControlCenterActivation,
+  checkControlCenterActivation,
+  reconnectThisMac,
+  refreshControlCenterStatus,
+  reportControlCenterOnboardingProgress,
 } from "./api";
 import { InboxView } from "./components/InboxView";
 import { IntelligenceView } from "./components/IntelligenceView";
@@ -53,6 +58,8 @@ import { ReleaseExperience } from "./components/ReleaseExperience";
 import { BetaSupportExperience } from "./components/BetaSupportExperience";
 import { UpdatePrompt } from "./components/UpdatePrompt";
 import { buildFirstRunPeopleDirectory } from "./onboarding-people";
+import { useAppInstall } from "./pwa-install";
+import { requiresControlCenterActivation } from "./control-center-access";
 import {
   AutomationsView,
   ContactsView,
@@ -130,6 +137,114 @@ function preserveLocalMessageState(current: ChatMessage[], incoming: ChatMessage
   });
 }
 
+function ActivationGate({
+  controlCenter,
+  onRefresh,
+  onOpenSupport,
+}: {
+  controlCenter: NonNullable<DashboardData["controlCenter"]>;
+  onRefresh: () => Promise<void>;
+  onOpenSupport: () => void;
+}) {
+  const [snapshot, setSnapshot] = useState(controlCenter);
+  const [busy, setBusy] = useState<"connect" | "check">();
+  const [error, setError] = useState<string>();
+
+  useEffect(() => setSnapshot(controlCenter), [controlCenter]);
+  const openApproval = (next: DashboardData["controlCenter"]) => {
+    if (next.activationUrl) window.open(next.activationUrl, "_blank", "noopener,noreferrer");
+  };
+  const connect = async () => {
+    setBusy("connect");
+    setError(undefined);
+    try {
+      const next = snapshot.status === "pending" ? snapshot : await beginControlCenterActivation();
+      setSnapshot(next);
+      openApproval(next);
+    } catch (activationError) {
+      setError(activationError instanceof Error ? activationError.message : "AmirOS could not start the connection right now.");
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const refreshAccess = async () => {
+    setBusy("check");
+    setError(undefined);
+    try {
+      const next = await refreshControlCenterStatus();
+      setSnapshot(next);
+      await onRefresh();
+    } catch (activationError) {
+      setError(activationError instanceof Error ? activationError.message : "AmirOS could not check access right now.");
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const reconnect = async () => {
+    setBusy("connect");
+    setError(undefined);
+    try {
+      const next = await reconnectThisMac();
+      setSnapshot(next);
+      openApproval(next);
+    } catch (activationError) {
+      setError(activationError instanceof Error ? activationError.message : "AmirOS could not start a new Mac connection right now.");
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const check = async () => {
+    setBusy("check");
+    setError(undefined);
+    try {
+      const next = await checkControlCenterActivation();
+      setSnapshot(next);
+      await onRefresh();
+    } catch (activationError) {
+      setError(activationError instanceof Error ? activationError.message : "AmirOS could not check the connection right now.");
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const waitingForApproval = snapshot.status === "pending" || snapshot.setupState === "device_pending";
+  const accessNeedsRecovery = snapshot.status === "paused" || snapshot.status === "revoked" || snapshot.status === "unavailable";
+  const title = snapshot.status === "paused"
+    ? "AmirOS access is paused"
+    : snapshot.status === "revoked"
+      ? "This Mac needs access restored"
+      : snapshot.status === "unavailable"
+        ? "AmirOS needs to check access"
+        : "Connect this Mac to finish setup";
+  const explanation = snapshot.status === "paused"
+    ? "Your AmirOS access is paused in Control Center. Your existing local data remains on this Mac."
+    : snapshot.status === "revoked"
+      ? "This Mac no longer has active AmirOS access. Your existing local data remains on this Mac."
+      : snapshot.status === "unavailable"
+        ? "AmirOS could not confirm this Mac’s access with Control Center. Your existing local data remains on this Mac."
+        : "Sign in to AmirOS Control Center and approve this Mac. Until then, AmirOS keeps your dashboard and messages private and unopened.";
+  return <main className="activation-gate">
+    <section className="activation-gate-card" aria-labelledby="activation-gate-title">
+      <span className="activation-gate-icon"><Laptop size={28} /></span>
+      <p className="eyebrow">ONE LAST STEP</p>
+      <h1 id="activation-gate-title">{title}</h1>
+      <p>{explanation}</p>
+      {!accessNeedsRecovery ? <ol>
+        <li>Open AmirOS Control Center and sign in.</li>
+        <li>Approve this Mac from the connection page.</li>
+        <li>Come back here and choose <strong>Check approval</strong>.</li>
+      </ol> : <p className="activation-gate-recovery">{snapshot.status === "revoked" ? <>After AmirOS support restores your account access, choose <strong>Reconnect this Mac</strong> to request a new approval.</> : <>Choose <strong>Check access</strong> after access has been restored, or use setup help to contact AmirOS support.</>} Do not re-link WhatsApp or enter another API key to resolve this.</p>}
+      {waitingForApproval ? <p className="activation-gate-status"><Check size={17} />{snapshot.detail}</p> : null}
+      {error ? <p className="activation-gate-error"><AlertTriangle size={17} />{error}</p> : null}
+      <div className="activation-gate-actions">
+        {snapshot.status === "revoked" ? <button className="button primary" type="button" onClick={() => void reconnect()} disabled={Boolean(busy)}><ExternalLink size={16} />{busy === "connect" ? "Opening…" : "Reconnect this Mac"}</button> : accessNeedsRecovery ? <button className="button primary" type="button" onClick={() => void refreshAccess()} disabled={Boolean(busy)}>{busy === "check" ? "Checking…" : "Check access"}</button> : <button className="button primary" type="button" onClick={() => void connect()} disabled={Boolean(busy)}><ExternalLink size={16} />{busy === "connect" ? "Opening…" : waitingForApproval ? "Open Control Center" : "Connect this Mac"}</button>}
+        {waitingForApproval && !accessNeedsRecovery ? <button className="button" type="button" onClick={() => void check()} disabled={Boolean(busy)}>{busy === "check" ? "Checking…" : "Check approval"}</button> : null}
+      </div>
+      <button className="activation-gate-help" type="button" onClick={onOpenSupport}><LifeBuoy size={16} />Need setup help?</button>
+    </section>
+  </main>;
+}
+
 export function App() {
   const { timeFormat, setTimeFormat } = useTimeFormat();
   const [view, setView] = useState<ViewName>("overview");
@@ -163,9 +278,10 @@ export function App() {
   }>();
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [betaSupportOpen, setBetaSupportOpen] = useState(false);
+  const whatsappChecklistReported = useRef(false);
   const hydratedTimeFormat = useRef(false);
   useEffect(() => {
-    const savedTimeFormat = dashboard?.settings.assistant.timeFormat;
+    const savedTimeFormat = dashboard && !dashboard.activationOnly ? dashboard.settings.assistant.timeFormat : undefined;
     if (!hydratedTimeFormat.current && savedTimeFormat) {
       hydratedTimeFormat.current = true;
       if (savedTimeFormat !== timeFormat) setTimeFormat(savedTimeFormat);
@@ -173,12 +289,26 @@ export function App() {
   }, [dashboard?.settings.assistant.timeFormat, setTimeFormat, timeFormat]);
   const [updateStatus, setUpdateStatus] = useState<AmirOSUpdateStatus>();
   const mutationVersion = useRef(0);
+  const appInstall = useAppInstall();
+  const controlFeatureEnabled = (featureId: string) => {
+    const controlCenter = dashboard?.controlCenter;
+    if (!controlCenter?.configured || controlCenter.status === "unpaired" || controlCenter.status === "pending") return true;
+    return controlCenter.features.find((feature) => feature.id === featureId)?.enabled ?? true;
+  };
+  const autoModeEnabled = controlFeatureEnabled("auto-mode");
+  const calendarViewsEnabled = controlFeatureEnabled("calendar-views");
 
   const refresh = useCallback(async () => {
     const versionAtStart = mutationVersion.current;
     try {
       const nextDashboard = await getDashboard();
       if (versionAtStart === mutationVersion.current) setDashboard(nextDashboard);
+      if (requiresControlCenterActivation(nextDashboard.controlCenter)) {
+        setChats([]);
+        setSelectedChatId(undefined);
+        setError(undefined);
+        return;
+      }
       try {
         const nextChats = await getChats();
         setChats(nextChats);
@@ -219,8 +349,25 @@ export function App() {
   }, [refreshUpdateStatus]);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = dashboard?.settings.theme || "forest";
-  }, [dashboard?.settings.theme]);
+    document.documentElement.dataset.theme = dashboard && !dashboard.activationOnly ? dashboard.settings.theme : "forest";
+  }, [dashboard]);
+
+  useEffect(() => {
+    const controlCenter = dashboard?.controlCenter;
+    if (
+      dashboard?.connection.status !== "ready"
+      || !controlCenter?.configured
+      || controlCenter.status !== "active"
+      || controlCenter.setupState !== "active"
+      || whatsappChecklistReported.current
+    ) return;
+    whatsappChecklistReported.current = true;
+    void reportControlCenterOnboardingProgress("whatsapp_connected").catch(() => {
+      // This is an informational checklist, not an onboarding gate. A reload
+      // retries the idempotent event without interrupting local AmirOS setup.
+      whatsappChecklistReported.current = false;
+    });
+  }, [dashboard?.connection.status, dashboard?.controlCenter]);
 
   useEffect(() => {
     if (!selectedChatId || view !== "inbox") return;
@@ -325,6 +472,10 @@ export function App() {
   }, [view, refreshIntelligence]);
 
   const navigate = (nextView: ViewName) => {
+    if (nextView === "calendar" && !calendarViewsEnabled) {
+      setError("Calendar views are currently turned off for this AmirOS account.");
+      return;
+    }
     if (nextView === "inbox") { setInboxInitialFilter("all"); setInboxContactSettingsTab("configure"); setHighlightedMessageId(undefined); }
     if (nextView === "intelligence") setIntelligenceNavigationRequest(undefined);
     if (nextView === "inbox" && window.matchMedia("(max-width: 720px)").matches) {
@@ -332,14 +483,13 @@ export function App() {
     }
     setView(nextView);
   };
+  useEffect(() => {
+    if (view === "calendar" && !calendarViewsEnabled) setView("overview");
+  }, [calendarViewsEnabled, view]);
   const openUnreadInbox = () => {
     setInboxInitialFilter("unread");
     if (window.matchMedia("(max-width: 720px)").matches) setSelectedChatId(undefined);
     setView("inbox");
-  };
-  const openTodoReview = () => {
-    setIntelligenceNavigationRequest({ id: Date.now(), tab: "briefing", queueFilter: "todo" });
-    setView("intelligence");
   };
   const openChat = (chatId: string, messageId?: string) => {
     setSelectedChatId(chatId);
@@ -720,6 +870,15 @@ export function App() {
         await analyzeContactIntelligence(chatId, messageLimit, advanceLearningCursor);
       },
     });
+    await reportControlCenterOnboardingProgress("whatsapp_connected").catch(() => {
+      // The endpoint is idempotent. Reasserting the already-ready WhatsApp
+      // milestone here prevents a fast People setup from racing its first
+      // background checklist update.
+    });
+    await reportControlCenterOnboardingProgress("first_people_selected").catch(() => {
+      // People setup succeeded locally. A Control Center outage must not make
+      // the user repeat message analysis or incorrectly report local failure.
+    });
     await Promise.all([refresh(), refreshIntelligence()]);
   };
 
@@ -788,24 +947,31 @@ export function App() {
     );
   }
 
+  if (dashboard.activationOnly || requiresControlCenterActivation(dashboard.controlCenter)) {
+    return <>
+      <ActivationGate controlCenter={dashboard.controlCenter} onRefresh={refresh} onOpenSupport={() => setBetaSupportOpen(true)} />
+      <BetaSupportExperience open={betaSupportOpen} onClose={() => setBetaSupportOpen(false)} destination={dashboard.betaSupport ?? {}} version={dashboard.release.version} connection={dashboard.connection} currentView="settings" />
+    </>;
+  }
+
   const unreadCount = chats.reduce((total, chat) => total + Math.max(0, chat.unreadCount), 0);
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`} data-time-format={timeFormat}>
-      <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} updateAvailable={updateStatus?.status === "available"} connection={dashboard.connection} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} onOpenBetaSupport={() => setBetaSupportOpen(true)} />
+      <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} updateAvailable={updateStatus?.status === "available"} connection={dashboard.connection} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} onOpenBetaSupport={() => setBetaSupportOpen(true)} canInstallApp={appInstall.canInstall} installingApp={appInstall.installing} onInstallApp={() => void appInstall.install()} calendarViewsEnabled={calendarViewsEnabled} />
       <div className="app-body">
         {error ? <div className="error-banner"><AlertTriangle size={17} />{error}<button onClick={() => setError(undefined)}>Dismiss</button></div> : null}
-{view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onTrackingDecision={decideKnowledgeTracking} onOpenTrackingChat={(chatId) => openChat(chatId)} onOpenNextBestAction={openChat} onOpenTodoReview={openTodoReview} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onCalendarStatus={changeCalendarStatus} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onDismissNextBestAction={dismissNextBestAction} onProactiveDecision={decideProactiveIntelligence} /> : null}
-        {view === "intelligence" ? <IntelligenceView data={intelligence} chats={chats} contacts={dashboard.settings.contacts} ownerName={dashboard.settings.ownerProfile.displayName} loading={loadingIntelligence} onRefresh={refreshIntelligence} onOpenChat={openChat} onOpenCalendar={() => setView("calendar")} onContactChange={changeContact} onGenerateSummary={(chatId, isGroup) => isGroup ? summarizeSelectedGroup(chatId) : generateProfile(chatId)} onCalendarStatus={changeCalendarStatus} onRegenerateCalendarTitle={regenerateEventTitle} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onCommitmentStatus={changeCommitmentStatus} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onDeleteQuestion={deleteQuestion} navigationRequest={intelligenceNavigationRequest} /> : null}
+{view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onTrackingDecision={decideKnowledgeTracking} onOpenTrackingChat={(chatId) => openChat(chatId)} onOpenNextBestAction={openChat} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onCalendarStatus={changeCalendarStatus} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onDismissNextBestAction={dismissNextBestAction} onProactiveDecision={decideProactiveIntelligence} /> : null}
+        {view === "intelligence" ? <IntelligenceView data={intelligence} chats={chats} contacts={dashboard.settings.contacts} ownerName={dashboard.settings.ownerProfile.displayName} loading={loadingIntelligence} onRefresh={refreshIntelligence} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onContactChange={changeContact} onGenerateSummary={(chatId, isGroup) => isGroup ? summarizeSelectedGroup(chatId) : generateProfile(chatId)} onCalendarStatus={changeCalendarStatus} onRegenerateCalendarTitle={regenerateEventTitle} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onCommitmentStatus={changeCommitmentStatus} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onDeleteQuestion={deleteQuestion} navigationRequest={intelligenceNavigationRequest} /> : null}
         {view === "calendar" ? <CalendarView data={intelligence} onOpenChat={openChat} onStatus={changeCalendarStatus} onRegenerateTitle={regenerateEventTitle} /> : null}
-        {view === "inbox" ? <InboxView chats={chats} unreadCount={unreadCount} initialFilter={inboxInitialFilter} initialContactSettingsTab={inboxContactSettingsTab} selectedChatId={selectedChatId} highlightedMessageId={highlightedMessageId} messages={visibleMessages} memory={visibleMemory} manualMemory={visibleManualMemory} profile={visibleProfile} insights={insights} styleProfile={styleProfile} groupSummary={groupSummary} groupDescription={groupDescription} composerDraft={assistantComposerDraft?.chatId === selectedChatId ? assistantComposerDraft?.body : undefined} onComposerDraftConsumed={() => setAssistantComposerDraft(undefined)} incomingMessageCount={incomingMessageCount} contact={visibleContact} drafts={dashboard.drafts} loading={loadingChat} onSelectChat={selectInboxChat} onMarkRead={readChat} onModeChange={changeMode} onContactChange={changeContact} onAddMemory={addMemory} onRemoveMemory={removeMemory} onGenerateProfile={generateProfile} onAnalyzeIntelligence={analyzeIntelligence} onInsightChange={changeInsight} onGenerateWritingStyle={learnWritingStyle} onGenerateGroupSummary={summarizeSelectedGroup} onApproveDraft={approve} onDismissDraft={dismiss} onSend={send} onSendMedia={sendChatMedia} onGenerateImage={generateChatImage} onReact={react} onReply={reply} onForward={forward} onScanHistory={scanHistory} /> : null}
-        {view === "contacts" ? <ContactsView chats={chats} onModeChange={changeMode} onOpenChat={openChat} /> : null}
+        {view === "inbox" ? <InboxView chats={chats} unreadCount={unreadCount} initialFilter={inboxInitialFilter} initialContactSettingsTab={inboxContactSettingsTab} selectedChatId={selectedChatId} highlightedMessageId={highlightedMessageId} messages={visibleMessages} memory={visibleMemory} manualMemory={visibleManualMemory} profile={visibleProfile} insights={insights} styleProfile={styleProfile} groupSummary={groupSummary} groupDescription={groupDescription} composerDraft={assistantComposerDraft?.chatId === selectedChatId ? assistantComposerDraft?.body : undefined} onComposerDraftConsumed={() => setAssistantComposerDraft(undefined)} incomingMessageCount={incomingMessageCount} contact={visibleContact} drafts={dashboard.drafts} loading={loadingChat} onSelectChat={selectInboxChat} onMarkRead={readChat} onModeChange={changeMode} autoModeEnabled={autoModeEnabled} onContactChange={changeContact} onAddMemory={addMemory} onRemoveMemory={removeMemory} onGenerateProfile={generateProfile} onAnalyzeIntelligence={analyzeIntelligence} onInsightChange={changeInsight} onGenerateWritingStyle={learnWritingStyle} onGenerateGroupSummary={summarizeSelectedGroup} onApproveDraft={approve} onDismissDraft={dismiss} onSend={send} onSendMedia={sendChatMedia} onGenerateImage={generateChatImage} onReact={react} onReply={reply} onForward={forward} onScanHistory={scanHistory} /> : null}
+        {view === "contacts" ? <ContactsView chats={chats} onModeChange={changeMode} onOpenChat={openChat} autoModeEnabled={autoModeEnabled} /> : null}
         {view === "automations" ? <AutomationsView data={dashboard} onSave={saveQuietHours} /> : null}
         {view === "usage" ? <UsageView data={dashboard} onPreset={choosePreset} /> : null}
         {view === "terminal" ? <TerminalView connection={dashboard.connection} loadLog={getTerminalLog} subscribeLog={subscribeTerminalLog} /> : null}
         {view === "settings" ? <SettingsView data={dashboard} onSave={saveSettings} onSaveApiKey={saveApiKey} onRelink={async () => { await relink(); }} onPause={togglePaused} /> : null}
         <FloatingAssistant data={intelligence} loading={loadingIntelligence} onRefresh={refreshIntelligence} onAsk={askRelationships} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onSaveKnowledge={addMemory} onInsertReply={(chatId, body) => { setAssistantComposerDraft({ chatId, body }); openChat(chatId); }} />
-        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} theme={dashboard.settings.theme} ownerProfile={dashboard.settings.ownerProfile} chats={chats} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onFinishOnboarding={async (choice, theme) => saveSettings({ knowledgeTrackingDefault: choice, theme })} onBuildPeopleDirectory={setupFirstRunPeopleDirectory} onSaveOwnerProfile={async (ownerProfile) => saveSettings({ ownerProfile })} update={updateStatus} onStartUpdate={startDashboardUpdate} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
+        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} theme={dashboard.settings.theme} ownerProfile={dashboard.settings.ownerProfile} chats={chats} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onFinishOnboarding={async (choice, theme) => saveSettings({ knowledgeTrackingDefault: choice, theme })} onBuildPeopleDirectory={setupFirstRunPeopleDirectory} onSaveOwnerProfile={async (ownerProfile) => saveSettings({ ownerProfile })} update={updateStatus} onStartUpdate={startDashboardUpdate} onOpenControlCenter={() => setView("settings")} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
         <BetaSupportExperience open={betaSupportOpen} onClose={() => setBetaSupportOpen(false)} destination={dashboard.betaSupport ?? {}} version={dashboard.release.version} connection={dashboard.connection} currentView={view} />
         <UpdatePrompt update={updateStatus} onStartUpdate={startDashboardUpdate} />
       </div>

@@ -29,6 +29,7 @@ import { hideIntelligenceAction, readHiddenIntelligenceActions, replyActionId } 
 import { buildIntelligenceSnapshot, isKnownIntelligenceContactName } from "../intelligence-snapshot";
 import { replyAssessmentCopy } from "../reply-assessment-copy";
 import { buildTodaysFocus, todaysFocusDismissalIds, todaysFocusPresentation, type TodaysFocusItem } from "../todays-focus";
+import { readHiddenTodaysFocus, saveHiddenTodaysFocus } from "../todays-focus-visibility";
 import type { Activity, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, ProactiveIntelligenceItem, TodoTask, ViewName } from "../types";
 import { ContactAvatar } from "./ContactAvatar";
 import { TodoEditorDialog } from "./IntelligenceView";
@@ -42,7 +43,6 @@ type OverviewProps = {
   onTrackingDecision: (chatId: string, status: KnowledgeTrackingStatus) => Promise<void>;
   onOpenTrackingChat: (chatId: string) => void;
   onOpenNextBestAction: (chatId: string, messageId?: string) => void;
-  onOpenTodoReview: () => void;
   onTodoStatus: (chatId: string, todoId: string, status: TodoTask["status"]) => Promise<void>;
   onTodoUpdate: (chatId: string, todoId: string, patch: { title?: string; dueAt?: number | null; priority?: TodoTask["priority"] }) => Promise<void>;
   onCalendarStatus: (chatId: string, eventId: string, patch: { status?: "inferred" | "confirmed" | "completed" | "dismissed" }) => Promise<void>;
@@ -152,22 +152,7 @@ function compactNextBestText(value: string, maxLength = 96) {
   return `${cut.slice(0, lastSpace > 48 ? lastSpace : maxLength).trimEnd()}…`;
 }
 
-const HIDDEN_TODAYS_FOCUS_STORAGE_KEY = "amiros.hidden-todays-focus.v2";
-
-function readHiddenTodaysFocus(): Set<string> {
-  if (typeof window === "undefined") return new Set();
-  try {
-    const stored = window.sessionStorage.getItem(HIDDEN_TODAYS_FOCUS_STORAGE_KEY);
-    const entries: unknown = stored ? JSON.parse(stored) : [];
-    return Array.isArray(entries)
-      ? new Set(entries.filter((entry): entry is string => typeof entry === "string"))
-      : new Set();
-  } catch {
-    return new Set();
-  }
-}
-
-export function Overview({ data, chats, intelligence, onNavigate, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onOpenTodoReview, onTodoStatus, onTodoUpdate, onCalendarStatus, onInsightStatus, onDismissNextBestAction, onProactiveDecision }: OverviewProps) {
+export function Overview({ data, chats, intelligence, onNavigate, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onTodoStatus, onTodoUpdate, onCalendarStatus, onInsightStatus, onDismissNextBestAction, onProactiveDecision }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
   const [todoFilter, setTodoFilter] = useState<TodoFilter>("open");
@@ -355,7 +340,8 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
       return;
     }
     if (item.action === "todo") {
-      onOpenTodoReview();
+      const todo = trackedTodos.find((candidate) => candidate.id === item.recordId && candidate.chatId === item.chatId);
+      if (todo) setTodoEditor(todo);
       return;
     }
     onOpenNextBestAction(item.chatId, item.messageId);
@@ -371,11 +357,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
         changed = true;
       }
       if (!changed) return current;
-      try {
-        window.sessionStorage.setItem(HIDDEN_TODAYS_FOCUS_STORAGE_KEY, JSON.stringify([...next]));
-      } catch {
-        // Session storage is optional; this view still hides the item immediately.
-      }
+      saveHiddenTodaysFocus(next);
       return next;
     });
   };
@@ -414,12 +396,20 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
         </div>
         {visibleTodaysFocus.length > 0 ? <div className="overview-reminders-list todays-focus-grid">
           {visibleTodaysFocus.map((item) => {
-            const category = item.proactive
-              ? item.proactive.kind === "upcoming_context" ? "Worth knowing"
-                : item.proactive.kind === "meaningful_change" ? "Recent change"
-                  : item.proactive.kind === "reply" ? "May need your reply"
-                    : item.priority <= 1 ? "Overdue" : "Follow-up"
-              : item.priority === 0 ? "Overdue" : item.type === "calendar" ? item.detail : item.type === "reply" ? "May need your reply" : "Due today";
+            const followUpAt = item.sourceTimestamp || item.timestamp;
+            const isOverdue = (item.type === "todo" || item.type === "commitment")
+              && item.hasExplicitDueAt === true
+              && item.timestamp < deviceTime.getTime();
+            const category = isOverdue
+              ? `Overdue · ${eventDateTime(item.timestamp)}`
+              : item.proactive
+                ? item.proactive.kind === "upcoming_context" ? "Worth knowing"
+                  : item.proactive.kind === "meaningful_change" ? "Recent change"
+                    : item.proactive.kind === "reply" || item.proactive.kind === "commitment" ? `Follow-up from ${eventDateTime(followUpAt)}`
+                      : "Due today"
+                : item.type === "calendar" ? item.detail
+                  : item.type === "reply" || item.type === "commitment" ? `Follow-up from ${eventDateTime(followUpAt)}`
+                    : "Due today";
             const context = item.proactive ? item.detail : item.type === "calendar"
               ? [item.allDay ? "All day" : formatTime(item.timestamp), item.location].filter(Boolean).join(" · ")
               : item.contactName ? `${item.detail} · ${item.contactName}` : item.detail;
@@ -438,7 +428,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
                     : <BellRing size={30} />;
             const openItem = () => openTodaysFocus(item);
             return <article
-              className={`overview-reminder todays-focus-item todays-focus-${item.type} ${item.priority === 0 ? "is-overdue" : ""}`}
+              className={`overview-reminder todays-focus-item todays-focus-${item.type} ${isOverdue ? "is-overdue" : ""}`}
               key={item.id}
               role="button"
               tabIndex={0}
@@ -532,7 +522,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
           <section className="panel overview-todos-panel" aria-labelledby="overview-todo-list-title">
             <div className="panel-heading">
               <h2 id="overview-todo-list-title"><ListTodo size={19} /> To-dos <span className="count-badge intelligence-count">{todoCounts.open}</span></h2>
-              <button className="text-button" type="button" onClick={onOpenTodoReview}>View tasks <ArrowRight size={14} /></button>
+              <button className="text-button" type="button" onClick={() => setTodoFilter("all")}>View all <ArrowRight size={14} /></button>
             </div>
             {trackedTodos.length > 0 ? <><div className="overview-todo-filter-bar" aria-label="Filter to-dos">
               {(["all", "open", "completed"] as TodoFilter[]).map((filter) => <button key={filter} className={todoFilter === filter ? "is-active" : ""} type="button" aria-pressed={todoFilter === filter} onClick={() => setTodoFilter(filter)}>{filter === "all" ? "All" : filter === "open" ? "Open" : "Completed"}<span>{todoCounts[filter]}</span></button>)}

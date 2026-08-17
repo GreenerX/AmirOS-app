@@ -69,6 +69,7 @@ export function artifactSourceFiles(projectDirectory, kind) {
     resolve(projectDirectory, "ui/index.html"),
     resolve(projectDirectory, "ui/tsconfig.json"),
     resolve(projectDirectory, "ui/vite.config.ts"),
+    ...sourceFilesIn(resolve(projectDirectory, "ui/public")),
     ...sourceFilesIn(resolve(projectDirectory, "ui/src")),
   ] : [];
   artifactDefinition(kind);

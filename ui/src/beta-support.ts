@@ -49,8 +49,15 @@ export function validationError(draft: BetaSupportDraft): string | undefined {
   return undefined;
 }
 
-export function supportAction(destination: DashboardData["betaSupport"]): "url" | "email" | "copy" {
+export function supportAction(destination: DashboardData["betaSupport"]): "direct" | "url" | "email" | "copy" {
+  if (destination.direct) return "direct";
   return destination.email ? "email" : destination.url ? "url" : "copy";
+}
+
+/** A short, redacted subject derived solely from the tester's written report. */
+export function betaSupportSubject(draft: BetaSupportDraft): string {
+  const context = safeSupportText(draft.trying, 112).replace(/\s+/gu, " ").trim();
+  return safeSupportText(`${draft.category}: ${context || "AmirOS feedback"}`, 140);
 }
 
 export function highLevelConnection(status: DashboardData["connection"]["status"]): BetaSupportDiagnostics["connection"] {
@@ -90,7 +97,6 @@ export function buildBetaSupportReport(draft: BetaSupportDraft, diagnostics?: Be
     safeSupportText(draft.happened),
   ];
   if (draft.expected.trim()) lines.push("", "What I expected:", safeSupportText(draft.expected));
-  lines.push("", "Screenshot: Attach one to this email if it would help explain the issue.");
   if (diagnostics) {
     lines.push("", "Basic technical details (opt-in):", `AmirOS version: ${diagnostics.version}`, `Build: ${diagnostics.build || "Not available"}`, `Time: ${diagnostics.timestamp}`, `Device: ${diagnostics.browser}`, `Connection: ${diagnostics.connection}`, `Selected area: ${diagnostics.featureArea}`);
   }

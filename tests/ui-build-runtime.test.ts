@@ -31,14 +31,33 @@ describe("dashboard UI runtime metadata", () => {
     const project = mkdtempSync(resolve(tmpdir(), "amiros-ui-live-freshness-"));
     temporaryDirectories.push(project);
     const root = resolve(project, "ui/dist");
+    mkdirSync(resolve(project, "ui/public"), { recursive: true });
+    mkdirSync(resolve(project, "ui/src"), { recursive: true });
+    mkdirSync(root, { recursive: true });
+    writeFileSync(resolve(project, "package.json"), "{}\n");
+    writeFileSync(resolve(project, "ui/index.html"), "<div id=\"root\"></div>\n");
+    writeFileSync(resolve(project, "ui/public/manifest.webmanifest"), "{\"name\":\"AmirOS\"}\n");
+    writeFileSync(resolve(project, "ui/src/main.tsx"), "export const version = 1;\n");
+    writeFileSync(resolve(root, ".amiros-ui-build.json"), JSON.stringify({ sourceHash: currentUiSourceHash(project) }));
+    expect(uiBuildIsCurrent(root, project)).toBe(true);
+    writeFileSync(resolve(project, "ui/src/main.tsx"), "export const version = 2;\n");
+    expect(uiBuildIsCurrent(root, project)).toBe(false);
+  });
+
+  test("detects changed public install files while the backend is running", () => {
+    const project = mkdtempSync(resolve(tmpdir(), "amiros-ui-public-freshness-"));
+    temporaryDirectories.push(project);
+    const root = resolve(project, "ui/dist");
+    mkdirSync(resolve(project, "ui/public"), { recursive: true });
     mkdirSync(resolve(project, "ui/src"), { recursive: true });
     mkdirSync(root, { recursive: true });
     writeFileSync(resolve(project, "package.json"), "{}\n");
     writeFileSync(resolve(project, "ui/index.html"), "<div id=\"root\"></div>\n");
     writeFileSync(resolve(project, "ui/src/main.tsx"), "export const version = 1;\n");
+    writeFileSync(resolve(project, "ui/public/manifest.webmanifest"), "{\"name\":\"AmirOS\"}\n");
     writeFileSync(resolve(root, ".amiros-ui-build.json"), JSON.stringify({ sourceHash: currentUiSourceHash(project) }));
     expect(uiBuildIsCurrent(root, project)).toBe(true);
-    writeFileSync(resolve(project, "ui/src/main.tsx"), "export const version = 2;\n");
+    writeFileSync(resolve(project, "ui/public/manifest.webmanifest"), "{\"name\":\"Updated AmirOS\"}\n");
     expect(uiBuildIsCurrent(root, project)).toBe(false);
   });
 });

@@ -2,6 +2,9 @@
 
 ## What currently works
 
+- New managed-beta packages use the AmirOS Control Center as an activation gate: a tester connects and approves this Mac before normal dashboard data or assistant actions are available. Account access, device access, feature flags, and release channel remain separate controls; private chats, memory, WhatsApp session material, and OpenAI keys stay on the tester's Mac.
+- The early-access landing form feeds a Control Center applicant queue. Amir can review the tester's full name and email, approve them, and send the standard secure Netlify Identity invitation from the same workflow. The signed-in tester sees a five-step Beta checklist covering account, Mac connection, Mac approval, WhatsApp readiness, and the first successful People selection.
+- Help & feedback sends an explicit, redacted report directly from an active paired Mac to the Control Center and confirms only after the support ticket is saved. Email, HTTPS, and copy fallbacks remain available when direct delivery is unavailable.
 - Private beta testers have a persistent Help & feedback entry. Reports are
   explicitly user-initiated, use a configured email draft or support URL, and
   fall back transparently to copying when beta support is not configured.
@@ -36,11 +39,15 @@
 
 ## Architectural decisions
 
-- Beta support is a client-side handoff only. `AMIROS_BETA_SUPPORT_EMAIL` is
-  preferred over `AMIROS_BETA_SUPPORT_URL`; no outbound service or telemetry
-  is introduced. The official public beta email lives in `.env.example` as a
-  safe runtime fallback so an update can supply it without overwriting a
-  tester’s private `.env`; explicit `.env.local` and `.env` settings win.
+- Control Center setup state (`setup_required`, `device_pending`, `active`) is independent from access state (`active`, `paused`, `revoked`). The local app uses device credentials only for entitlement, support, and one-way checklist events; those calls never include conversations, contact identities, memory, WhatsApp session data, QR codes, or OpenAI keys.
+- WhatsApp and People checklist events are informational milestones, not new entitlement gates. They are idempotent, forward-only, and emitted only after the corresponding local operation succeeds.
+- Applicant intake is signed server-to-server from the verified Netlify form event. The Control Center remains the application source of truth, while Netlify Identity remains the credential and invitation-token authority.
+- Beta support is always user-initiated. An active paired Mac sends the
+  tester-reviewed report directly to the Control Center; no telemetry or
+  background report is introduced. `AMIROS_BETA_SUPPORT_EMAIL` and
+  `AMIROS_BETA_SUPPORT_URL` remain explicit fallbacks when direct delivery is
+  unavailable. The official beta email lives in `.env.example` so an update
+  can supply it without overwriting private `.env` or `.env.local` settings.
 
 - First-run People setup is intentionally two choices: a selected chat gets a
   bounded, one-time AI profile only after the owner explicitly consents to

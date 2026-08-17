@@ -12,6 +12,7 @@ import { inferMessageLanguage } from "./ai.js";
 import type { AmirosState, ReplyMode } from "./amiros-state.js";
 import { parseCommand, type BotCommand } from "./commands.js";
 import type { AppConfig } from "./config.js";
+import type { ControlCenterEntitlement } from "./control-center-entitlement.js";
 import type { IntelligenceLearner } from "./intelligence-learner.js";
 import type { WritingStyleLearner } from "./writing-style.js";
 import {
@@ -101,6 +102,24 @@ export function resolveAutomationMode(
   if (fromMe || isSelfChat) return "off";
   if (isGroup && !allowGroups) return "off";
   return savedMode;
+}
+
+/**
+ * When Auto Mode is disabled for an assigned account, preserve the owner's
+ * existing contact preference but turn future automatic replies into drafts.
+ * This avoids sending on the owner's behalf while keeping their configuration
+ * intact for a later re-enable.
+ */
+export function resolveFeatureAwareAutomationMode(
+  fromMe: boolean,
+  isSelfChat: boolean,
+  isGroup: boolean,
+  allowGroups: boolean,
+  savedMode: ReplyMode,
+  autoModeEnabled = true,
+): ReplyMode {
+  const mode = resolveAutomationMode(fromMe, isSelfChat, isGroup, allowGroups, savedMode);
+  return mode === "auto" && !autoModeEnabled ? "suggest" : mode;
 }
 
 export function naturalFailureMessage(error: unknown): string {
@@ -238,6 +257,7 @@ export class MessageProcessor {
     private readonly writingStyleLearner?: WritingStyleLearner,
     private readonly intelligenceLearner?: IntelligenceLearner,
     private readonly eventImageGenerator?: (title: string) => Promise<string>,
+    private readonly controlCenter?: Pick<ControlCenterEntitlement, "isFeatureEnabled">,
   ) {}
 
   async process(message: Message, isSelfChat = false): Promise<void> {
@@ -323,12 +343,13 @@ export class MessageProcessor {
     });
 
     try {
-      const contactMode = resolveAutomationMode(
+      const contactMode = resolveFeatureAwareAutomationMode(
         message.fromMe,
         isSelfChat,
         isGroup,
         this.config.allowGroups,
         this.amiros?.getContact(chatId).mode || "off",
+        this.controlCenter?.isFeatureEnabled("auto-mode") ?? true,
       );
       const automationAllowed =
         contactMode !== "off" && !this.amiros?.isQuietHoursNow();
@@ -506,6 +527,15 @@ export class MessageProcessor {
           void this.intelligenceLearner?.analyzeIncoming(chatId);
           await this.refreshWritingStyle(chatId);
         }
+      }
+      if (message.fromMe && isMemoryCorrection && this.amiros && this.controlCenter && !this.controlCenter.isFeatureEnabled("memory-control")) {
+        this.amiros.clearOwnerAssistantMemoryContext(chatId);
+        await this.sendAuthoritativeReply(
+          message,
+          chatId,
+          "Memory correction is currently turned off for this AmirOS account. Your existing private memory stays on this Mac.",
+        );
+        return;
       }
       if (message.fromMe && isMemoryCorrection && this.amiros) {
         const correctionRequest = continuesMemoryCorrection

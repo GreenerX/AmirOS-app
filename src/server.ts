@@ -2,6 +2,7 @@ import { AiService } from "./ai.js";
 import { AmirosState } from "./amiros-state.js";
 import { loadConfig, MODEL_PRESETS } from "./config.js";
 import { startAmirosDashboard } from "./dashboard.js";
+import { ControlCenterEntitlement } from "./control-center-entitlement.js";
 import { IntelligenceLearner } from "./intelligence-learner.js";
 import { WritingStyleLearner } from "./writing-style.js";
 import { MessageProcessor } from "./processor.js";
@@ -12,9 +13,35 @@ import {
   compactGeneratedImageToWebp,
   generatedImageUrl,
 } from "./image-cache.js";
+import { AMIROS_VERSION } from "./release.js";
 
 const config = loadConfig();
 const amirosState = new AmirosState();
+const controlCenter = new ControlCenterEntitlement({
+  origin: config.controlCenterUrl,
+  appVersion: AMIROS_VERSION,
+  requireActivation: config.requireControlCenterActivation,
+});
+const syncControlCenterAccess = () => {
+  const snapshot = controlCenter.snapshot();
+  const status = snapshot.status;
+  amirosState.setControlCenterAccess(
+    status === "paused" || status === "revoked" || status === "unavailable"
+      ? status
+      : snapshot.activationRequired && snapshot.setupState !== "active"
+        ? "setup_required"
+        : undefined,
+  );
+};
+// Apply a previously received pause or revocation before WhatsApp begins
+// handling messages. A fresh remote check runs immediately afterward and then
+// periodically; the local service only sends operational device metadata.
+syncControlCenterAccess();
+void controlCenter.refresh().then(syncControlCenterAccess).catch(() => undefined);
+const controlCenterRefreshTimer = setInterval(() => {
+  void controlCenter.refresh().then(syncControlCenterAccess).catch(() => undefined);
+}, 15 * 60_000);
+controlCenterRefreshTimer.unref();
 const savedSettings = amirosState.getSettings();
 const savedAssistantSettings = savedSettings.assistant;
 Object.assign(config, savedAssistantSettings);
@@ -90,6 +117,7 @@ const processor = new MessageProcessor(
   writingStyleLearner,
   intelligenceLearner,
   generateEventImage,
+  controlCenter,
 );
 const whatsapp = createWhatsAppClient(config, (message, isSelfChat) =>
   processor.process(message, isSelfChat),
@@ -102,6 +130,8 @@ const dashboard = startAmirosDashboard({
   state: amirosState,
   writingStyleLearner,
   intelligenceLearner,
+  controlCenter,
+  syncControlCenterAccess,
   port: config.amirosPort,
 });
 
@@ -117,6 +147,7 @@ const shutdown = (exitCode = 0): Promise<never> => {
   shutdownPromise = (async () => {
     console.log("Stopping WhatsApp bot...");
     intelligenceLearner.shutdown();
+    clearInterval(controlCenterRefreshTimer);
     dashboard.close();
     // Client.destroy() closes the dedicated Puppeteer browser profile. Run it
     // for both normal stops and a failed startup so a restart never inherits a

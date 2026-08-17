@@ -9,16 +9,29 @@ export type ReleaseVisibilityInput = {
 };
 
 /**
- * Browser storage can survive a reinstall because the dashboard keeps the
- * same local address. Account readiness must therefore outrank a previously
- * saved onboarding-complete flag.
+ * A missing API key means this browser marker cannot represent a usable
+ * AmirOS account. WhatsApp can reconnect after setup, so its live connection
+ * state must not reopen onboarding for a returning person.
  */
-export function accountSetupRequired(apiKeyConfigured: boolean, connectionStatus: SetupConnectionStatus): boolean {
-  return !apiKeyConfigured || connectionStatus !== "ready";
+export function accountSetupRequired(apiKeyConfigured: boolean): boolean {
+  return !apiKeyConfigured;
 }
 
 export function shouldShowOnboarding(input: ReleaseVisibilityInput): boolean {
-  return !input.onboardingComplete || accountSetupRequired(input.apiKeyConfigured, input.connectionStatus);
+  return !input.onboardingComplete || accountSetupRequired(input.apiKeyConfigured);
+}
+
+/**
+ * Early AmirOS installs stored a personalised owner profile before the
+ * browser-only onboarding marker existed. Use that durable local profile to
+ * backfill the marker after an update, without treating a fresh profile
+ * (whose placeholder is "You") as complete.
+ */
+export function hasLegacyCompletedOnboarding(
+  ownerDisplayName: string,
+  apiKeyConfigured: boolean,
+): boolean {
+  return apiKeyConfigured && ownerDisplayName.trim().toLocaleLowerCase() !== "you";
 }
 
 /**

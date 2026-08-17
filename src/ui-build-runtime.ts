@@ -18,6 +18,7 @@ export function currentUiSourceHash(projectRoot = resolve(".")): string {
     resolve(projectRoot, "ui/index.html"),
     resolve(projectRoot, "ui/tsconfig.json"),
     resolve(projectRoot, "ui/vite.config.ts"),
+    ...sourceFilesIn(resolve(projectRoot, "ui/public")),
     ...sourceFilesIn(resolve(projectRoot, "ui/src")),
   ].filter(existsSync).sort();
   const hash = createHash("sha256");

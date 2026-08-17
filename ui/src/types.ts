@@ -36,6 +36,21 @@ export type AmirOSUpdateStatus = {
   checkedAt: number;
   detail?: string;
 };
+
+export type ControlCenterAccessStatus = "unpaired" | "pending" | "active" | "paused" | "revoked" | "offline_grace" | "unavailable";
+
+export type ControlCenterStatus = {
+  configured: boolean;
+  status: ControlCenterAccessStatus;
+  detail: string;
+  activationUrl?: string;
+  activationExpiresAt?: string;
+  checkedAt?: string;
+  setupState?: "setup_required" | "device_pending" | "active";
+  activationRequired?: boolean;
+  releaseChannel?: "internal" | "beta" | "stable";
+  features: Array<{ id: string; enabled: boolean }>;
+};
 export type ThemeName =
   | "forest"
   | "ocean"
@@ -93,13 +108,16 @@ export type Activity = {
 };
 
 export type DashboardData = {
+  /** Setup-only responses deliberately omit private dashboard data until a managed beta Mac is approved. */
+  activationOnly?: boolean;
   release: AmirOSRelease;
-  betaSupport: { url?: string; email?: string; build?: string };
+  betaSupport: { url?: string; email?: string; build?: string; direct?: boolean };
   connection: {
     status: "starting" | "qr" | "authenticated" | "ready" | "disconnected";
     detail: string;
   };
   paused: boolean;
+  controlCenter: ControlCenterStatus;
   preset: ModelPreset;
   models: { text: string; image: string; voice: string };
   modelOptions: { text: string[]; image: string[]; voice: string[] };
@@ -402,6 +420,10 @@ export type ProactiveIntelligenceItem = {
   messageId?: string;
   action: "chat" | "calendar" | "todo";
   timestamp: number;
+  /** When a card is a follow-up, this is the message or evidence that prompted it. */
+  sourceTimestamp?: number;
+  /** Whether the source record has a concrete due date/time. */
+  hasExplicitDueAt?: boolean;
   aiAssessment?: {
     confidence: number;
     reason: string;

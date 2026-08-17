@@ -27,6 +27,7 @@ import type {
   TerminalLog,
   WritingStyleProfile,
   AmirOSUpdateStatus,
+  ControlCenterStatus,
 } from "./types";
 import type { CurrentWeather, TimeZoneBackgrounds, TimeZoneCity } from "./timezone-weather";
 
@@ -90,6 +91,52 @@ export async function getUpdateStatus(refresh = false): Promise<AmirOSUpdateStat
 export async function startAmirosUpdate(): Promise<{ ok: true; latestVersion: string }> {
   if (isDemo) return { ok: true, latestVersion: "0.5.1" };
   return request("/api/update", { method: "POST", body: "{}" });
+}
+
+export async function getControlCenterStatus(): Promise<ControlCenterStatus> {
+  return isDemo ? structuredClone(demoDashboard.controlCenter) : request("/api/control-center");
+}
+
+export async function beginControlCenterActivation(): Promise<ControlCenterStatus> {
+  return isDemo
+    ? { ...structuredClone(demoDashboard.controlCenter), status: "pending", detail: "Finish approving this Mac in the Control Center.", activationUrl: "https://amiros-control-center.netlify.app/connect/?code=demo" }
+    : request("/api/control-center/activation", { method: "POST", body: "{}" });
+}
+
+export async function checkControlCenterActivation(): Promise<ControlCenterStatus> {
+  return isDemo ? structuredClone(demoDashboard.controlCenter) : request("/api/control-center/activation-status", { method: "POST", body: "{}" });
+}
+
+export async function reconnectThisMac(): Promise<ControlCenterStatus> {
+  return isDemo
+    ? { ...structuredClone(demoDashboard.controlCenter), status: "pending", detail: "Finish approving this Mac in the Control Center.", setupState: "device_pending", activationUrl: "https://amiros-control-center.netlify.app/connect/?code=demo" }
+    : request("/api/control-center/reconnect", { method: "POST", body: "{}" });
+}
+
+export async function refreshControlCenterStatus(): Promise<ControlCenterStatus> {
+  return isDemo ? structuredClone(demoDashboard.controlCenter) : request("/api/control-center/refresh", { method: "POST", body: "{}" });
+}
+
+export async function submitBetaSupportTicket(input: {
+  type: "Bug" | "Feedback" | "Feature request" | "Setup help";
+  subject: string;
+  details: string;
+}): Promise<{ ticket: { ticketId: number; id: string; state: string } }> {
+  if (isDemo) return { ticket: { ticketId: 101, id: "SUP-DEMO", state: "New" } };
+  return request("/api/control-center/support-ticket", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function reportControlCenterOnboardingProgress(
+  event: "whatsapp_connected" | "first_people_selected",
+): Promise<void> {
+  if (isDemo) return;
+  await request("/api/control-center/onboarding-progress", {
+    method: "POST",
+    body: JSON.stringify({ event }),
+  });
 }
 
 export async function summarizeDashboardActionMessage(message: string): Promise<{ summary: string }> {

@@ -88,10 +88,21 @@ describe("proactive intelligence", () => {
       evidence, createdAt: now - DAY, updatedAt: now - DAY,
     }] });
     expect(buildProactiveCandidates([active], now)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "commitment", title: "Send Dani the photos" }),
+      expect.objectContaining({ kind: "commitment", title: "Send Dani the photos", sourceTimestamp: now - DAY, hasExplicitDueAt: true }),
     ]));
     active.commitments[0]!.status = "done";
     expect(buildProactiveCandidates([active], now).some((item) => item.kind === "commitment")).toBe(false);
+  });
+
+  it("keeps an undated commitment as a follow-up rather than an overdue item", () => {
+    const candidates = buildProactiveCandidates([source({ commitments: [{
+      id: "check-in", content: "Check in with Dani", owner: "me", status: "open",
+      evidence, createdAt: now - DAY, updatedAt: now - DAY,
+    }] })], now);
+
+    expect(candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "commitment", timestamp: now - DAY, sourceTimestamp: now - DAY, hasExplicitDueAt: false }),
+    ]));
   });
 
   it("keeps deterministic fallback copy compact while AI is still judging", () => {

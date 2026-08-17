@@ -1,4 +1,5 @@
 node_modules/
+.pnpm-store/
 dist/
 .env
 .env.*
@@ -13,3 +14,14 @@ coverage/
 *.log
 .wwebjs_auth/
 .wwebjs_cache/
+
+# Local Netlify folder
+.netlify
+**/.temp/
+
+# Generated marketing and design exports live outside the product history.
+# The small production landing-page source is force-added intentionally.
+marketing-materials/
+scripts/create-mobile-marketing-assets.mjs
+scripts/qa-landing-mobile.cjs
+design-qa.md

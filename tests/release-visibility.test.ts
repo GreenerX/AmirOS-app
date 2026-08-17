@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountSetupRequired, canShowReleaseNotes, nextOnboardingStepAfterWhatsAppLink, shouldKeepOnboardingOpen, shouldMarkInstalledReleaseSeen, shouldShowOnboarding, shouldShowPeopleSetup } from "../ui/src/release-visibility.js";
+import { accountSetupRequired, canShowReleaseNotes, hasLegacyCompletedOnboarding, nextOnboardingStepAfterWhatsAppLink, shouldKeepOnboardingOpen, shouldMarkInstalledReleaseSeen, shouldShowOnboarding, shouldShowPeopleSetup } from "../ui/src/release-visibility.js";
 
 const currentVersion = "0.10.6";
 
@@ -10,11 +10,11 @@ describe("first-run release visibility", () => {
     expect(canShowReleaseNotes(input)).toBe(false);
   });
 
-  it("keeps release notes behind WhatsApp setup", () => {
+  it("does not reopen onboarding while an already configured WhatsApp reconnects", () => {
     const input = { onboardingComplete: true, apiKeyConfigured: true, connectionStatus: "qr" as const, seenVersion: undefined, currentVersion };
-    expect(accountSetupRequired(input.apiKeyConfigured, input.connectionStatus)).toBe(true);
-    expect(shouldShowOnboarding(input)).toBe(true);
-    expect(canShowReleaseNotes(input)).toBe(false);
+    expect(accountSetupRequired(input.apiKeyConfigured)).toBe(false);
+    expect(shouldShowOnboarding(input)).toBe(false);
+    expect(shouldMarkInstalledReleaseSeen(input)).toBe(true);
   });
 
   it("shows unseen release notes only after onboarding and account setup are complete", () => {
@@ -34,6 +34,12 @@ describe("first-run release visibility", () => {
     const input = { onboardingComplete: false, apiKeyConfigured: true, connectionStatus: "ready" as const, seenVersion: undefined, currentVersion };
     expect(shouldShowOnboarding(input)).toBe(true);
     expect(canShowReleaseNotes(input)).toBe(false);
+  });
+
+  it("backfills the browser marker for an existing personalized profile after an update", () => {
+    expect(hasLegacyCompletedOnboarding("Amir Friedman", true)).toBe(true);
+    expect(hasLegacyCompletedOnboarding("You", true)).toBe(false);
+    expect(hasLegacyCompletedOnboarding("Amir Friedman", false)).toBe(false);
   });
 
   it("keeps an active onboarding flow open after WhatsApp becomes ready", () => {

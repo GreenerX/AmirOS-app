@@ -1,6 +1,7 @@
 import { ArrowLeft, Bug, Check, Clipboard, ExternalLink, HeartHandshake, LifeBuoy, Lightbulb, Mail, Paperclip, Wrench, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BETA_SUPPORT_CATEGORIES, betaSupportQuestions, browserLabel, buildBetaSupportReport, featureAreaForView, highLevelConnection, supportAction, validationError, type BetaSupportCategory, type BetaSupportDraft } from "../beta-support";
+import { submitBetaSupportTicket } from "../api";
+import { BETA_SUPPORT_CATEGORIES, betaSupportQuestions, betaSupportSubject, browserLabel, buildBetaSupportReport, featureAreaForView, highLevelConnection, supportAction, validationError, type BetaSupportCategory, type BetaSupportDraft } from "../beta-support";
 import type { DashboardData, ViewName } from "../types";
 
 type Props = {
@@ -19,6 +20,7 @@ export function BetaSupportExperience({ open, onClose, destination, version, con
   const [draft, setDraft] = useState<BetaSupportDraft>({ category: "Bug", featureArea: featureAreaForView(currentView), trying: "", happened: "", expected: "", includeDiagnostics: false });
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [sending, setSending] = useState(false);
   const closeRef = useRef(onClose);
   const action = supportAction(destination);
   const questions = betaSupportQuestions[draft.category];
@@ -32,6 +34,7 @@ export function BetaSupportExperience({ open, onClose, destination, version, con
     setStep("choose");
     setError(undefined);
     setNotice(undefined);
+    setSending(false);
     setDraft((value) => ({ ...value, featureArea: featureAreaForView(currentView) }));
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") closeRef.current(); };
     document.addEventListener("keydown", closeOnEscape);
@@ -54,12 +57,26 @@ export function BetaSupportExperience({ open, onClose, destination, version, con
   };
   const continueToDestination = async () => {
     if (!validate()) return;
+    if (action === "direct") {
+      setSending(true);
+      setError(undefined);
+      setNotice(undefined);
+      try {
+        const result = await submitBetaSupportTicket({ type: draft.category, subject: betaSupportSubject(draft), details: report });
+        setNotice(`${result.ticket.id} sent to AmirOS support. Thank you for helping us improve AmirOS.`);
+      } catch (sendError) {
+        setError(sendError instanceof Error ? sendError.message : "Your support request could not be sent. Please try again.");
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
     if (action === "copy") { await copy(); return; }
     const copied = await copy();
     if (action === "url" && destination.url) { window.open(destination.url, "_blank", "noopener,noreferrer"); setNotice(copied ? "Support form opened. Paste the copied report there." : "Support form opened. Copy the report below and paste it there."); }
     if (action === "email" && destination.email) { window.location.assign(`mailto:${destination.email}?subject=${encodeURIComponent(`AmirOS beta feedback: ${draft.category}`)}&body=${encodeURIComponent(report)}`); setNotice("An email draft was opened. Attach a screenshot there if it would help, then review and send it yourself."); }
   };
-  const destinationButton = action === "url" ? <><ExternalLink size={16} />Open support form</> : action === "email" ? <><Mail size={16} />Open email draft</> : <><Clipboard size={16} />Copy feedback report</>;
+  const destinationButton = action === "direct" ? <><Check size={16} />{sending ? "Sending…" : "Send to AmirOS support"}</> : action === "url" ? <><ExternalLink size={16} />Open support form</> : action === "email" ? <><Mail size={16} />Open email draft</> : <><Clipboard size={16} />Copy feedback report</>;
 
   return <div className="beta-support-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="beta-support-dialog" role="dialog" aria-modal="true" aria-labelledby="beta-support-title">
@@ -73,7 +90,7 @@ export function BetaSupportExperience({ open, onClose, destination, version, con
         <div className="beta-support-category-grid" aria-label="Choose feedback type">
           {BETA_SUPPORT_CATEGORIES.map((category) => { const Icon = categoryIcons[category]; return <button key={category} type="button" onClick={() => chooseCategory(category)}><span><Icon size={20} /></span><strong>{category}</strong><small>{category === "Bug" ? "Something did not work as expected" : category === "Feedback" ? "Share what feels useful or frustrating" : category === "Feature request" ? "Suggest an improvement you would use" : "Get help with getting started"}</small></button>; })}
         </div>
-        <p className="beta-support-privacy-note">Nothing is sent automatically. You can review the report before opening the beta support email.</p>
+        <p className="beta-support-privacy-note">Nothing is sent automatically. You can review your answers and choose when to send them.</p>
       </div> : <form className="beta-support-body" onSubmit={(event) => { event.preventDefault(); void continueToDestination(); }}>
         <button className="beta-support-back" type="button" onClick={() => { setStep("choose"); setError(undefined); setNotice(undefined); }}><ArrowLeft size={15} />Choose a different option</button>
         <p className="beta-support-intro">{questions.description}</p>
@@ -81,13 +98,14 @@ export function BetaSupportExperience({ open, onClose, destination, version, con
         <label>{questions.trying} <b>Required</b><textarea value={draft.trying} maxLength={1_500} onChange={(event) => update("trying", event.target.value)} /></label>
         <label>{questions.happened} <b>Required</b><textarea value={draft.happened} maxLength={1_500} onChange={(event) => update("happened", event.target.value)} /></label>
         {questions.expected ? <label>{questions.expected} <em>Optional</em><textarea value={draft.expected} maxLength={1_500} onChange={(event) => update("expected", event.target.value)} /></label> : null}
-        <aside className="beta-support-screenshot"><Paperclip size={18} /><span><strong>Have a screenshot?</strong><small>Your email draft will include this report. Attach the screenshot in your email app before sending. Screenshots may contain private conversations, names, calendar details, or QR codes. Do not include API keys or QR codes.</small></span></aside>
+        <aside className="beta-support-screenshot"><Paperclip size={18} /><span><strong>Have a screenshot?</strong><small>{action === "direct" ? "After sending, AmirOS support may ask you to reply with a screenshot if it would help." : "Attach the screenshot there if it would help."} Screenshots may contain private conversations, names, calendar details, or QR codes. Do not include API keys or QR codes.</small></span></aside>
         <label className="beta-support-diagnostics"><input type="checkbox" checked={draft.includeDiagnostics} onChange={(event) => update("includeDiagnostics", event.target.checked)} /><span><strong>Include basic technical details to help diagnose this</strong><small>Includes the AmirOS version, time, device, connection status, and selected area. It does not include your conversations or saved data.</small></span></label>
         {error ? <p className="beta-support-error"><Bug size={16} />{error}</p> : null}
         {notice ? <p className="beta-support-notice"><Check size={16} />{notice}</p> : null}
         {action === "copy" ? <p className="beta-support-unconfigured">Beta support has not yet been configured. Copy your report and share it through your agreed beta channel.</p> : null}
-        {notice ? <label className="beta-support-report"><span>Feedback report</span><textarea readOnly value={report} aria-label="Feedback report to copy" /></label> : null}
-        <footer><button className="button" type="button" onClick={onClose}>Close</button><button className="button primary" type="submit">{destinationButton}</button></footer>
+        {notice && action !== "direct" ? <label className="beta-support-report"><span>Feedback report</span><textarea readOnly value={report} aria-label="Feedback report to copy" /></label> : null}
+        {error && action === "direct" && destination.url ? <button className="beta-support-fallback" type="button" onClick={() => window.open(destination.url, "_blank", "noopener,noreferrer")}><ExternalLink size={15} />Open Control Center support form instead</button> : null}
+        <footer><button className="button" type="button" onClick={onClose}>Close</button><button className="button primary" type="submit" disabled={sending || Boolean(notice && action === "direct")}>{destinationButton}</button></footer>
       </form>}
     </section>
   </div>;

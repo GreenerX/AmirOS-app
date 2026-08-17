@@ -347,6 +347,21 @@ export const demoDashboard: DashboardData = {
   betaSupport: {},
   connection: { status: "ready", detail: "Listening for WhatsApp messages" },
   paused: false,
+  controlCenter: {
+    configured: true,
+    status: "active",
+    detail: "This Mac is connected to your AmirOS account.",
+    setupState: "active",
+    activationRequired: false,
+    checkedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+    releaseChannel: "beta",
+    features: [
+      { id: "memory-control", enabled: true },
+      { id: "calendar-views", enabled: true },
+      { id: "auto-mode", enabled: false },
+      { id: "early-release", enabled: false },
+    ],
+  },
   preset: "economy",
   models: {
     text: "gpt-5.6-luna",

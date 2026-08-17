@@ -188,10 +188,16 @@ The persistent **Help & feedback** action lets a tester prepare a bug report,
 feedback note, feature request, or setup question. It is deliberately
 user-initiated: AmirOS does not send telemetry or reports in the background.
 
-The official private-beta support address is stored in the tracked
-`.env.example`. That lets an already-installed tester receive it after an
-update even when their updater correctly preserves an older private `.env`.
-To change it for a different private beta, set the destination in `.env.local`:
+For a new managed beta package, Help & feedback sends an explicit report from
+an **approved Mac** directly to the AmirOS Control Center. The tester sees a
+confirmation only after the ticket was saved there. The report is never sent
+automatically.
+
+Existing local copies can continue to use an email or HTTPS support fallback.
+Those non-secret destinations are stored in the tracked `.env.example`, which
+lets an already-installed tester receive them after an update even when the
+updater correctly preserves an older private `.env`. To change a fallback for
+a different private beta, set it in `.env.local`:
 
 ```dotenv
 AMIROS_BETA_SUPPORT_EMAIL=amirfriedman@icloud.com
@@ -200,20 +206,36 @@ AMIROS_BETA_SUPPORT_URL=https://support.example.com/amiros-beta
 ```
 
 An explicit `.env.local` or `.env` value takes precedence over the official
-default, and the email draft takes precedence when both email and URL are
-configured. The tester reviews
-the report, then AmirOS opens an email draft with the report prefilled; the
-tester can attach a screenshot there and must send it themselves. With neither
-value configured, AmirOS clearly offers
-**Copy feedback report** and does not imply that a report was sent.
+default. When direct delivery is not available, AmirOS opens the configured
+email draft or support form after the tester reviews the report. The tester can
+attach a screenshot there and must send it themselves. With neither value
+configured, AmirOS clearly offers **Copy feedback report** and does not imply
+that a report was sent.
 
 The report contains only the chosen category, feature area, the text the
 tester writes and—only after checking the opt-in box—version/build, timestamp,
 broad device/browser label, broad connection state, and selected area.
-Screenshots remain local until the tester attaches them in their email app.
+Screenshots remain local until the tester attaches them in the support channel.
 AmirOS never automatically adds API
 keys, `.env.local`, WhatsApp access files or QR codes, conversation content,
 contact names or identifiers, `amiros-state.json`, or complete activity data.
+
+## Managed beta activation
+
+New managed beta packages can set
+`AMIROS_REQUIRE_CONTROL_CENTER_ACTIVATION=true`. That package shows only a
+connection-and-help screen until the tester signs in to the AmirOS Control
+Center and approves their Mac. Before approval, the normal dashboard data is
+not sent to the browser and incoming assistant actions remain paused. Existing
+private installations keep the default `false` value so they are not disrupted.
+
+The Control Center does not provide or store an OpenAI API key. Each beta
+tester enters the individual key supplied for their own beta access during
+first-run setup. Never email, place in the Control Center, or add a raw OpenAI
+key to a release package.
+
+The local API and state boundary for this flow is recorded in
+[`docs/managed-beta-activation-contract.md`](docs/managed-beta-activation-contract.md).
 
 - The linked-device route can break when WhatsApp Web changes and carries account
   restriction risk. The official WhatsApp Business Cloud API remains the supported

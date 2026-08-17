@@ -2,7 +2,7 @@ import { Brain, Check, ChevronLeft, ChevronRight, Heart, KeyRound, LoaderCircle,
 import { useEffect, useMemo, useRef, useState } from "react";
 import { whatsappQrUrl } from "../api";
 import { canBuildFirstRunPeopleDirectory, firstRunPeopleProgressLabel, firstRunSelectedPeopleTracking, FIRST_RUN_PEOPLE_SCAN_LIMIT, FIRST_RUN_PEOPLE_SUGGESTION_LIMIT, suggestedFirstRunPeople } from "../onboarding-people";
-import { accountSetupRequired, canShowReleaseNotes, nextOnboardingStepAfterWhatsAppLink, shouldKeepOnboardingOpen, shouldMarkInstalledReleaseSeen, shouldShowOnboarding, shouldShowPeopleSetup } from "../release-visibility";
+import { accountSetupRequired, canShowReleaseNotes, hasLegacyCompletedOnboarding, nextOnboardingStepAfterWhatsAppLink, shouldKeepOnboardingOpen, shouldMarkInstalledReleaseSeen, shouldShowOnboarding, shouldShowPeopleSetup } from "../release-visibility";
 import type { AmirOSRelease, AmirOSUpdateStatus, ChatSummary, DashboardData, KnowledgeTrackingDefault, KnowledgeTrackingStatus, ThemeName } from "../types";
 
 const ONBOARDING_KEY = "amiros.onboarding.completed";
@@ -24,6 +24,7 @@ type ReleaseExperienceProps = {
   onRelinkWhatsApp: () => Promise<DashboardData["connection"]>;
   update?: AmirOSUpdateStatus;
   onStartUpdate?: () => Promise<void>;
+  onOpenControlCenter: () => void;
   forceReleaseOpen?: boolean;
   onReleaseNotesClosed?: () => void;
 };
@@ -45,10 +46,11 @@ function StepProgress({ current }: { current: number }) {
   </div>;
 }
 
-export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ownerProfile, chats, onFinishOnboarding, onBuildPeopleDirectory, onSaveOwnerProfile, apiKeyConfigured, connection, onSaveApiKey, onRelinkWhatsApp, update, onStartUpdate, forceReleaseOpen = false, onReleaseNotesClosed }: ReleaseExperienceProps) {
+export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ownerProfile, chats, onFinishOnboarding, onBuildPeopleDirectory, onSaveOwnerProfile, apiKeyConfigured, connection, onSaveApiKey, onRelinkWhatsApp, update, onStartUpdate, onOpenControlCenter, forceReleaseOpen = false, onReleaseNotesClosed }: ReleaseExperienceProps) {
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [peopleSetupOpen, setPeopleSetupOpen] = useState(false);
+  const [peopleSetupDeferred, setPeopleSetupDeferred] = useState(false);
   const [step, setStep] = useState(0);
   const [selectedVersion, setSelectedVersion] = useState(release.version);
   const [trackingChoice, setTrackingChoice] = useState<KnowledgeTrackingDefault>(knowledgeTrackingDefault);
@@ -73,7 +75,8 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
   const [peopleSetupProgress, setPeopleSetupProgress] = useState<{ completed: number; total: number }>();
   const releases = release.history?.length ? release.history : [release];
   const selectedRelease = releases.find((item) => item.version === selectedVersion) ?? release;
-  const setupRequired = accountSetupRequired(apiKeyConfigured, connection.status);
+  const setupRequired = accountSetupRequired(apiKeyConfigured);
+  const onboardingReadyToFinish = apiKeyConfigured && connection.status === "ready";
   const previousConnectionStatus = useRef(connection.status);
   const suggestedPeople = useMemo(
     () => suggestedFirstRunPeople(chats, ownerProfile.displayName),
@@ -82,7 +85,11 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
 
   useEffect(() => {
     setSelectedVersion(release.version);
-    const onboardingComplete = window.localStorage.getItem(ONBOARDING_KEY) === "true";
+    const storedOnboardingComplete = window.localStorage.getItem(ONBOARDING_KEY) === "true";
+    const onboardingComplete = storedOnboardingComplete || hasLegacyCompletedOnboarding(ownerProfile.displayName, apiKeyConfigured);
+    if (onboardingComplete && !storedOnboardingComplete) {
+      window.localStorage.setItem(ONBOARDING_KEY, "true");
+    }
     const seenVersion = window.localStorage.getItem(RELEASE_KEY);
     const visibility = {
       onboardingComplete,
@@ -102,12 +109,13 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
       return;
     }
     if (canShowReleaseNotes(visibility)) setReleaseOpen(true);
-  }, [apiKeyConfigured, connection.status, onboardingOpen, release.version]);
+  }, [apiKeyConfigured, connection.status, onboardingOpen, ownerProfile.displayName, release.version]);
 
   useEffect(() => {
-    if (onboardingOpen || releaseOpen || peopleSetupOpen) return;
+    if (onboardingOpen || releaseOpen || peopleSetupOpen || peopleSetupDeferred) return;
     const visibility = {
-      onboardingComplete: window.localStorage.getItem(ONBOARDING_KEY) === "true",
+      onboardingComplete: window.localStorage.getItem(ONBOARDING_KEY) === "true"
+        || hasLegacyCompletedOnboarding(ownerProfile.displayName, apiKeyConfigured),
       apiKeyConfigured,
       connectionStatus: connection.status,
       currentVersion: release.version,
@@ -116,7 +124,7 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
     if (shouldShowPeopleSetup({ ...visibility, peopleSetupComplete, suggestedPeopleCount: suggestedPeople.length })) {
       setPeopleSetupOpen(true);
     }
-  }, [apiKeyConfigured, connection.status, onboardingOpen, peopleSetupOpen, release.version, releaseOpen, suggestedPeople.length]);
+  }, [apiKeyConfigured, connection.status, onboardingOpen, ownerProfile.displayName, peopleSetupDeferred, peopleSetupOpen, release.version, releaseOpen, suggestedPeople.length]);
 
   useEffect(() => setTrackingChoice(knowledgeTrackingDefault), [knowledgeTrackingDefault]);
   useEffect(() => setSelectedTheme(theme), [theme]);
@@ -175,7 +183,7 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
   };
 
   const finishOnboarding = () => {
-    if (setupRequired) return;
+    if (!onboardingReadyToFinish) return;
     window.localStorage.setItem(ONBOARDING_KEY, "true");
     // The release installed with a person's first setup is not an update.
     // Record it now so they start in AmirOS rather than in release notes.
@@ -185,7 +193,7 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
   };
 
   const finishWithTrackingChoice = async () => {
-    if (setupRequired) return;
+    if (!onboardingReadyToFinish) return;
     setSavingTrackingChoice(true);
     setPeopleSetupError(undefined);
     try {
@@ -301,7 +309,7 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
       <div className="onboarding-body">
         <StepProgress current={step} />
         {step === 0 ? <><div className="onboarding-intro"><span className="onboarding-hero-icon"><Rocket size={34} /></span><div><h3>Let’s make AmirOS yours.</h3><p>AmirOS keeps your account and saved data on this computer. You decide when it uses your OpenAI account for a selected AI feature.</p></div></div><div className="onboarding-profile-form"><label htmlFor="onboarding-owner-name">What should AmirOS call you?<input id="onboarding-owner-name" autoComplete="name" placeholder="Your name" value={ownerName} onChange={(event) => { setOwnerName(event.target.value); setOwnerProfileError(undefined); }} /></label><span>Choose an avatar</span><div className="onboarding-avatar-options">{onboardingAvatars.map((avatar) => <button type="button" key={avatar} aria-label="Choose avatar" className={ownerAvatar === avatar ? "selected" : ""} onClick={() => setOwnerAvatar(avatar)}><img src={avatar} alt="Illustrated avatar" />{ownerAvatar === avatar ? <Check size={14} /> : null}</button>)}</div></div>{ownerProfileError ? <p className="onboarding-inline-error" role="alert">{ownerProfileError}</p> : null}<ul className="onboarding-checklist"><li><Check size={16} /> Your AmirOS data stays on this computer</li><li><Check size={16} /> You choose when to use AI</li><li><Check size={16} /> You stay in control of every chat</li></ul></> : null}
-        {step === 1 ? <><div className="onboarding-intro"><span className="onboarding-hero-icon"><KeyRound size={34} /></span><div><h3>Add your own OpenAI API key.</h3><p>Your key powers responses, images, voice transcription, and the relationship intelligence features. It is saved only on this computer.</p></div></div><div className="onboarding-api-form"><label htmlFor="onboarding-api-key">OpenAI API key</label><div className="onboarding-api-row"><input id="onboarding-api-key" type="password" autoComplete="off" spellCheck={false} placeholder="sk-…" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setApiKeyError(undefined); }} /><button className="button compact" type="button" disabled={savingApiKey || apiKeyConfigured} onClick={() => void saveOnboardingApiKey()}>{savingApiKey ? <><LoaderCircle className="spin" size={15} /> Saving…</> : apiKeyConfigured ? <><Check size={15} /> Key saved</> : "Save key"}</button></div>{apiKeyError ? <p className="onboarding-inline-error" role="alert">{apiKeyError}</p> : null}</div><small className="onboarding-later-note">Save your key to continue. You can set a monthly spend limit in Settings after setup.</small></> : null}
+        {step === 1 ? <><div className="onboarding-intro"><span className="onboarding-hero-icon"><KeyRound size={34} /></span><div><h3>Add your OpenAI API key.</h3><p>Use the individual key provided for your AmirOS beta access, or one from your own OpenAI account. It powers responses, images, voice transcription, and relationship intelligence features, and is saved only on this computer.</p></div></div><div className="onboarding-api-form"><label htmlFor="onboarding-api-key">OpenAI API key</label><div className="onboarding-api-row"><input id="onboarding-api-key" type="password" autoComplete="off" spellCheck={false} placeholder="sk-…" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setApiKeyError(undefined); }} /><button className="button compact" type="button" disabled={savingApiKey || apiKeyConfigured} onClick={() => void saveOnboardingApiKey()}>{savingApiKey ? <><LoaderCircle className="spin" size={15} /> Saving…</> : apiKeyConfigured ? <><Check size={15} /> Key saved</> : "Save key"}</button></div>{apiKeyError ? <p className="onboarding-inline-error" role="alert">{apiKeyError}</p> : null}</div><small className="onboarding-later-note">Save your key to continue. You can set a monthly spend limit in Settings after setup.</small></> : null}
         {step === 2 ? <><div className="onboarding-intro"><span className="onboarding-hero-icon"><MessageCircleMore size={34} /></span><div><h3>Link your WhatsApp.</h3><p>{connection.status === "ready" ? "Your WhatsApp account is connected. Continuing setup…" : "Generate a QR code here, then scan it from WhatsApp → Settings → Linked Devices → Link a Device."}</p></div></div>{connection.status === "ready" ? <div className="onboarding-success-state"><Check size={18} /><span><strong>WhatsApp is linked</strong><small>{connection.detail || "AmirOS is ready to listen for your messages."}</small></span></div> : <>{connection.status === "qr" ? <div className="onboarding-qr-panel"><img src={whatsappQrUrl()} alt="WhatsApp linked device QR code" /><div><strong>Scan this QR code in WhatsApp</strong><small>Keep this window open until AmirOS confirms the connection.</small><button className="button compact ghost" type="button" disabled={generatingQr} onClick={() => void generateQr()}>{generatingQr ? <><LoaderCircle className="spin" size={15} /> Refreshing…</> : <><QrCode size={15} /> New QR code</>}</button></div></div> : waitingForQr || connection.status === "starting" ? <div className="onboarding-success-state onboarding-waiting-state"><LoaderCircle className="spin" size={18} /><span><strong>Preparing your QR code</strong><small>It will appear here automatically in a few seconds.</small></span></div> : <button className="button compact onboarding-qr-button" type="button" disabled={generatingQr} onClick={() => void generateQr()}>{generatingQr ? <><LoaderCircle className="spin" size={16} /> Generating QR…</> : <><QrCode size={16} /> Generate WhatsApp QR code</>}</button>}{qrError ? <p className="onboarding-inline-error" role="alert">{qrError}</p> : null}</>}</> : null}
         {step === 3 ? <><div className="onboarding-intro"><span className="onboarding-hero-icon"><Brain size={34} /></span><div><h3>Choose how AmirOS learns and looks.</h3><p>Choose what AmirOS can learn from new chats, then pick a color theme. You can change both anytime.</p></div></div><div className="onboarding-choice-grid" role="radiogroup" aria-label="Knowledge tracking preference">
           <label className={trackingChoice === "ask" ? "selected" : ""}><input type="radio" name="knowledge-tracking" value="ask" checked={trackingChoice === "ask"} onChange={() => setTrackingChoice("ask")} /><span><strong>Ask me for each chat</strong><small>Recommended. AmirOS will ask before tracking a person or group.</small></span></label>
@@ -330,6 +338,7 @@ export function ReleaseExperience({ release, knowledgeTrackingDefault, theme, ow
       </div>
       <footer>
         <button className="button compact ghost" type="button" disabled={buildingPeopleDirectory} onClick={() => dismissPeopleSetup()}>Not now</button>
+        <button className="button compact" type="button" disabled={buildingPeopleDirectory} onClick={() => { setPeopleSetupDeferred(true); setPeopleSetupOpen(false); onOpenControlCenter(); }}>Control Center</button>
         <button className="button primary compact" type="button" disabled={buildingPeopleDirectory || !canBuildFirstRunPeopleDirectory(selectedPersonIds.length, firstRunAnalysisConsent) || selectedPersonIds.length === 0} onClick={() => void buildPeopleDirectory()}>{buildingPeopleDirectory ? "Building your People…" : "Build my People directory"} {buildingPeopleDirectory ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}</button>
       </footer>
     </section> : null}

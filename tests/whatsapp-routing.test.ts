@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allowsMessageDirection,
+  resolveFeatureAwareAutomationMode,
   resolveAutomationMode,
   resolveConversationId,
 } from "../src/processor.js";
@@ -76,6 +77,11 @@ describe("WhatsApp automatic reply modes", () => {
 
   it("preserves the saved mode for incoming contact messages", () => {
     expect(resolveAutomationMode(false, false, false, true, "suggest")).toBe("suggest");
+  });
+
+  it("turns saved Auto Mode into drafts when the Control Center disables it", () => {
+    expect(resolveFeatureAwareAutomationMode(false, false, false, true, "auto", false)).toBe("suggest");
+    expect(resolveFeatureAwareAutomationMode(false, false, false, true, "auto", true)).toBe("auto");
   });
 });
 

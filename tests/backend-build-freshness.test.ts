@@ -31,6 +31,7 @@ function fixture() {
 
 function uiFixture() {
   const project = fixture();
+  mkdirSync(resolve(project, "ui/public"), { recursive: true });
   mkdirSync(resolve(project, "ui/src"), { recursive: true });
   mkdirSync(resolve(project, "ui/dist"), { recursive: true });
   writeFileSync(resolve(project, "package.json"), "{}\n");
@@ -38,6 +39,7 @@ function uiFixture() {
   writeFileSync(resolve(project, "ui/index.html"), "<div id=\"root\"></div>\n");
   writeFileSync(resolve(project, "ui/tsconfig.json"), "{}\n");
   writeFileSync(resolve(project, "ui/vite.config.ts"), "export default {};\n");
+  writeFileSync(resolve(project, "ui/public/manifest.webmanifest"), "{\"name\":\"AmirOS\"}\n");
   writeFileSync(resolve(project, "ui/src/main.tsx"), "export const version = 1;\n");
   writeFileSync(resolve(project, "ui/dist/index.html"), "<script src=\"/assets/index-old.js\"></script>\n");
   return project;
@@ -154,6 +156,13 @@ describe("build freshness preflight", () => {
     expect(result.rebuilt).toBe(true);
     expect(inspectUiBuild(project).fresh).toBe(true);
     expect(readFileSync(resolve(project, "ui/dist/index.html"), "utf8")).toContain("index-new.js");
+  });
+
+  test("rebuilds when a dashboard public file changes", () => {
+    const project = uiFixture();
+    writeUiBuildStamp(project);
+    writeFileSync(resolve(project, "ui/public/manifest.webmanifest"), "{\"name\":\"Updated AmirOS\"}\n");
+    expect(inspectUiBuild(project).fresh).toBe(false);
   });
 
   test("rebuilds a missing dashboard and never stamps a failed UI build", () => {

@@ -88,6 +88,7 @@ type InboxViewProps = {
   onSelectChat: (chatId: string | undefined) => void;
   onMarkRead: (chatId: string) => Promise<void>;
   onModeChange: (chatId: string, mode: ReplyMode) => Promise<void>;
+  autoModeEnabled?: boolean;
   onContactChange: (
     chatId: string,
     patch: Partial<ContactPreferences>,
@@ -252,6 +253,7 @@ export function InboxView({
   onSelectChat,
   onMarkRead,
   onModeChange,
+  autoModeEnabled = true,
   onContactChange,
   onAddMemory,
   onRemoveMemory,
@@ -758,8 +760,10 @@ export function InboxView({
     );
   }
 
-  const activeReplyMode = contact?.mode || selectedChat.mode;
-  const nextReplyMode = NEXT_REPLY_MODE[activeReplyMode];
+  const savedReplyMode = contact?.mode || selectedChat.mode;
+  const activeReplyMode: ReplyMode = savedReplyMode === "auto" && !autoModeEnabled ? "suggest" : savedReplyMode;
+  const nextReplyMode = autoModeEnabled ? NEXT_REPLY_MODE[activeReplyMode] : activeReplyMode === "off" ? "suggest" : "off";
+  const replyModes = autoModeEnabled ? (["off", "suggest", "auto"] as const) : (["off", "suggest"] as const);
   const autoReplyInitialDelay = contact?.autoReplyInitialDelaySeconds || 30;
   const changeAutoReplyInitialDelay = (value: string) => {
     const delay = Number(value) as AutoReplyInitialDelaySeconds;
@@ -914,11 +918,11 @@ export function InboxView({
           <div className="contact-accordion-body setting-section">
           <p className="contact-setting-help">Choose whether AmirOS replies, prepares a private draft, or waits for a trigger.</p>
           <div className="mode-segmented">
-            {(["off", "suggest", "auto"] as const).map((mode) => (
-              <button key={mode} className={(contact?.mode || selectedChat.mode) === mode ? `selected ${mode}` : ""} onClick={() => onModeChange(selectedChat.id, mode)}>{mode === "off" ? <LockKeyhole size={16} /> : mode === "suggest" ? <PencilLine size={16} /> : <Bot size={16} />}<span className="capitalize">{mode}</span></button>
+            {replyModes.map((mode) => (
+              <button key={mode} className={activeReplyMode === mode ? `selected ${mode}` : ""} onClick={() => onModeChange(selectedChat.id, mode)}>{mode === "off" ? <LockKeyhole size={16} /> : mode === "suggest" ? <PencilLine size={16} /> : <Bot size={16} />}<span className="capitalize">{mode}</span></button>
             ))}
           </div>
-          {(contact?.mode || selectedChat.mode) === "auto" ? <p className="auto-reply-delay-help"><Clock3 size={14} /><span>The first automatic reply waits <strong>{autoReplyInitialDelay} seconds</strong>. Each later automatic reply waits 15 seconds after a new message.</span></p> : null}
+          {activeReplyMode === "auto" ? <p className="auto-reply-delay-help"><Clock3 size={14} /><span>The first automatic reply waits <strong>{autoReplyInitialDelay} seconds</strong>. Each later automatic reply waits 15 seconds after a new message.</span></p> : null}
           </div>
         </details>
 

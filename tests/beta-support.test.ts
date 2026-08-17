@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betaSupportQuestions, buildBetaSupportReport, highLevelConnection, safeSupportText, supportAction, validationError } from "../ui/src/beta-support.js";
+import { betaSupportQuestions, betaSupportSubject, buildBetaSupportReport, highLevelConnection, safeSupportText, supportAction, validationError } from "../ui/src/beta-support.js";
 
 const draft = { category: "Bug" as const, featureArea: "Overview", trying: "Open the agenda", happened: "The card did not open", expected: "The event opens", includeDiagnostics: false };
 
@@ -10,7 +10,8 @@ describe("beta support report", () => {
     expect(validationError(draft)).toBeUndefined();
   });
 
-  it("prefers a configured email draft, then a support URL, then a transparent copy fallback", () => {
+  it("uses direct paired-device delivery first, then retains safe fallback choices", () => {
+    expect(supportAction({ direct: true, url: "https://support.example.com", email: "beta@example.com" })).toBe("direct");
     expect(supportAction({ url: "https://support.example.com", email: "beta@example.com" })).toBe("email");
     expect(supportAction({ url: "https://support.example.com" })).toBe("url");
     expect(supportAction({})).toBe("copy");
@@ -45,5 +46,12 @@ describe("beta support report", () => {
 
   it("does not claim that a report was sent", () => {
     expect(buildBetaSupportReport(draft)).not.toMatch(/\bsent\b/i);
+  });
+
+  it("derives a bounded, redacted ticket subject from the tester's own words", () => {
+    const subject = betaSupportSubject({ ...draft, trying: "Use sk-very_secret_key_1234567890 in Settings" });
+    expect(subject).toMatch(/^Bug:/);
+    expect(subject).not.toContain("very_secret");
+    expect(subject.length).toBeLessThanOrEqual(140);
   });
 });

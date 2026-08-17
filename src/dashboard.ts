@@ -79,12 +79,14 @@ import {
   proactiveJudgmentKey,
   PROACTIVE_AI_POLICY_VERSION,
 } from "./proactive-intelligence.js";
+import { ControlCenterRequestError, type ControlCenterEntitlement, type ControlCenterOnboardingEvent } from "./control-center-entitlement.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
   ".png": "image/png",
   ".svg": "image/svg+xml",
   ".woff2": "font/woff2",
@@ -98,6 +100,8 @@ type DashboardOptions = {
   state: AmirosState;
   writingStyleLearner?: WritingStyleLearner;
   intelligenceLearner?: IntelligenceLearner;
+  controlCenter?: ControlCenterEntitlement;
+  syncControlCenterAccess?: () => void;
   /** Lets isolated checks keep their calendar token outside a user's data folder. */
   calendarFeedTokenPath?: string;
   port: number;
@@ -1668,6 +1672,8 @@ export function startAmirosDashboard(options: DashboardOptions) {
     state,
     writingStyleLearner,
     intelligenceLearner,
+    controlCenter,
+    syncControlCenterAccess,
     calendarFeedTokenPath,
     port,
   } = options;
@@ -1745,6 +1751,116 @@ export function startAmirosDashboard(options: DashboardOptions) {
       }
       const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
       const { pathname } = url;
+
+      if (request.method === "GET" && pathname === "/api/control-center") {
+        sendJson(response, 200, controlCenter?.snapshot() || {
+          configured: false,
+          status: "unpaired",
+          detail: "Control Center connection is not configured for this AmirOS copy.",
+          setupState: "setup_required",
+          activationRequired: false,
+          features: [],
+        });
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/control-center/activation") {
+        if (!controlCenter) {
+          sendJson(response, 503, { error: "Control Center connection is not configured for this AmirOS copy." });
+          return;
+        }
+        const snapshot = await controlCenter.beginActivation();
+        syncControlCenterAccess?.();
+        sendJson(response, 200, snapshot);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/control-center/activation-status") {
+        if (!controlCenter) {
+          sendJson(response, 503, { error: "Control Center connection is not configured for this AmirOS copy." });
+          return;
+        }
+        const snapshot = await controlCenter.checkActivation();
+        syncControlCenterAccess?.();
+        sendJson(response, 200, snapshot);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/control-center/reconnect") {
+        if (!controlCenter) {
+          sendJson(response, 503, { error: "Control Center connection is not configured for this AmirOS copy." });
+          return;
+        }
+        const snapshot = await controlCenter.reconnectThisMac();
+        syncControlCenterAccess?.();
+        sendJson(response, 200, snapshot);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/control-center/refresh") {
+        if (!controlCenter) {
+          sendJson(response, 503, { error: "Control Center connection is not configured for this AmirOS copy." });
+          return;
+        }
+        const snapshot = await controlCenter.refresh();
+        syncControlCenterAccess?.();
+        sendJson(response, 200, snapshot);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/control-center/support-ticket") {
+        if (!controlCenter) {
+          sendJson(response, 503, { error: "AmirOS support is not configured for this AmirOS copy." });
+          return;
+        }
+        const body = await readJson<{ type?: unknown; subject?: unknown; details?: unknown }>(request, 8 * 1024);
+        const categories = new Set(["Bug", "Feedback", "Feature request", "Setup help"]);
+        const type = typeof body.type === "string" && categories.has(body.type) ? body.type as "Bug" | "Feedback" | "Feature request" | "Setup help" : undefined;
+        const subject = typeof body.subject === "string" ? body.subject.trim() : "";
+        const details = typeof body.details === "string" ? body.details.trim() : "";
+        if (!type || !subject || subject.length > 140 || !details || details.length > 6_000) {
+          sendJson(response, 400, { error: "Please complete the support request before sending it." });
+          return;
+        }
+        try {
+          const result = await controlCenter.submitSupportTicket({ type, subject, details });
+          sendJson(response, 201, result);
+        } catch (error) {
+          const status = error instanceof ControlCenterRequestError && [400, 401, 403, 503].includes(error.status)
+            ? error.status
+            : 503;
+          const message = error instanceof Error
+            ? error.message
+            : "AmirOS support is unavailable right now. Please try again shortly.";
+          sendJson(response, status, { error: message });
+        }
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/control-center/onboarding-progress") {
+        if (!controlCenter) {
+          sendJson(response, 503, { error: "The beta checklist is not configured for this AmirOS copy." });
+          return;
+        }
+        const body = await readJson<{ event?: unknown }>(request, 512);
+        const allowedEvents = new Set<ControlCenterOnboardingEvent>(["whatsapp_connected", "first_people_selected"]);
+        const event = typeof body.event === "string" && allowedEvents.has(body.event as ControlCenterOnboardingEvent)
+          ? body.event as ControlCenterOnboardingEvent
+          : undefined;
+        if (!event) {
+          sendJson(response, 400, { error: "Choose a valid beta checklist step." });
+          return;
+        }
+        try {
+          sendJson(response, 200, await controlCenter.reportOnboardingProgress(event));
+        } catch (error) {
+          const status = error instanceof ControlCenterRequestError && [400, 401, 403, 409, 503].includes(error.status)
+            ? error.status
+            : 503;
+          sendJson(response, status, { error: error instanceof Error ? error.message : "The beta checklist is unavailable right now." });
+        }
+        return;
+      }
 
       if (request.method === "GET" && pathname === "/api/timezones/search") {
         const query = url.searchParams.get("q") || "";
@@ -1888,6 +2004,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
         visibleTodoTasks,
         isKnownIntelligenceChat,
         activitiesWithContactNames: () => activitiesWithContactNames(client, state, chatNameCache),
+        controlCenter,
       })) return;
 
       if (await handleSystemApiRoute({
@@ -2355,6 +2472,10 @@ export function startAmirosDashboard(options: DashboardOptions) {
           return;
         }
         if (includeKnowledge && looksLikeMemoryCorrection(query, Boolean(followUp?.answer))) {
+          if (controlCenter && !controlCenter.isFeatureEnabled("memory-control")) {
+            sendJson(response, 403, { error: "Memory control is currently turned off for this AmirOS account. Your existing private memory stays on this Mac." });
+            return;
+          }
           const directRecords = state.searchIntelligence(`${query} ${followUp?.question || ""}`.trim(), 48, archived);
           // Corrections may only use the evidence attached to this Ask AmirOS
           // exchange (or facts directly named by the new request). Falling back
@@ -2741,6 +2862,10 @@ export function startAmirosDashboard(options: DashboardOptions) {
         }
         if (patch.mode !== undefined && patch.mode !== "off" && patch.mode !== "suggest" && patch.mode !== "auto") {
           sendJson(response, 400, { error: "Reply mode has an unsupported value" });
+          return;
+        }
+        if (patch.mode === "auto" && controlCenter && !controlCenter.isFeatureEnabled("auto-mode")) {
+          sendJson(response, 403, { error: "Auto Mode is currently turned off for this AmirOS account." });
           return;
         }
         if (

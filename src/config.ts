@@ -76,6 +76,9 @@ export type AppConfig = {
   allowGroups: boolean;
   amirosPort: number;
   amirosPublicUrl?: string;
+  controlCenterUrl?: string;
+  /** Enables the new beta activation gate without changing existing private installs. */
+  requireControlCenterActivation: boolean;
   betaSupportUrl?: string;
   betaSupportEmail?: string;
   whatsappSessionPath: string;
@@ -135,6 +138,27 @@ function publicAmirosUrl(env: NodeJS.ProcessEnv): string | undefined {
     return value.replace(/\/+$/, "");
   } catch {
     throw new Error("AMIROS_PUBLIC_URL must be a valid http or https URL");
+  }
+}
+
+/**
+ * This is an operational endpoint, never a destination for conversations,
+ * memory, WhatsApp material, or OpenAI credentials. It may be changed when
+ * AmirOS moves to its permanent domain without touching a tester's local data.
+ */
+function controlCenterUrl(env: NodeJS.ProcessEnv, requireActivation: boolean): string | undefined {
+  // Older local copies remain local unless they explicitly opt into the
+  // managed-beta connection. The clean beta package enables the gate, so it
+  // receives the official Control Center origin even without an override.
+  const value = optional(env, "AMIROS_CONTROL_CENTER_URL")
+    || (requireActivation ? "https://amiros-control-center.netlify.app" : undefined);
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error();
+    return url.toString().replace(/\/$/u, "");
+  } catch {
+    throw new Error("AMIROS_CONTROL_CENTER_URL must be an https URL without credentials, query parameters, or fragments");
   }
 }
 
@@ -230,6 +254,7 @@ function defaultChromePath(): string | undefined {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const selectedPresetName = presetName(env);
   const preset = MODEL_PRESETS[selectedPresetName];
+  const requireControlCenterActivation = booleanValue(env, "AMIROS_REQUIRE_CONTROL_CENTER_ACTIVATION", false);
 
   return {
     // A new customer needs to be able to open Settings before adding their own
@@ -276,6 +301,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     allowGroups: booleanValue(env, "ALLOW_GROUPS", false),
     amirosPort: positiveInteger(env, "AMIROS_PORT", 3789),
     amirosPublicUrl: publicAmirosUrl(env),
+    controlCenterUrl: controlCenterUrl(env, requireControlCenterActivation),
+    requireControlCenterActivation,
     betaSupportUrl: betaSupportUrl(env),
     betaSupportEmail: betaSupportEmail(env),
     whatsappSessionPath: optional(env, "WHATSAPP_SESSION_PATH") || ".wwebjs_auth",

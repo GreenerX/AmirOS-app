@@ -41,6 +41,20 @@ describe("buildTodaysFocus", () => {
     expect(items.map((item) => item.title)).not.toContain("Already finished");
   });
 
+  it("keeps a to-do's record and evidence time so the Focus card can open the correct editor and label its origin", () => {
+    const value = data();
+    value.todos!.push({ id: "webinar", chatId: "work", contactName: "Work", title: "Prepare webinar", status: "open", priority: "high", dueAt: at(-1), evidence, createdAt: at(-2), updatedAt: at(-1) });
+
+    expect(buildTodaysFocus(value, now)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "todo:work:webinar",
+        recordId: "webinar",
+        timestamp: at(-1),
+        sourceTimestamp: evidence.timestamp,
+      }),
+    ]));
+  });
+
   it("does not include completed commitments", () => {
     const value = data();
     value.commitments.push({ id: "done-commitment", chatId: "dani", contactName: "Dani", content: "Already called Dani", owner: "me", status: "done", dueAt: at(-1), evidence, createdAt: at(-2), updatedAt: at(-1) });
@@ -161,6 +175,7 @@ describe("buildTodaysFocus", () => {
       messageId: "message-1",
       action: "chat",
       timestamp: at(-1),
+      sourceTimestamp: evidence.timestamp,
     }];
 
     expect(buildTodaysFocus(value, now)).toEqual([expect.objectContaining({

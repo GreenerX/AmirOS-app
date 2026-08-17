@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title desc">
-  <title id="title">AmirOS Quiet Monogram</title>
-  <desc id="desc">A softly rounded abstract A and M monogram.</desc>
-  <g fill="none" stroke="#078A56" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M13 78 42 18l29 60" stroke-width="14"/>
-    <path d="m60 18 29 60" stroke-width="14"/>
-  </g>
-  <path d="m32.5 70 9.5-20 10 20h-5.2c-2.6 0-4.2 1.5-4.8 4.4-.7-2.9-2.3-4.4-4.9-4.4Z" fill="#078A56"/>
-</svg>

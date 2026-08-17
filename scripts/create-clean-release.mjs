@@ -52,16 +52,18 @@ for (const entry of included) {
   cpSync(source, resolve(releaseRoot, entry), { recursive: true, filter: includeReleasePath });
 }
 
-// The official beta ZIP needs one safe, non-secret support destination from
-// its tracked example configuration. It lets first-time testers reach support
-// immediately, while `.env.local` remains private and always takes precedence.
+// The official beta ZIP receives only non-secret beta configuration from the
+// tracked example file. It starts new testers in the approved-device flow,
+// while `.env.local` remains private and always takes precedence.
 const exampleEnvironment = readFileSync(resolve(root, ".env.example"), "utf8");
-const betaSupportLines = ["AMIROS_BETA_SUPPORT_EMAIL", "AMIROS_BETA_SUPPORT_URL"]
+const betaConfigurationLines = ["AMIROS_CONTROL_CENTER_URL", "AMIROS_BETA_SUPPORT_EMAIL", "AMIROS_BETA_SUPPORT_URL"]
   .flatMap((name) => exampleEnvironment.match(new RegExp(`^${name}=.+$`, "m"))?.[0] || []);
-if (betaSupportLines.length > 0) {
+if (betaConfigurationLines.length > 0) {
   writeFileSync(resolve(releaseRoot, ".env"), [
-    "# AmirOS private-beta support destination. You may override this in .env.local.",
-    ...betaSupportLines,
+    "# AmirOS private-beta configuration. You may override non-sensitive choices in .env.local.",
+    "# New testers must connect and approve this Mac before normal AmirOS access.",
+    "AMIROS_REQUIRE_CONTROL_CENTER_ACTIVATION=true",
+    ...betaConfigurationLines,
     "",
   ].join("\n"), { encoding: "utf8", mode: 0o600 });
 }
@@ -74,7 +76,9 @@ memory, calendar entries, activity history, or profile data from the developer.
 1. Install the Node.js LTS release from https://nodejs.org/en/download.
 2. Double-click \`Install AmirOS.command\` and keep its window open until the
    AmirOS dashboard opens.
-3. Complete the first-run setup to add your OpenAI API key, choose a monthly
+3. In AmirOS, connect this Mac to your approved AmirOS Control Center account.
+   The dashboard becomes available after you approve the connection there.
+4. Complete first-run setup to add your own OpenAI API key, choose a monthly
    AmirOS spend limit, then link WhatsApp with the QR code.
 
 Your private local data is created only after setup:

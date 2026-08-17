@@ -1,4 +1,4 @@
-import { BarChart3, CalendarDays, ChevronDown, ContactRound, Home, LifeBuoy, ListChecks, Mail, PanelLeftClose, PanelLeftOpen, Settings, TerminalSquare, UsersRound } from "lucide-react";
+import { BarChart3, CalendarDays, ChevronDown, ContactRound, Download, Home, LifeBuoy, ListChecks, Mail, PanelLeftClose, PanelLeftOpen, Settings, TerminalSquare, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import type { DashboardData, ViewName } from "../types";
@@ -40,9 +40,13 @@ type SidebarProps = {
   connection: DashboardData["connection"];
   onOpenReleaseNotes: () => void;
   onOpenBetaSupport: () => void;
+  canInstallApp?: boolean;
+  installingApp?: boolean;
+  onInstallApp?: () => void;
+  calendarViewsEnabled?: boolean;
 };
 
-export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleCollapsed, profile, version, updateAvailable = false, connection, onOpenReleaseNotes, onOpenBetaSupport }: SidebarProps) {
+export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleCollapsed, profile, version, updateAvailable = false, connection, onOpenReleaseNotes, onOpenBetaSupport, canInstallApp = false, installingApp = false, onInstallApp, calendarViewsEnabled = true }: SidebarProps) {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
 
@@ -87,7 +91,7 @@ export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleC
       </div>
 
       <nav className="navigation" aria-label="Main navigation">
-        {navigation.map(({ id, label, icon: Icon, tone }) => (
+        {navigation.filter((item) => item.id !== "calendar" || calendarViewsEnabled).map(({ id, label, icon: Icon, tone }) => (
           <button
             key={id}
             className={`nav-item nav-tone-${tone}${current === id ? " active" : ""}`}
@@ -126,6 +130,7 @@ export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleC
         </button>
       </div>
       <button className="sidebar-support" type="button" onClick={onOpenBetaSupport} aria-label="Help and feedback"><LifeBuoy size={16} /><span>Help &amp; feedback</span></button>
+      {canInstallApp ? <button className="sidebar-dock-install" type="button" onClick={onInstallApp} disabled={installingApp} aria-label="Add AmirOS to your Dock"><Download size={16} /><span>{installingApp ? "Opening install…" : "Add AmirOS to your Dock"}</span></button> : null}
       <button className={updateAvailable ? "sidebar-version update-available" : "sidebar-version"} type="button" onClick={onOpenReleaseNotes} title={updateAvailable ? "An AmirOS update is ready" : "View release notes"}>v{version}<span>{updateAvailable ? "Update ready" : "What’s new"}</span></button>
       <small className="sidebar-rights">© 2026 Amir Friedman.<br />All rights reserved.</small>
     </aside>

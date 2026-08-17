@@ -5,6 +5,7 @@ import type { AppConfig } from "../config.js";
 import { CURRENT_RELEASE, RELEASE_HISTORY } from "../release.js";
 import { uiBuildFingerprint } from "../ui-build-runtime.js";
 import { MODEL_OPTIONS } from "./settings-routes.js";
+import type { ControlCenterEntitlement } from "../control-center-entitlement.js";
 
 type SendJson = (response: ServerResponse, status: number, value: unknown) => void;
 
@@ -22,6 +23,7 @@ type AiUsageRouteOptions = {
   visibleTodoTasks: <T extends VisibleTodoTask>(todos: T[]) => T[];
   isKnownIntelligenceChat: (chatId: string, contactName: string) => boolean;
   activitiesWithContactNames: () => Promise<unknown>;
+  controlCenter?: ControlCenterEntitlement;
 };
 
 /**
@@ -42,9 +44,57 @@ export async function handleAiUsageApiRoute(options: AiUsageRouteOptions): Promi
     visibleTodoTasks,
     isKnownIntelligenceChat,
     activitiesWithContactNames,
+    controlCenter,
   } = options;
 
   if (request.method !== "GET" || pathname !== "/api/dashboard") return false;
+
+  const controlCenterSupportUrl = config.controlCenterUrl
+    ? new URL("/account/?support=1", config.controlCenterUrl).toString()
+    : undefined;
+  const controlCenterStatus = controlCenter?.snapshot();
+  const visibleControlCenter = controlCenterStatus || {
+    configured: false,
+    status: "unpaired" as const,
+    detail: "Control Center connection is not configured for this AmirOS copy.",
+    setupState: "setup_required" as const,
+    activationRequired: false,
+    features: [],
+  };
+  // Existing local installs keep their established email/URL support route.
+  // The Control Center becomes the primary support path only for a new
+  // managed beta package, where an approved device can submit directly.
+  const betaSupport = config.requireControlCenterActivation && controlCenterSupportUrl
+    ? {
+        url: controlCenterSupportUrl,
+        // Keep existing installations on their established support route until
+        // they are packaged as a managed, approval-gated beta copy. This avoids
+        // sending a tester to a Control Center endpoint before that control
+        // plane has been deployed for their release.
+        direct: config.requireControlCenterActivation
+          && controlCenterStatus?.setupState === "active"
+          && (controlCenterStatus.status === "active" || controlCenterStatus.status === "offline_grace"),
+        build: uiBuildFingerprint()?.slice(0, 12),
+      }
+    : config.betaSupportEmail
+      ? { email: config.betaSupportEmail, build: uiBuildFingerprint()?.slice(0, 12) }
+      : config.betaSupportUrl
+        ? { url: config.betaSupportUrl, build: uiBuildFingerprint()?.slice(0, 12) }
+        : { build: uiBuildFingerprint()?.slice(0, 12) };
+  const activationOnly = visibleControlCenter.configured
+    && visibleControlCenter.activationRequired
+    && (visibleControlCenter.setupState !== "active"
+      || (visibleControlCenter.status !== "active" && visibleControlCenter.status !== "offline_grace"));
+  if (activationOnly) {
+    sendJson(response, 200, {
+      activationOnly: true,
+      connection: state.connection(),
+      controlCenter: visibleControlCenter,
+      release: { ...CURRENT_RELEASE, history: RELEASE_HISTORY },
+      betaSupport,
+    });
+    return true;
+  }
 
   const usage = ai.usageSnapshot();
   const todos = visibleTodoTasks(state.listTodoTasks())
@@ -56,6 +106,7 @@ export async function handleAiUsageApiRoute(options: AiUsageRouteOptions): Promi
   sendJson(response, 200, {
     connection: state.connection(),
     paused: state.isPaused(),
+    controlCenter: visibleControlCenter,
     preset: config.modelPresetName,
     models: {
       text: config.openaiTextModel,
@@ -66,11 +117,7 @@ export async function handleAiUsageApiRoute(options: AiUsageRouteOptions): Promi
     usage,
     monthlySpendUsd: state.monthlySpendUsd(),
     release: { ...CURRENT_RELEASE, history: RELEASE_HISTORY },
-    betaSupport: config.betaSupportEmail
-      ? { email: config.betaSupportEmail, build: uiBuildFingerprint()?.slice(0, 12) }
-      : config.betaSupportUrl
-        ? { url: config.betaSupportUrl, build: uiBuildFingerprint()?.slice(0, 12) }
-        : { build: uiBuildFingerprint()?.slice(0, 12) },
+    betaSupport,
     drafts: state.listDrafts(),
     todos,
     activities: await activitiesWithContactNames(),

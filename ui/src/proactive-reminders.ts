@@ -11,6 +11,8 @@ export type ProactiveReminder = {
   contactName: string;
   messageId?: string;
   timestamp: number;
+  sourceTimestamp?: number;
+  hasExplicitDueAt?: boolean;
 };
 
 function toMilliseconds(value: number) {
@@ -55,6 +57,8 @@ export function buildProactiveReminders(data: IntelligenceData | undefined, now 
       contactName: commitment.contactName,
       messageId: commitment.evidence.messageId,
       timestamp: toMilliseconds(commitment.dueAt),
+      sourceTimestamp: toMilliseconds(commitment.evidence.timestamp),
+      hasExplicitDueAt: true,
     });
   }
 
@@ -73,6 +77,8 @@ export function buildProactiveReminders(data: IntelligenceData | undefined, now 
       contactName: todo.contactName,
       messageId: todo.evidence.messageId,
       timestamp: toMilliseconds(todo.dueAt),
+      sourceTimestamp: toMilliseconds(todo.evidence.timestamp),
+      hasExplicitDueAt: true,
     });
   }
 
@@ -91,6 +97,7 @@ export function buildProactiveReminders(data: IntelligenceData | undefined, now 
       contactName: event.contactName,
       messageId: event.evidence.messageId,
       timestamp: toMilliseconds(event.startAt),
+      sourceTimestamp: toMilliseconds(event.evidence.timestamp),
     });
   }
 

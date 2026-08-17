@@ -30,8 +30,9 @@ import {
 import { SiApple } from "react-icons/si";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { compactNumber } from "../format";
-import { deleteOwnerAvatar, getBackendRestartStatus, getCalendarSubscription, getOwnerAvatars, restartAmirosBackend, uploadOwnerAvatar, whatsappQrUrl, type BackendRestartStatus, type CalendarSubscriptionInfo, type OwnerAvatar } from "../api";
+import { beginControlCenterActivation, checkControlCenterActivation, deleteOwnerAvatar, getBackendRestartStatus, getCalendarSubscription, getOwnerAvatars, refreshControlCenterStatus, restartAmirosBackend, uploadOwnerAvatar, whatsappQrUrl, type BackendRestartStatus, type CalendarSubscriptionInfo, type OwnerAvatar } from "../api";
 import { calendarSubscriptionBannerHidden, setCalendarSubscriptionBannerHidden } from "../calendar-preferences";
+import { shouldShowControlCenterAccess } from "../control-center-access";
 import { WhatsAppIcon } from "./BrandIcons";
 import { ContactAvatar } from "./ContactAvatar";
 import type {
@@ -41,15 +42,17 @@ import type {
   KnowledgeTrackingDefault,
   ReplyMode,
   ThemeName,
+  ControlCenterStatus,
 } from "../types";
 
 type ContactsViewProps = {
   chats: ChatSummary[];
   onModeChange: (chatId: string, mode: ReplyMode) => Promise<void>;
   onOpenChat: (chatId: string) => void;
+  autoModeEnabled?: boolean;
 };
 
-export function ContactsView({ chats, onModeChange, onOpenChat }: ContactsViewProps) {
+export function ContactsView({ chats, onModeChange, onOpenChat, autoModeEnabled = true }: ContactsViewProps) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "people" | "groups" | "assisted">("all");
   const visibleChats = useMemo(() => {
@@ -78,8 +81,8 @@ export function ContactsView({ chats, onModeChange, onOpenChat }: ContactsViewPr
           <div className="contact-table-row" key={chat.id}>
             <span className="contact-identity"><ContactAvatar name={chat.name} src={chat.avatarUrl} tone={index} /><span><strong>{chat.name}</strong><small className="contact-channel">{chat.isGroup ? <UsersRound size={13} /> : <WhatsAppIcon size={13} />}{chat.isGroup ? "Group" : "WhatsApp contact"}</small></span></span>
             <span className="table-preview">{chat.preview}</span>
-            <select aria-label={`Reply mode for ${chat.name}`} value={chat.mode} onChange={(event) => onModeChange(chat.id, event.target.value as ReplyMode)}>
-              <option value="off">Off</option><option value="suggest">Suggest</option><option value="auto">Auto</option>
+            <select aria-label={`Reply mode for ${chat.name}`} value={chat.mode === "auto" && !autoModeEnabled ? "suggest" : chat.mode} onChange={(event) => onModeChange(chat.id, event.target.value as ReplyMode)}>
+              <option value="off">Off</option><option value="suggest">Suggest</option>{autoModeEnabled ? <option value="auto">Auto</option> : null}
             </select>
             <button className="text-button" onClick={() => onOpenChat(chat.id)}>Open</button>
           </div>
@@ -260,6 +263,20 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
   const [backendRestartState, setBackendRestartState] = useState<"idle" | "restarting" | "success" | "error">("idle");
   const [backendRestartMessage, setBackendRestartMessage] = useState("");
   const backendRestartPollTimerRef = useRef<number | undefined>(undefined);
+  const [controlCenter, setControlCenter] = useState<ControlCenterStatus>(data.controlCenter);
+  const [controlCenterState, setControlCenterState] = useState<"idle" | "working" | "error">("idle");
+
+  useEffect(() => {
+    setControlCenter(data.controlCenter);
+  }, [data.controlCenter]);
+
+  useEffect(() => {
+    if (controlCenter.status !== "pending") return;
+    const timer = window.setInterval(() => {
+      void checkControlCenterActivation().then(setControlCenter).catch(() => undefined);
+    }, 4_000);
+    return () => window.clearInterval(timer);
+  }, [controlCenter.status]);
 
   useEffect(() => {
     let cancelled = false;
@@ -442,6 +459,26 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
     }
   };
 
+  const connectThisMac = async () => {
+    setControlCenterState("working");
+    try {
+      setControlCenter(await beginControlCenterActivation());
+      setControlCenterState("idle");
+    } catch {
+      setControlCenterState("error");
+    }
+  };
+
+  const refreshControlCenter = async () => {
+    setControlCenterState("working");
+    try {
+      setControlCenter(await refreshControlCenterStatus());
+      setControlCenterState("idle");
+    } catch {
+      setControlCenterState("error");
+    }
+  };
+
   const connectionReady = data.connection.status === "ready";
   const qrAvailable = data.connection.status === "qr";
   const connectionBusy = data.connection.status === "starting" || data.connection.status === "authenticated" || relinkState === "working";
@@ -563,11 +600,22 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause }: 
               </button>
             </div>
           </div>
+          {shouldShowControlCenterAccess(controlCenter) ? <div className="settings-connection-availability bot-availability-settings">
+            <span className="setting-hero-icon"><ShieldCheck size={25} /></span>
+            <div className="bot-availability-copy"><h2>AmirOS Control Center</h2><p>{controlCenter.detail}</p></div>
+            <div className="bot-availability-action">
+              <span className={`assistant-status ${controlCenter.status === "active" ? "running" : controlCenter.status === "pending" || controlCenter.status === "offline_grace" ? "paused" : "paused"}`}><i />{controlCenter.status === "active" ? "Connected" : controlCenter.status === "pending" ? "Approval needed" : controlCenter.status === "offline_grace" ? "Offline grace" : controlCenter.status === "paused" ? "Paused" : controlCenter.status === "revoked" ? "Revoked" : "Not connected"}</span>
+              {controlCenter.status === "unpaired" ? <button className="button primary" type="button" disabled={!controlCenter.configured || controlCenterState === "working"} onClick={() => void connectThisMac()}>{controlCenterState === "working" ? "Preparing…" : "Connect this Mac"}</button> : null}
+              {controlCenter.status === "pending" ? <div className="settings-control-center-actions">{controlCenter.activationUrl ? <a className="button primary" href={controlCenter.activationUrl} target="_blank" rel="noreferrer">Open Control Center</a> : null}<button className="button secondary" type="button" disabled={controlCenterState === "working"} onClick={() => void checkControlCenterActivation().then(setControlCenter).catch(() => setControlCenterState("error"))}>Check approval</button></div> : null}
+              {controlCenter.status !== "unpaired" && controlCenter.status !== "pending" ? <button className="button secondary" type="button" disabled={controlCenterState === "working"} onClick={() => void refreshControlCenter()}>{controlCenterState === "working" ? "Checking…" : "Check access"}</button> : null}
+              {controlCenterState === "error" ? <small className="subscription-error">AmirOS could not reach the Control Center. Try again in a moment.</small> : null}
+            </div>
+          </div> : null}
         </section>
         <div className="settings-core-grid">
         <section className="panel settings-summary api-key-settings">
           <span className="setting-hero-icon"><KeyRound size={25} /></span>
-          <div className="api-key-copy"><h2>OpenAI connection</h2><p>{data.settings.apiKeyConfigured ? "An OpenAI API key is connected locally on this Mac. Paste a different key only to replace it." : "Connect your own OpenAI account to enable AmirOS."}</p>
+          <div className="api-key-copy"><h2>OpenAI connection</h2><p>{data.settings.apiKeyConfigured ? "An OpenAI API key is connected locally on this Mac. Paste a different key only to replace it." : "Add the individual key provided for your AmirOS beta access, or one from your own OpenAI account."}</p>
             <div className="api-key-row"><input aria-label="OpenAI API key" type="password" autoComplete="off" spellCheck={false} value={apiKey} placeholder={data.settings.apiKeyConfigured ? "••••••••••••••••" : "sk-…"} onChange={(event) => setApiKey(event.target.value)} /><button className="button primary compact" type="button" disabled={apiKeyState === "saving"} onClick={() => void saveApiKey()}>{apiKeyState === "saving" ? "Saving…" : apiKeyState === "saved" ? "Connected ✓" : "Save API key"}</button></div>
             <small>Your key stays in this Mac’s private <code>.env.local</code> file and is never shown in AmirOS.</small>{apiKeyError ? <small className="subscription-error">{apiKeyError}</small> : null}
           </div>

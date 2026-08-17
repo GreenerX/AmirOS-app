@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -17,13 +18,22 @@ import { fileURLToPath } from "node:url";
 
 const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const safeServerPath = resolve(projectDirectory, "scripts/runtime-recovery-safe-server.mjs");
-const testDirectory = mkdtempSync("/tmp/amiros-installer-");
+// macOS exposes /tmp as /private/tmp through process metadata. Normalize the
+// fixture root so the installer's test-only process guard compares one real
+// path and can safely identify only the recovery servers created here.
+const testDirectory = realpathSync(mkdtempSync("/tmp/amiros-installer-"));
 
 const excludedFromZipFixture = [
   ".git",
+  ".pnpm-store",
+  ".wwebjs_cache",
   "node_modules",
   "dist",
+  "control-center",
+  "design",
+  "marketing-materials",
   "release",
+  "tmp",
   "work",
   "ui/dist",
   ".wwebjs_auth",
@@ -213,6 +223,7 @@ try {
   assertPublishedReleaseUpdater();
   const testBin = createSafeNpx(testDirectory);
 
+  console.log("Installer QA: clean installation");
   const cleanProject = resolve(testDirectory, "AmirOS clean install");
   copyZipFixture(cleanProject);
   installedProjects.push(cleanProject);
@@ -228,6 +239,7 @@ try {
   // This represents the older lightweight layout: private data exists, but
   // no current build output is available. The newer ZIP is placed beside it,
   // exactly like a person extracting a current GitHub download on their Mac.
+  console.log("Installer QA: existing-data upgrade");
   const legacyProject = resolve(testDirectory, "AmirOS v0.3.0");
   mkdirSync(resolve(legacyProject, "work/profile-avatars"), { recursive: true });
   mkdirSync(resolve(legacyProject, ".wwebjs_auth/session"), { recursive: true });
@@ -260,6 +272,7 @@ try {
   // still running from Desktop. The installer must stop that existing AmirOS
   // watchdog before opening the freshly built dashboard; otherwise the port
   // makes the launcher open the stale copy and falsely report success.
+  console.log("Installer QA: stale watchdog recovery");
   const staleProject = resolve(testDirectory, "Desktop", "AmirOS older copy");
   copyZipFixture(staleProject);
   const freshProject = resolve(testDirectory, "Documents", "AmirOS new copy");
@@ -277,6 +290,7 @@ try {
   // The old watchdog can be gone while its backend is still listening. This
   // is the production failure that would otherwise make the new launcher
   // refuse to open and leave a tester without a dashboard.
+  console.log("Installer QA: orphaned backend recovery");
   const orphanedProject = resolve(testDirectory, "Desktop", "AmirOS orphaned backend");
   copyZipFixture(orphanedProject);
   const repairedProject = resolve(testDirectory, "Documents", "AmirOS repaired install");
@@ -294,6 +308,7 @@ try {
   // Moving an old app folder to Trash can leave the backend's original
   // working directory unavailable. The dashboard response is then the safe
   // fallback that identifies it as AmirOS before the installer stops it.
+  console.log("Installer QA: deleted-folder backend recovery");
   const deletedFolderProject = resolve(testDirectory, "Desktop", "AmirOS moved to trash");
   copyZipFixture(deletedFolderProject);
   const apiVerifiedProject = resolve(testDirectory, "Documents", "AmirOS api verified install");

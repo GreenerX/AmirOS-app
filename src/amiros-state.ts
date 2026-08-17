@@ -941,6 +941,7 @@ export class AmirosState {
   private persisted: PersistedState;
   private readonly drafts = new Map<string, AmirosDraft>();
   private paused = false;
+  private controlCenterAccess: "paused" | "revoked" | "unavailable" | "setup_required" | undefined;
   private connectionStatus: ConnectionStatus = "starting";
   private connectionDetail = "Starting WhatsApp";
 
@@ -4641,7 +4642,33 @@ export class AmirosState {
   }
 
   isPaused(): boolean {
-    return this.paused;
+    return this.paused || Boolean(this.controlCenterAccess);
+  }
+
+  /**
+   * A Control Center restriction is intentionally separate from the owner's
+   * local pause switch. Resuming the local switch must never bypass a remote
+   * pause or revocation, and it is never persisted alongside personal memory.
+   */
+  setControlCenterAccess(status: "paused" | "revoked" | "unavailable" | "setup_required" | undefined): void {
+    if (this.controlCenterAccess === status) return;
+    this.controlCenterAccess = status;
+    if (!status) {
+      this.addActivity("system", "Control Center access confirmed", "This Mac can use its assigned AmirOS access.");
+      return;
+    }
+    const detail = status === "paused"
+      ? "Incoming commands are paused by the Control Center. Your local data remains on this Mac."
+      : status === "revoked"
+        ? "Incoming commands are blocked because this Mac no longer has AmirOS access. Your local data remains on this Mac."
+      : status === "setup_required"
+        ? "Incoming commands will begin after this Mac is connected and approved in the Control Center."
+        : "Incoming commands are paused until AmirOS can confirm access with the Control Center.";
+    this.addActivity("system", `Control Center access ${status}`, detail);
+  }
+
+  controlCenterAccessStatus(): "paused" | "revoked" | "unavailable" | "setup_required" | undefined {
+    return this.controlCenterAccess;
   }
 
   setConnection(status: ConnectionStatus, detail: string): void {

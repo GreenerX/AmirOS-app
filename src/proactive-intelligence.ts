@@ -31,6 +31,10 @@ export type ProactiveCandidate = {
   messageId?: string;
   action: ProactiveCandidateAction;
   timestamp: number;
+  /** The message/evidence that prompted the candidate, distinct from a due time. */
+  sourceTimestamp?: number;
+  /** A commitment is only overdue when its source contained a concrete due time. */
+  hasExplicitDueAt?: boolean;
   aiAssessment?: {
     confidence: number;
     reason: string;
@@ -187,6 +191,7 @@ export function buildProactiveCandidates(
           messageId: insight.evidence.messageId || upcomingEvent.evidence.messageId,
           action: "chat",
           timestamp: startAt,
+          sourceTimestamp: evidenceTimestamp(insight),
           fingerprintValues: [startAt, insight.updatedAt, insight.lastReinforcedAt],
         });
         upcomingContextAdded = true;
@@ -214,6 +219,8 @@ export function buildProactiveCandidates(
         messageId: commitment.evidence.messageId,
         action: "chat",
         timestamp: dueAt || evidenceAt,
+        sourceTimestamp: evidenceAt,
+        hasExplicitDueAt: Boolean(dueAt),
         fingerprintValues: [commitment.updatedAt, dueAt],
       });
     }
@@ -235,6 +242,8 @@ export function buildProactiveCandidates(
         messageId: todo.evidence.messageId,
         action: "todo",
         timestamp: dueAt,
+        sourceTimestamp: toMilliseconds(todo.evidence.timestamp),
+        hasExplicitDueAt: true,
         fingerprintValues: [todo.updatedAt, dueAt, todo.priority],
       });
     }
@@ -260,6 +269,7 @@ export function buildProactiveCandidates(
         messageId: source.lastIncoming.messageId,
         action: "chat",
         timestamp: incomingAt,
+        sourceTimestamp: incomingAt,
         fingerprintValues: [assessment.reason, assessment.confidence, incomingAt],
       });
     }
@@ -286,6 +296,7 @@ export function buildProactiveCandidates(
         messageId: meaningfulChange.evidence.messageId,
         action: "chat",
         timestamp: changedAt,
+        sourceTimestamp: changedAt,
         fingerprintValues: [meaningfulChange.updatedAt, meaningfulChange.lastReinforcedAt, meaningfulChange.supersededAt],
       });
     }

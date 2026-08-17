@@ -10,8 +10,14 @@ export type TodaysFocusItem = {
   chatId: string;
   contactName: string;
   messageId?: string;
+  /** The durable record backing a card, when the card opens an editor. */
+  recordId?: string;
   action: "chat" | "todo" | "calendar" | "reply";
   timestamp: number;
+  /** The original message/evidence timestamp for a follow-up card. */
+  sourceTimestamp?: number;
+  /** A commitment only becomes overdue when it has a concrete due date/time. */
+  hasExplicitDueAt?: boolean;
   allDay?: boolean;
   location?: string;
   imageUrl?: string;
@@ -121,6 +127,8 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
       messageId: commitment.evidence.messageId,
       action: "chat",
       timestamp: toMilliseconds(commitment.dueAt),
+      sourceTimestamp: toMilliseconds(commitment.evidence.timestamp),
+      hasExplicitDueAt: true,
     });
   }
 
@@ -138,8 +146,11 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
       chatId: todo.chatId,
       contactName: todo.contactName,
       messageId: todo.evidence.messageId,
+      recordId: todo.id,
       action: "todo",
       timestamp: toMilliseconds(todo.dueAt),
+      sourceTimestamp: toMilliseconds(todo.evidence.timestamp),
+      hasExplicitDueAt: true,
     });
   }
 
@@ -162,6 +173,7 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
       messageId: event.evidence.messageId,
       action: "calendar",
       timestamp: startAt,
+      sourceTimestamp: toMilliseconds(event.evidence.timestamp),
       allDay: event.allDay,
       location: event.location,
       imageUrl: event.imageUrl,
@@ -183,6 +195,7 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
       messageId: chat.lastIncoming?.messageId,
       action: "reply",
       timestamp: chat.lastIncoming ? toMilliseconds(chat.lastIncoming.timestamp) : toMilliseconds(chat.updatedAt),
+      sourceTimestamp: chat.lastIncoming ? toMilliseconds(chat.lastIncoming.timestamp) : toMilliseconds(chat.updatedAt),
       replyAssessment: chat.replyAssessment,
     });
   }
@@ -198,8 +211,11 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
       chatId: reminder.chatId,
       contactName: reminder.contactName,
       messageId: reminder.messageId,
+      recordId: reminder.recordId,
       action: reminder.type === "calendar" ? "calendar" : reminder.type === "todo" ? "todo" : "chat",
       timestamp: reminder.timestamp,
+      sourceTimestamp: reminder.sourceTimestamp,
+      hasExplicitDueAt: reminder.hasExplicitDueAt,
     });
   }
 
@@ -214,8 +230,11 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
       chatId: proactive.chatId,
       contactName: proactive.contactName,
       messageId: proactive.messageId,
+      recordId: proactive.kind === "todo" ? proactive.sourceIds[0] : undefined,
       action: proactive.action,
       timestamp: proactive.timestamp,
+      sourceTimestamp: proactive.sourceTimestamp,
+      hasExplicitDueAt: proactive.hasExplicitDueAt,
       proactive,
       why: proactive.why,
     });

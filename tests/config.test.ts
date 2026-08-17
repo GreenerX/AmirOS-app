@@ -63,6 +63,26 @@ describe("model presets", () => {
     expect(() => loadConfig({ OPENAI_API_KEY: "test", AMIROS_BETA_SUPPORT_URL: "https://support.example.com/?token=secret" })).toThrow(/query parameters/);
   });
 
+  it("keeps existing installs ungated while allowing a managed beta package to require an approved Mac", () => {
+    expect(loadConfig({ OPENAI_API_KEY: "test" })).toMatchObject({
+      requireControlCenterActivation: false,
+      controlCenterUrl: undefined,
+    });
+    expect(loadConfig({
+      OPENAI_API_KEY: "test",
+      AMIROS_REQUIRE_CONTROL_CENTER_ACTIVATION: "true",
+      AMIROS_CONTROL_CENTER_URL: "https://control.example.com/",
+    })).toMatchObject({
+      requireControlCenterActivation: true,
+      controlCenterUrl: "https://control.example.com",
+    });
+    expect(loadConfig({
+      OPENAI_API_KEY: "test",
+      AMIROS_REQUIRE_CONTROL_CENTER_ACTIVATION: "true",
+    }).controlCenterUrl).toBe("https://amiros-control-center.netlify.app");
+    expect(() => loadConfig({ OPENAI_API_KEY: "test", AMIROS_CONTROL_CENTER_URL: "http://control.example.com" })).toThrow(/https URL/);
+  });
+
   it("can read the public beta support default without treating private environment data as configuration", () => {
     const directory = mkdtempSync(join(tmpdir(), "amiros-beta-support-test-"));
     const examplePath = join(directory, ".env.example");

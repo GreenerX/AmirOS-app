@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.10.9] - 2026-08-18
+
+### Added
+
+- Added a managed private-beta journey from the early-access request through approval, account invitation, Mac connection, and first-run setup.
+- Added a signed-in Control Center with applicant review, one-click Netlify Identity invitations, account and device access controls, and a five-step Beta checklist.
+- Added direct Help & feedback delivery from an approved Mac to the Control Center. Reports remain user-initiated and exclude conversations, contacts, credentials, WhatsApp session data, saved memory, QR codes, and full logs.
+- Added an optional **Add AmirOS to your Dock** action for supported browsers.
+
+### Changed
+
+- New managed-beta installations require the tester to connect and approve their Mac before normal dashboard data or assistant actions become available.
+- WhatsApp readiness and the first successful People selection now update the tester’s Beta checklist without sending names, messages, contacts, memory, or API credentials.
+- The private-beta application form now feeds the Control Center applicant queue, while approved applicants receive the standard secure Netlify Identity invitation.
+- Control Center feature and release access can now be applied per account or device without changing the tester’s private local data.
+
+### Fixed
+
+- Fixed returning users seeing onboarding again after an update and preserved previously dismissed Today’s Focus cards across the update.
+- Fixed onboarding continuation after WhatsApp linking and made People setup available after recent chats finish syncing.
+- Prevented stale or old evidence from resurfacing as a current suggested action; suggestion cards now show the source date and time.
+- Focus cards now open their actual to-do editor where applicable, and commitments are described as overdue only when they have an explicit due date.
+- Hardened fresh installation and upgrade recovery so stale watchdogs, orphaned backends, and moved previous app folders do not reopen an older dashboard.
+
+### Infrastructure
+
+- Added separate, privacy-bounded Control Center and early-access deployments with signed applicant intake and device-authenticated support/checklist endpoints.
+- Improved dashboard build-freshness boundaries and release packaging so generated marketing exports, caches, local state, credentials, and WhatsApp sessions cannot enter the beta ZIP.
+
+### Testing
+
+- Added managed-beta entitlement, activation checklist, direct support, onboarding continuation, PWA installation, release visibility, Focus-card persistence, and installer recovery coverage.
+
 ## [0.10.8] - 2026-08-16
 
 ### Added

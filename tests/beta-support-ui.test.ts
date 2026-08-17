@@ -10,7 +10,7 @@ describe("beta support dashboard entry", () => {
     const modal = read("../ui/src/components/BetaSupportExperience.tsx");
     expect(modal).toContain('aria-modal="true"');
     expect(modal).toContain("Screenshots may contain private conversations");
-    expect(modal).toContain("Attach the screenshot in your email app before sending");
+    expect(modal).toContain("Attach the screenshot there if it would help");
     expect(modal).not.toContain('type="file"');
     expect(modal).toContain("Include basic technical details to help diagnose this");
     expect(modal).toContain("STEP {step === \"choose\" ? \"1\" : \"2\"} OF 2");
@@ -18,11 +18,18 @@ describe("beta support dashboard entry", () => {
     expect(modal).toContain("}, [open, currentView]);");
     expect(modal).toContain('setDraft({ category, featureArea: featureAreaForView(currentView), trying: "", happened: "", expected: "", includeDiagnostics: false });');
     expect(modal).toContain("Beta support has not yet been configured");
-    expect(modal).not.toContain("Sent");
+    expect(modal).toContain("Send to AmirOS support");
+    expect(modal).toContain("result.ticket.id");
+    expect(modal).toContain("await submitBetaSupportTicket");
+    expect(modal).toContain("action === \"direct\"");
   });
 
-  it("uses the configured support email before an optional form URL", () => {
+  it("uses Control Center delivery only for a managed beta package and keeps existing fallback support intact", () => {
     const route = read("../src/dashboard/ai-usage-routes.ts");
+    expect(route.indexOf("controlCenterSupportUrl")).toBeLessThan(route.indexOf("config.betaSupportEmail"));
     expect(route.indexOf("config.betaSupportEmail")).toBeLessThan(route.indexOf("config.betaSupportUrl"));
+    expect(route).toContain("const betaSupport = config.requireControlCenterActivation && controlCenterSupportUrl");
+    expect(route).toContain("direct: config.requireControlCenterActivation");
+    expect(route).toContain("controlCenterStatus?.setupState === \"active\"");
   });
 });

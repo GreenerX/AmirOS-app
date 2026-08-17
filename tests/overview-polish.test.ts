@@ -55,6 +55,10 @@ describe("Overview polish", () => {
     expect(overview).toContain("visibleTodaysFocus.map");
     expect(overview).not.toContain("visibleTodaysFocus.slice(0, 4)");
     expect(overview).toContain("todaysFocusDismissalIds(item)");
+    expect(overview).toContain("Overdue · ${eventDateTime(item.timestamp)}");
+    expect(overview).toContain("Follow-up from ${eventDateTime(followUpAt)}");
+    expect(overview).toContain("setTodoEditor(todo)");
+    expect(overview).not.toContain("onOpenTodoReview");
     expect(overview).not.toContain("overview-action-strip");
     expect(overview).toContain("todaysAgenda.map");
     expect(overview).toContain("data-event-count");

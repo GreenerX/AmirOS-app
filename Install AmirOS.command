@@ -28,7 +28,7 @@ process_is_in_installer_test_root() {
   command_line="$(/bin/ps -p "$candidate" -o command= 2>/dev/null || true)"
   [[ "$command_line" == *"${AMIROS_INSTALL_TEST_WATCHDOG_ROOT}/"* ]] && return 0
   working_directory="$(process_working_directory "$candidate")"
-  [[ "$working_directory" == "${AMIROS_INSTALL_TEST_WATCHDOG_ROOT}"/* ]]
+  [[ "$working_directory" == "${AMIROS_INSTALL_TEST_WATCHDOG_ROOT}" || "$working_directory" == "${AMIROS_INSTALL_TEST_WATCHDOG_ROOT}"/* ]]
 }
 
 dashboard_identifies_as_amiros() {
