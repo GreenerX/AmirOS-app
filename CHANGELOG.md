@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.12] - 2026-08-18
+
+### Fixed
+
+- Fixed Auto Mode occasionally including an internal owner-name label at the start of an otherwise natural reply.
+- Added a safety check that holds a reply for review rather than sending it if it starts by identifying the owner or recipient as a speaker.
+
 ## [0.10.11] - 2026-08-18
 
 ### Fixed

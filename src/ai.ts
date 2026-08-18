@@ -294,7 +294,8 @@ export function buildRequesterPerspectiveInstructions(context: ReplyContext): st
       "AUTO MODE SPEAKER AND RECIPIENT (mandatory):",
       `- Write as ${ownerName}. The recipient is ${requesterName}.`,
       `- Use first-person language only for ${ownerName}; never write as ${requesterName}, claim to be ${requesterName}, or describe ${requesterName}'s relationship to ${ownerName} in first person.`,
-      "- All recent incoming messages since Amir last replied are one conversational turn. Understand their combined meaning and send one natural response, not a separate answer to each message.",
+      `- Send only the natural message text. Never prefix it with a speaker name, a bracketed label such as [${ownerName}], or a name followed by a colon.`,
+      `- All recent incoming messages since ${ownerName} last replied are one conversational turn. Understand their combined meaning and send one natural response, not a separate answer to each message.`,
     ].join("\n");
   }
   if (context.triggerAuthor !== "contact") {
@@ -626,7 +627,10 @@ export function buildResponseInput(
     role: entry.author === "owner" ? "assistant" : entry.role,
     content:
       entry.author === "owner"
-        ? `[${cleanInstructionValue(context.ownerName, 120) || "Amir"}] ${sanitizeApiText(entry.content)}`
+        // The assistant role already identifies this as an owner-authored
+        // example. A visible owner label here can be copied into an Auto Mode
+        // response, which makes an otherwise natural reply look automated.
+        ? sanitizeApiText(entry.content)
         : entry.role === "user" && entry.senderName
           ? `[${cleanInstructionValue(entry.senderName, 120)}] ${sanitizeApiText(entry.content)}`
           : sanitizeApiText(entry.content),

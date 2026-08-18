@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "whatsapp-web.js";
-import { calendarEventEvidenceForSource, type AiService, type ReplyContext } from "../src/ai.js";
+import { buildResponseInput, calendarEventEvidenceForSource, type AiService, type ReplyContext } from "../src/ai.js";
 import { AmirosState } from "../src/amiros-state.js";
 import type { AppConfig } from "../src/config.js";
 import { MessageProcessor, hasAutoReplyPersonaLeak, naturalFailureMessage } from "../src/processor.js";
@@ -80,7 +80,21 @@ describe("AI reply context privacy routing", () => {
   it("holds direct Auto Mode recipient impersonation for owner review", () => {
     expect(hasAutoReplyPersonaLeak("I'm Yuvi, Amir's brother.", "Yuvi")).toBe(true);
     expect(hasAutoReplyPersonaLeak("אני Yuvi", "Yuvi")).toBe(true);
+    expect(hasAutoReplyPersonaLeak("[Amir Friedman] It’s me 😂", "Yuvi", "Amir Friedman")).toBe(true);
+    expect(hasAutoReplyPersonaLeak("I'm Jordan's brother.", "Yuvi", "Jordan Doe")).toBe(true);
     expect(hasAutoReplyPersonaLeak("Haha, I just got home.", "Yuvi")).toBe(false);
+  });
+
+  it("keeps owner voice examples unlabeled in Auto Mode context", () => {
+    const input = buildResponseInput("Want to meet later?", {
+      ownerName: "Amir Friedman",
+      requesterName: "Yuvi Shalev Friedman",
+      contact: { memoryEnabled: true },
+      memory: [{ author: "owner", role: "user", content: "I can meet after work." }],
+    } as ReplyContext, true);
+
+    expect(input[0]).toEqual({ role: "assistant", content: "I can meet after work." });
+    expect(input[0]?.content).not.toContain("[Amir Friedman]");
   });
 
   it("coalesces a burst of incoming Auto Mode messages into one owner reply with the full context", async () => {

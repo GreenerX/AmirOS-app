@@ -30,19 +30,15 @@ export const AMIROS_VERSION = packageVersion();
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
   releasedAt: "2026-08-18",
-  headline: "More natural replies and smarter daily planning",
+  headline: "More natural Auto Mode replies",
   notes: [
     {
-      title: "Auto Mode responds more naturally",
-      detail: "When someone sends a few messages in a row, AmirOS now understands them together and sends one natural reply in your voice.",
+      title: "Replies stay naturally in your voice",
+      detail: "Auto Mode no longer includes an internal name label in its messages. It responds as you, naturally and without extra system-style formatting.",
     },
     {
-      title: "Your calendar stays in your preferred view",
-      detail: "Calendar remembers whether you last used Day, Week, or Month view. Suggested plans, tasks, and replies now open the right review screen before anything is changed or sent.",
-    },
-    {
-      title: "Helpful details stay up to date",
-      detail: "Clear relationship details can be saved automatically when AmirOS has strong direct evidence, while uncertain information still waits for your review.",
+      title: "A safer conversational backstop",
+      detail: "If Auto Mode ever produces a message with a speaker label, AmirOS holds it for review instead of sending it.",
     },
   ],
 };

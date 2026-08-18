@@ -62,12 +62,19 @@ function escapeRegExp(value: string): string {
  * narrow guard catches the most harmful direct role leaks while leaving normal
  * conversational wording to the model and the learned per-chat style.
  */
-export function hasAutoReplyPersonaLeak(answer: string, recipientName: string): boolean {
+export function hasAutoReplyPersonaLeak(answer: string, recipientName: string, ownerName = ""): boolean {
   const recipient = recipientName.replace(/\s+/g, " ").trim();
+  const owner = ownerName.replace(/\s+/g, " ").trim();
+  const names = [recipient, owner].filter(Boolean);
+  const label = answer.match(/^\s*\[([^\]\r\n]{1,120})\]\s*/u)?.[1]?.replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  if (label && names.some((name) => name.toLocaleLowerCase() === label)) return true;
   if (!recipient) return false;
   const escaped = escapeRegExp(recipient);
+  const ownerAliases = owner
+    ? [...new Set([owner, owner.split(" ")[0] || owner])].map(escapeRegExp).join("|")
+    : "the owner";
   return new RegExp(`\\b(?:i(?:'m| am)|this is)\\s+${escaped}\\b|(?:אני|אנוכי)\\s+${escaped}`, "iu").test(answer)
-    || /\b(?:i(?:'m| am)|this is)\s+(?:Amir'?s|the owner'?s)\s+(?:brother|sister|partner|wife|husband|girlfriend|boyfriend)\b|אני\s+(?:אח|אחות|בן זוג|בת זוג)\s+של\s+אמיר/iu.test(answer);
+    || new RegExp(`\\b(?:i(?:'m| am)|this is)\\s+(?:${ownerAliases})'?s\\s+(?:brother|sister|partner|wife|husband|girlfriend|boyfriend)\\b|אני\\s+(?:אח|אחות|בן זוג|בת זוג)\\s+של\\s+(?:${ownerAliases})`, "iu").test(answer);
 }
 
 type ConversationAddressMessage = Pick<Message, "fromMe" | "from" | "to" | "getChat"> & {
@@ -801,7 +808,7 @@ export class MessageProcessor {
         ? preventUnverifiedAmirosWriteClaim(aiAnswer)
         : aiAnswer;
       if (autoReplySchedule && this.pendingAutoReplies.get(chatId)?.version !== autoReplySchedule.version) return;
-      if (autoReplySchedule && hasAutoReplyPersonaLeak(answer, requesterName)) {
+      if (autoReplySchedule && hasAutoReplyPersonaLeak(answer, requesterName, ownerName)) {
         console.warn("Auto Mode reply held because it may impersonate the recipient", { chatId, messageId });
         this.amiros?.addDraft({
           chatId,
