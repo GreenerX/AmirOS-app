@@ -15,6 +15,7 @@ import {
   Laptop,
   LifeBuoy,
   LogOut,
+  Mail,
   Menu,
   MonitorCog,
   MoreHorizontal,
@@ -28,6 +29,7 @@ import {
   X,
 } from "lucide-react";
 import { approveAndInviteBetaApplication, approveDeviceActivation, createSupportTicket, getAccountSnapshot, getAdminOverview, updateAdminDevice, updateAdminSupportTicket, updateAdminUser, updateBetaApplication } from "./api";
+import { renderCommunicationTemplate, type CommunicationTemplateKey } from "./communication-templates";
 import { demoAccount, demoTickets, demoUsers } from "./demo-data";
 import { acceptInvitation, createAccount, identityAllowsSignup, initialiseIdentity, isIdentityAvailable, observeIdentity, resetPassword, signIn, signOut, type ControlCenterUser } from "./identity";
 import type { AccessStatus, AccountSnapshot, ActivationChecklist, AdminUser, BetaApplication, BetaApplicationState, FeatureAssignment, ReleaseChannel, SetupState, SupportTicket } from "./types";
@@ -49,9 +51,31 @@ const demoOperator: ControlCenterUser = { id: "demo-operator", email: "operator@
 
 type Page = "account" | "admin" | "download" | "connect";
 type AuthMode = "sign-in" | "sign-up";
+type AdminSection = "overview" | "applicants" | "testers" | "devices" | "rollouts" | "releases" | "flags" | "support" | "audit" | "communications";
+
+const adminSections: Array<{ id: AdminSection; label: string; icon: typeof MonitorCog }> = [
+  { id: "overview", label: "Overview", icon: MonitorCog },
+  { id: "applicants", label: "Applicants", icon: Users },
+  { id: "testers", label: "Testers", icon: Users },
+  { id: "devices", label: "Devices & access", icon: Laptop },
+  { id: "rollouts", label: "Rollouts", icon: ArrowDownToLine },
+  { id: "releases", label: "Releases", icon: FileClock },
+  { id: "flags", label: "Feature flags", icon: SlidersHorizontal },
+  { id: "support", label: "Support", icon: LifeBuoy },
+  { id: "communications", label: "Communications", icon: Mail },
+];
 
 function currentPage(): Page {
   return window.location.pathname.startsWith("/admin") ? "admin" : window.location.pathname.startsWith("/download") ? "download" : window.location.pathname.startsWith("/connect") ? "connect" : "account";
+}
+
+function currentAdminSection(): AdminSection {
+  const segment = window.location.pathname.replace(/^\/admin\/?/, "").split("/")[0];
+  return adminSections.some((section) => section.id === segment) || segment === "audit" ? (segment || "overview") as AdminSection : "overview";
+}
+
+function adminPath(section: AdminSection): string {
+  return section === "overview" ? "/admin/" : `/admin/${section}/`;
 }
 
 function accessLabel(status: AccessStatus): string {
@@ -339,6 +363,7 @@ function ActivationChecklistCard({ checklist, setupState, onNavigate, onOpenSupp
 }
 
 function AdminDashboard({ user, onNavigate, onSignOut }: { user?: ControlCenterUser; onNavigate: (page: Page) => void; onSignOut: () => void }) {
+  const [section, setSection] = useState<AdminSection>(currentAdminSection);
   const [selectedId, setSelectedId] = useState<string | undefined>(demoEnabled ? demoUsers[0]?.id : undefined);
   const [users, setUsers] = useState<AdminUser[]>(demoEnabled ? demoUsers : []);
   const [applications, setApplications] = useState<BetaApplication[]>([]);
@@ -350,7 +375,6 @@ function AdminDashboard({ user, onNavigate, onSignOut }: { user?: ControlCenterU
   const selected = users.find((item) => item.id === selectedId) || users[0];
   const selectedTicket = tickets.find((ticket) => ticket.ticketId === selectedTicketId) || tickets[0];
   const activeCount = users.filter((item) => item.status === "active" && item.setupState === "active").length;
-  const updateCount = users.filter((item) => item.appVersion === "0.10.8").length;
   const setStatus = (status: AccessStatus) => {
     if (!selected) return;
     if (demoEnabled) {
@@ -450,19 +474,54 @@ function AdminDashboard({ user, onNavigate, onSignOut }: { user?: ControlCenterU
     });
   }, [user]);
 
+  useEffect(() => {
+    const onPopstate = () => setSection(currentAdminSection());
+    window.addEventListener("popstate", onPopstate);
+    return () => window.removeEventListener("popstate", onPopstate);
+  }, []);
+
+  const navigateSection = (nextSection: AdminSection) => {
+    window.history.pushState({}, "", adminPath(nextSection));
+    setSection(nextSection);
+    setMobileNavOpen(false);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  };
+
+  const openUser = (id: string, target: AdminSection = "testers") => {
+    setSelectedId(id);
+    navigateSection(target);
+  };
+
+  const attention = getAttentionItems(users, applications, tickets);
+  const currentVersion = mostReportedVersion(users);
+  const content = section === "overview"
+    ? <AdminOverviewPage activeCount={activeCount} applications={applications} users={users} tickets={tickets} attention={attention} currentVersion={currentVersion} onOpenSection={navigateSection} onOpenUser={openUser} />
+    : section === "applicants"
+      ? <AdminApplicantsPage applications={applications} onState={setApplicationState} onInvite={approveAndInvite} invitingApplicationId={invitingApplicationId} />
+      : section === "testers"
+        ? <AdminTestersPage users={users} selected={selected} onSelect={setSelectedId} onStatus={setStatus} onReleaseChannel={setReleaseChannel} onToggleFeature={toggleFeature} onDeviceStatus={setDeviceStatus} />
+        : section === "devices"
+          ? <AdminDevicesPage users={users} onOpenUser={openUser} />
+          : section === "rollouts"
+            ? <AdminRolloutsPage users={users} currentVersion={currentVersion} onOpenUser={openUser} />
+            : section === "releases"
+              ? <AdminReleasesPage users={users} currentVersion={currentVersion} />
+              : section === "flags"
+                ? <AdminFeatureFlagsPage users={users} selected={selected} onSelect={setSelectedId} onToggleFeature={toggleFeature} />
+                : section === "support"
+                  ? <AdminSupportPage tickets={tickets} selectedTicket={selectedTicket} onSelect={setSelectedTicketId} onState={setTicketState} />
+                  : section === "audit"
+                    ? <AdminAuditPage />
+                    : <AdminCommunicationsPage users={users} applications={applications} />;
+
   return <main className="admin-shell">
     <button className="mobile-menu-button" aria-label="Open admin navigation" onClick={() => setMobileNavOpen(true)}><Menu size={21} /></button>
-    <AdminNav open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} onNavigate={onNavigate} />
+    <AdminNav activeSection={section} open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} onNavigate={onNavigate} onNavigateSection={navigateSection} />
     <section className="admin-main">
-      <header className="admin-topbar"><div><p className="section-index">Control Center</p><h1>Overview</h1></div><div className="topbar-actions"><button className="icon-button" aria-label="Notifications"><Bell size={19} /></button><button className="profile-button"><span>{user?.displayName?.slice(0, 2).toUpperCase() || "AD"}</span><ChevronDown size={16} /></button><button className="text-button" onClick={onSignOut}>Sign out <LogOut size={15} /></button></div></header>
+      <header className="admin-topbar"><div><p className="section-index">Control Center</p><h1>{adminSectionTitle(section)}</h1></div><div className="topbar-actions"><button className="icon-button" aria-label="Notifications"><Bell size={19} /></button><button className="profile-button"><span>{user?.displayName?.slice(0, 2).toUpperCase() || "AD"}</span><ChevronDown size={16} /></button><button className="text-button" onClick={onSignOut}>Sign out <LogOut size={15} /></button></div></header>
       <div className="admin-context"><span><span className="live-dot" />{demoEnabled ? "Demo workspace" : "Control Center database"}</span><p>{demoEnabled ? "Preview controls are local only until the Control Center database is connected." : "Operational account records and administrator controls are live."}</p></div>
       {apiMessage && <div className="service-notice"><CircleHelp size={18} /><span>{apiMessage}</span></div>}
-      <section className="metric-row"><Metric label="Connected testers" value={String(activeCount)} detail="Mac paired and active" icon={Users} /><Metric label="Applicants" value={String(applications.filter((item) => item.state === "requested" || item.state === "reviewing").length)} detail="Waiting for review" icon={KeyRound} /><Metric label="On current release" value={users.length ? `${Math.round((updateCount / users.length) * 100)}%` : "—"} detail="v0.10.8 adoption" icon={ArrowDownToLine} /></section>
-      <ApplicantPanel applications={applications} onState={setApplicationState} onInvite={approveAndInvite} invitingApplicationId={invitingApplicationId} />
-      <section className="admin-columns"><div className="user-panel"><div className="panel-heading"><div><h2>Users</h2><p>{users.length} signed-in testers</p></div><div className="table-actions"><label className="search-field"><Search size={16} /><input placeholder="Search users" /></label><button className="button button-secondary"><SlidersHorizontal size={16} />Filters</button></div></div><UserTable users={users} selectedId={selected?.id} onSelect={setSelectedId} /><div className="table-footer"><span>Showing {users.length} active Control Center accounts</span><span>All activity is operational metadata only.</span></div></div>
-        <aside className="user-detail">{selected ? <SelectedUser selected={selected} onStatus={setStatus} onReleaseChannel={setReleaseChannel} onToggleFeature={toggleFeature} onDeviceStatus={setDeviceStatus} /> : <EmptyCopy text="Signed-in testers will appear here as they begin using the Control Center." />}</aside>
-      </section>
-      <section className="support-panel" id="support"><div className="panel-heading"><div><h2>Support queue</h2><p>User-submitted requests only</p></div><span className="panel-note">Ticket state changes are recorded in the audit log.</span></div><div className="support-queue">{tickets.length ? <><div className="ticket-list">{tickets.map((ticket) => <TicketRow ticket={ticket} key={ticket.id} selected={ticket.ticketId === selectedTicket?.ticketId} onSelect={() => setSelectedTicketId(ticket.ticketId)} />)}</div><aside className="ticket-detail">{selectedTicket ? <SelectedTicket ticket={selectedTicket} onState={setTicketState} /> : <EmptyCopy text="Choose a support request to view it." />}</aside></> : <EmptyCopy text="New support requests will appear here." />}</div></section>
+      {content}
       <footer className="admin-footer"><CopyrightNotice /></footer>
     </section>
   </main>;
@@ -483,7 +542,124 @@ function CardHeading({ icon: Icon, title, description }: { icon: typeof Laptop; 
 
 function EmptyCopy({ text }: { text: string }) { return <p className="empty-copy">{text}</p>; }
 
-function AdminNav({ open, onClose, onNavigate }: { open: boolean; onClose: () => void; onNavigate: (page: Page) => void }) { return <aside className={`admin-nav ${open ? "is-open" : ""}`}><div className="admin-nav-header"><Brand /><button className="icon-button mobile-only" aria-label="Close navigation" onClick={onClose}><X size={19} /></button></div><nav aria-label="Admin navigation"><a className="is-active" href="/admin/"><MonitorCog size={18} />Overview</a><a href="#applicants"><Users size={18} />Applicants</a><a href="#users"><Users size={18} />Users</a><a href="#rollouts"><ArrowDownToLine size={18} />Rollouts</a><a href="#releases"><FileClock size={18} />Releases</a><a href="#flags"><SlidersHorizontal size={18} />Feature flags</a><a href="#support"><LifeBuoy size={18} />Support</a></nav><div className="admin-nav-footer"><button className="emergency-button"><PauseCircle size={18} />Emergency pause</button><button className="audit-link"><FileClock size={17} />Audit log</button><button className="text-button" onClick={() => onNavigate("account")}>View account portal <ArrowUpRight size={14} /></button></div></aside>; }
+function AdminNav({ activeSection, open, onClose, onNavigate, onNavigateSection }: { activeSection: AdminSection; open: boolean; onClose: () => void; onNavigate: (page: Page) => void; onNavigateSection: (section: AdminSection) => void }) {
+  const link = (section: AdminSection, label: string, Icon: typeof MonitorCog) => <a key={section} className={activeSection === section ? "is-active" : ""} href={adminPath(section)} onClick={(event) => { event.preventDefault(); onNavigateSection(section); }}><Icon size={18} />{label}</a>;
+  return <aside className={`admin-nav ${open ? "is-open" : ""}`}>
+    <div className="admin-nav-header"><Brand /><button className="icon-button mobile-only" aria-label="Close navigation" onClick={onClose}><X size={19} /></button></div>
+    <nav aria-label="Admin navigation">{adminSections.map(({ id, label, icon }) => link(id, label, icon))}</nav>
+    <div className="admin-nav-footer">
+      <button className="emergency-button" type="button" onClick={() => onNavigateSection("rollouts")}><PauseCircle size={18} />Emergency pause</button>
+      <button className="audit-link" type="button" onClick={() => onNavigateSection("audit")}><FileClock size={17} />Audit log</button>
+      <button className="text-button" onClick={() => onNavigate("account")}>View account portal <ArrowUpRight size={14} /></button>
+    </div>
+  </aside>;
+}
+
+function adminSectionTitle(section: AdminSection): string {
+  return section === "flags" ? "Feature flags" : adminSections.find((item) => item.id === section)?.label || (section === "audit" ? "Audit log" : "Overview");
+}
+
+function mostReportedVersion(users: AdminUser[]): string {
+  const versions = users.map((user) => user.appVersion).filter((version) => version && version !== "—");
+  if (!versions.length) return "—";
+  return [...new Set(versions)].sort((left, right) => right.localeCompare(left, undefined, { numeric: true })).at(0) || "—";
+}
+
+type AttentionItem = { id: string; label: string; detail: string; count: number; section: AdminSection; userId?: string };
+
+function getAttentionItems(users: AdminUser[], applications: BetaApplication[], tickets: SupportTicket[]): AttentionItem[] {
+  const review = applications.filter((application) => application.state === "requested" || application.state === "reviewing");
+  const invited = applications.filter((application) => application.state === "approved" || application.state === "invited");
+  const pendingMac = users.filter((user) => user.setupState === "device_pending");
+  const incomplete = users.filter((user) => user.setupState === "active" && user.activation.nextAction.id !== "complete");
+  const openTickets = tickets.filter((ticket) => ticket.state !== "Resolved");
+  const currentVersion = mostReportedVersion(users);
+  const outdated = users.filter((user) => user.appVersion !== "—" && currentVersion !== "—" && user.appVersion !== currentVersion);
+  const items: AttentionItem[] = [
+    { id: "review", label: "Applications awaiting review", detail: "Review each request before sending a secure invitation.", count: review.length, section: "applicants" },
+    { id: "invited", label: "Invitation follow-up", detail: "Approved or invited applicants who have not yet reached device setup.", count: invited.length, section: "applicants" },
+    { id: "mac", label: "Mac connection pending", detail: "Accounts that still need an approved Mac.", count: pendingMac.length, section: "devices", userId: pendingMac[0]?.id },
+    { id: "setup", label: "Setup needs attention", detail: "Active testers with a remaining optional beta checklist step.", count: incomplete.length, section: "testers", userId: incomplete[0]?.id },
+    { id: "updates", label: "Version follow-up", detail: currentVersion === "—" ? "No connected Mac has reported a version yet." : `Connected Macs not yet reporting ${currentVersion}.`, count: outdated.length, section: "releases", userId: outdated[0]?.id },
+    { id: "support", label: "Open support tickets", detail: "Tester-submitted requests still awaiting resolution.", count: openTickets.length, section: "support" },
+  ];
+  return items.filter((item) => item.count > 0);
+}
+
+function AdminOverviewPage({ activeCount, applications, users, tickets, attention, currentVersion, onOpenSection, onOpenUser }: { activeCount: number; applications: BetaApplication[]; users: AdminUser[]; tickets: SupportTicket[]; attention: AttentionItem[]; currentVersion: string; onOpenSection: (section: AdminSection) => void; onOpenUser: (id: string, section?: AdminSection) => void }) {
+  const pendingApplications = applications.filter((application) => application.state === "requested" || application.state === "reviewing").length;
+  const currentCount = users.filter((user) => user.appVersion === currentVersion).length;
+  return <>
+    <section className="metric-row"><Metric label="Attention needed" value={String(attention.reduce((total, item) => total + item.count, 0))} detail="A small, privacy-safe beta queue" icon={CircleHelp} /><Metric label="Active testers" value={String(activeCount)} detail="Mac paired and active" icon={Users} /><Metric label="Current release" value={users.length && currentVersion !== "—" ? `${Math.round((currentCount / users.length) * 100)}%` : "—"} detail={currentVersion === "—" ? "No Mac version reported" : `${currentVersion} adoption`} icon={ArrowDownToLine} /></section>
+    <section className="admin-overview-grid">
+      <article className="overview-list-panel"><div className="panel-heading"><div><h2>Attention today</h2><p>Only the operational signals that need a human decision.</p></div></div>{attention.length ? <div className="attention-list">{attention.map((item) => <button type="button" key={item.id} onClick={() => item.userId ? onOpenUser(item.userId, item.section) : onOpenSection(item.section)}><span><strong>{item.label}</strong><small>{item.detail}</small></span><b>{item.count}</b><ArrowUpRight size={16} /></button>)}</div> : <EmptyCopy text="Nothing needs attention right now. Your pilot is clear." />}</article>
+      <article className="overview-list-panel"><div className="panel-heading"><div><h2>Release health</h2><p>Reported only by connected Macs—never from private AmirOS data.</p></div></div><dl className="health-list"><div><dt>Latest reported version</dt><dd>{currentVersion}</dd></div><div><dt>Current channel mix</dt><dd>{users.filter((user) => user.releaseChannel === "beta").length} beta · {users.filter((user) => user.releaseChannel === "stable").length} stable</dd></div><div><dt>Open support</dt><dd>{tickets.filter((ticket) => ticket.state !== "Resolved").length} tickets</dd></div><div><dt>Applicant pipeline</dt><dd>{pendingApplications} awaiting review</dd></div></dl><button className="text-button overview-action" onClick={() => onOpenSection("releases")}>Review releases <ArrowUpRight size={14} /></button></article>
+    </section>
+  </>;
+}
+
+function AdminApplicantsPage({ applications, onState, onInvite, invitingApplicationId }: { applications: BetaApplication[]; onState: (applicationId: string, state: BetaApplicationState) => void; onInvite: (application: BetaApplication) => void; invitingApplicationId?: string }) { return <ApplicantPanel applications={applications} onState={onState} onInvite={onInvite} invitingApplicationId={invitingApplicationId} />; }
+
+function AdminTestersPage({ users, selected, onSelect, onStatus, onReleaseChannel, onToggleFeature, onDeviceStatus }: { users: AdminUser[]; selected?: AdminUser; onSelect: (id: string) => void; onStatus: (status: AccessStatus) => void; onReleaseChannel: (channel: ReleaseChannel) => void; onToggleFeature: (featureId: string) => void; onDeviceStatus: (deviceId: string, status: AccessStatus) => void }) {
+  const [query, setQuery] = useState("");
+  const matchingUsers = useMemo(() => users.filter((user) => `${user.displayName} ${user.email}`.toLowerCase().includes(query.toLowerCase())), [query, users]);
+  return <section className="admin-columns"><div className="user-panel"><div className="panel-heading"><div><h2>Testers</h2><p>Accounts, setup state, and release access—never personal AmirOS content.</p></div><div className="table-actions"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search testers" /></label></div></div><UserTable users={matchingUsers} selectedId={selected?.id} onSelect={onSelect} /><div className="table-footer"><span>Showing {matchingUsers.length} Control Center accounts</span><span>Operational metadata only.</span></div></div><aside className="user-detail">{selected ? <SelectedUser selected={selected} onStatus={onStatus} onReleaseChannel={onReleaseChannel} onToggleFeature={onToggleFeature} onDeviceStatus={onDeviceStatus} /> : <EmptyCopy text="Select a tester to review setup, device access, and feature assignments." />}</aside></section>;
+}
+
+function AdminDevicesPage({ users, onOpenUser }: { users: AdminUser[]; onOpenUser: (id: string, section?: AdminSection) => void }) {
+  const devices = users.flatMap((user) => user.devices.map((device) => ({ user, device })));
+  return <section className="admin-data-panel"><div className="panel-heading"><div><h2>Devices & access</h2><p>Each Mac must be paired by its signed-in tester. Access and setup remain separate.</p></div></div>{devices.length ? <div className="operational-table"><div className="operational-table-head"><span>Tester</span><span>Mac</span><span>Version</span><span>Last check-in</span><span>Access</span></div>{devices.map(({ user, device }) => <button type="button" className="operational-table-row" key={device.id} onClick={() => onOpenUser(user.id)}><span><strong>{user.displayName}</strong><small>{user.email}</small></span><span>{device.label}<small>{device.platform}</small></span><span>{device.appVersion}</span><span>{device.lastSeenAt}</span><span><StatusPill status={device.status} /></span></button>)}</div> : <EmptyCopy text="Paired Macs will appear here after their testers approve the connection." />}</section>;
+}
+
+function AdminRolloutsPage({ users, currentVersion, onOpenUser }: { users: AdminUser[]; currentVersion: string; onOpenUser: (id: string, section?: AdminSection) => void }) {
+  const channelRows: ReleaseChannel[] = ["stable", "beta", "internal"];
+  const outOfDate = users.filter((user) => user.appVersion !== "—" && currentVersion !== "—" && user.appVersion !== currentVersion);
+  return <div className="admin-page-stack"><section className="admin-data-panel" id="emergency-pause"><div className="panel-heading"><div><h2>Rollout controls</h2><p>Channels are assigned per account. A global release hold is intentionally not configured yet.</p></div></div><div className="rollout-summary">{channelRows.map((channel) => <article key={channel}><strong>{channelLabel(channel)}</strong><span>{users.filter((user) => user.releaseChannel === channel).length} testers</span><small>{channel === "stable" ? "Validated public release channel" : channel === "beta" ? "Early improvements with support coverage" : "Internal testing only"}</small></article>)}</div></section><section className="admin-data-panel"><div className="panel-heading"><div><h2>Needs a release check</h2><p>{currentVersion === "—" ? "No paired device has reported an app version yet." : `These testers are not yet reporting ${currentVersion}.`}</p></div></div>{outOfDate.length ? <div className="attention-list">{outOfDate.map((user) => <button type="button" key={user.id} onClick={() => onOpenUser(user.id)}><span><strong>{user.displayName}</strong><small>{user.appVersion} reported · {channelLabel(user.releaseChannel)} channel</small></span><ArrowUpRight size={16} /></button>)}</div> : <EmptyCopy text="All reporting Macs are on the latest version known to the Control Center." />}</section></div>;
+}
+
+function AdminReleasesPage({ users, currentVersion }: { users: AdminUser[]; currentVersion: string }) {
+  const versions = [...new Set(users.map((user) => user.appVersion).filter((version) => version !== "—"))].sort((left, right) => right.localeCompare(left, undefined, { numeric: true }));
+  return <section className="admin-data-panel"><div className="panel-heading"><div><h2>Release health</h2><p>Version adoption is derived from active Control Center device check-ins.</p></div></div>{versions.length ? <div className="operational-table"><div className="operational-table-head"><span>Version</span><span>Devices reporting</span><span>Share</span><span>Current status</span></div>{versions.map((version) => { const count = users.filter((user) => user.appVersion === version).length; return <div className="operational-table-row release-row" key={version}><span><strong>{version}</strong></span><span>{count}</span><span>{Math.round((count / users.length) * 100)}%</span><span>{version === currentVersion ? <span className="soft-tag">Latest reported</span> : "Earlier version"}</span></div>; })}</div> : <EmptyCopy text="Release health will appear after a paired Mac checks in with its app version." />}<p className="admin-page-note">The Control Center does not create or upload installers here. Published-release and stable-download controls remain governed by the release workflow.</p></section>;
+}
+
+function AdminFeatureFlagsPage({ users, selected, onSelect, onToggleFeature }: { users: AdminUser[]; selected?: AdminUser; onSelect: (id: string) => void; onToggleFeature: (featureId: string) => void }) {
+  return <section className="admin-columns"><div className="user-panel"><div className="panel-heading"><div><h2>Feature assignments</h2><p>Choose a tester to review their assigned product capabilities.</p></div></div><UserTable users={users} selectedId={selected?.id} onSelect={onSelect} /><div className="table-footer"><span>Feature changes are server-authorized and audit logged.</span></div></div><aside className="user-detail">{selected ? <div className="selected-user"><div className="selected-header"><span className="selected-avatar">{selected.initials}</span><div><h2>{selected.displayName}</h2><p>{selected.email}</p><p>Account feature assignments</p></div></div><section><h3>Feature access</h3><div className="feature-list">{selected.features.map((feature) => <label key={feature.id}><div><strong>{feature.name}</strong><span>{feature.description}</span></div><button className={`toggle ${feature.enabled ? "is-on" : ""}`} role="switch" aria-checked={feature.enabled} aria-label={`Toggle ${feature.name}`} onClick={() => onToggleFeature(feature.id)}><i /></button></label>)}</div></section><p className="detail-footnote">The interface requests a change; server-side entitlement enforcement remains the authority.</p></div> : <EmptyCopy text="Select a tester to manage feature assignments." />}</aside></section>;
+}
+
+function AdminSupportPage({ tickets, selectedTicket, onSelect, onState }: { tickets: SupportTicket[]; selectedTicket?: SupportTicket; onSelect: (id: number) => void; onState: (state: SupportTicket["state"]) => void }) {
+  return <section className="support-panel"><div className="panel-heading"><div><h2>Support queue</h2><p>Only tester-submitted reports appear here.</p></div><span className="panel-note">Ticket state changes are recorded in the audit log.</span></div><div className="support-queue">{tickets.length ? <><div className="ticket-list">{tickets.map((ticket) => <TicketRow ticket={ticket} key={ticket.id} selected={ticket.ticketId === selectedTicket?.ticketId} onSelect={() => onSelect(ticket.ticketId)} />)}</div><aside className="ticket-detail">{selectedTicket ? <SelectedTicket ticket={selectedTicket} onState={onState} /> : <EmptyCopy text="Choose a support request to view it." />}</aside></> : <EmptyCopy text="New support requests will appear here." />}</div></section>;
+}
+
+function AdminAuditPage() { return <section className="admin-data-panel"><div className="panel-heading"><div><h2>Audit log</h2><p>Every current access, device, feature, invitation, and support-state change is recorded server-side.</p></div></div><div className="audit-empty"><FileClock size={24} /><div><strong>Read-only audit viewing is the next control-plane addition.</strong><p>The underlying actions are already audited, but this client does not yet expose an event-feed endpoint. Until it does, this page deliberately does not invent or cache audit history in the browser.</p></div></div></section>; }
+
+function AdminCommunicationsPage({ users, applications }: { users: AdminUser[]; applications: BetaApplication[] }) {
+  const [recipientId, setRecipientId] = useState("");
+  const [template, setTemplate] = useState<CommunicationTemplateKey>("invite-guidance");
+  const [personalAccessLink, setPersonalAccessLink] = useState("");
+  const [customSubject, setCustomSubject] = useState("");
+  const [customBody, setCustomBody] = useState("");
+  const [copyState, setCopyState] = useState<"rich" | "plain" | "error" | "draft-opening" | "draft-rich" | "draft-fallback">();
+  const recipients = [...applications.filter((application) => application.state !== "declined" && application.state !== "requested" && application.state !== "reviewing").map((application) => ({ id: `application:${application.id}`, name: application.fullName, email: application.email, state: applicationStateLabel(application.state) })), ...users.filter((user) => user.status !== "revoked").map((user) => ({ id: `user:${user.id}`, name: user.displayName, email: user.email, state: setupLabel(user.setupState) }))];
+  const recipient = recipients.find((candidate) => candidate.id === recipientId);
+  const usesPersonalLink = template === "personal-ai-access";
+  const isBlankNote = template === "blank-note";
+  const trimmedPersonalLink = personalAccessLink.trim();
+  let securePersonalLink: string | undefined;
+  try { const candidate = new URL(trimmedPersonalLink); if (candidate.protocol === "https:") securePersonalLink = candidate.toString(); } catch { /* The field stays client-only and is simply excluded until it is a secure URL. */ }
+  const personalLinkInvalid = usesPersonalLink && Boolean(trimmedPersonalLink) && !securePersonalLink;
+  const blankNoteIncomplete = isBlankNote && (!customSubject.trim() || !customBody.trim());
+  const rendered = recipient ? renderCommunicationTemplate(template, recipient.name, { personalAccessLink: usesPersonalLink ? securePersonalLink : undefined, customSubject: isBlankNote ? customSubject : undefined, customBody: isBlankNote ? customBody : undefined }) : undefined;
+  const canExport = Boolean(rendered) && !personalLinkInvalid && !blankNoteIncomplete;
+  const notice = copyState === "rich" ? "Rich email content copied. Paste it into a compatible mail composer." : copyState === "plain" ? "Plain text copied. Add it to a message manually when you are ready." : copyState === "draft-opening" ? "Opening a default email draft with readable plain text. If no draft appears, use Copy plain text and Copy rich content below." : copyState === "draft-rich" ? "A default email draft was requested with readable plain text. Branded rich content is ready to paste; it was not inserted automatically." : copyState === "draft-fallback" ? "A default email draft was requested with readable plain text. Rich copy was unavailable, so use Copy rich content when your browser supports it." : copyState === "error" ? "Copy is not available in this browser. Download the HTML instead." : "";
+  const clearNotice = () => window.setTimeout(() => setCopyState(undefined), 3500);
+  const copyPlainText = () => { if (!rendered || !canExport || !navigator.clipboard) return; void navigator.clipboard.writeText(`Subject: ${rendered.subject}\n\n${rendered.plainText}`).then(() => { setCopyState("plain"); clearNotice(); }).catch(() => { setCopyState("error"); clearNotice(); }); };
+  const copyRichContent = () => { if (!rendered || !canExport || !navigator.clipboard?.write || typeof ClipboardItem === "undefined") { setCopyState("error"); clearNotice(); return; } const rich = new Blob([rendered.html], { type: "text/html" }); const plain = new Blob([`Subject: ${rendered.subject}\n\n${rendered.plainText}`], { type: "text/plain" }); void navigator.clipboard.write([new ClipboardItem({ "text/html": rich, "text/plain": plain })]).then(() => { setCopyState("rich"); clearNotice(); }).catch(() => { setCopyState("error"); clearNotice(); }); };
+  const downloadHtml = () => { if (!rendered || !canExport) return; const link = document.createElement("a"); const objectUrl = URL.createObjectURL(new Blob([rendered.html], { type: "text/html;charset=utf-8" })); link.href = objectUrl; link.download = `amiros-${template}.html`; link.click(); window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0); };
+  const mailtoHref = rendered && recipient && canExport ? `mailto:${encodeURIComponent(recipient.email)}?subject=${encodeURIComponent(rendered.subject)}&body=${encodeURIComponent(rendered.mailDraftText)}` : undefined;
+  const prepareEmailDraft = () => { if (!rendered || !canExport) return; setCopyState("draft-opening"); clearNotice(); if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") { window.setTimeout(() => { setCopyState("draft-fallback"); clearNotice(); }, 0); return; } void navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([rendered.html], { type: "text/html" }), "text/plain": new Blob([`Subject: ${rendered.subject}\n\n${rendered.plainText}`], { type: "text/plain" }) })]).then(() => { setCopyState("draft-rich"); clearNotice(); }).catch(() => { setCopyState("draft-fallback"); clearNotice(); }); };
+  const updateTemplate = (nextTemplate: CommunicationTemplateKey) => { setTemplate(nextTemplate); setCopyState(undefined); };
+  return <section className="admin-communications"><div className="panel-heading"><div><h2>Communications</h2><p>Prepare a one-to-one branded message. This workspace previews and exports content; it does not send or track email.</p></div></div><div className="communications-grid"><label>Approved applicant or tester<select value={recipientId} onChange={(event) => { setRecipientId(event.target.value); setCopyState(undefined); }}><option value="">Choose a person</option>{recipients.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name} · {candidate.state}</option>)}</select></label><label>Operational template<select value={template} onChange={(event) => updateTemplate(event.target.value as CommunicationTemplateKey)}><option value="invite-guidance">Invitation guidance</option><option value="welcome-setup">Welcome &amp; setup</option><option value="personal-ai-access">Personal AI access</option><option value="mac-setup">Set up or reconnect this Mac</option><option value="update-ready">New AmirOS update ready</option><option value="support-follow-up">Support follow-up</option><option value="blank-note">Blank branded note</option></select></label>{usesPersonalLink ? <section className="communication-editor personal-link-editor"><label>Optional secure personal link<input type="url" autoComplete="off" value={personalAccessLink} onChange={(event) => { setPersonalAccessLink(event.target.value); setCopyState(undefined); }} placeholder="Paste a secure HTTPS link" /></label><p>This field is empty by default and stays only in this open browser page. It is included only in the copied or downloaded email—never in Support, shared drafts, URLs, audit history, or telemetry.</p>{personalLinkInvalid ? <small>Use a complete HTTPS link or leave this field empty.</small> : null}</section> : null}{isBlankNote ? <section className="communication-editor"><label>Subject<input value={customSubject} onChange={(event) => { setCustomSubject(event.target.value); setCopyState(undefined); }} placeholder="Write a subject" /></label><label>Message<textarea value={customBody} onChange={(event) => { setCustomBody(event.target.value); setCopyState(undefined); }} placeholder="Write the note that should appear between the greeting and signature." rows={6} /></label><p>The greeting and AmirOS signature remain consistent. Subject and message are local to this open page until copied or downloaded.</p></section> : null}{rendered ? <><div className="email-preview-meta"><span>Preview only</span><strong>{rendered.subject || "Complete the blank note to preview its subject."}</strong><p>Open a readable plain-text draft, or copy/download branded content for manual review. Nothing is sent or inserted automatically.</p></div><iframe className="email-preview-frame" title="Branded AmirOS email preview" sandbox="allow-same-origin" srcDoc={rendered.html} /><div className="communications-actions">{mailtoHref ? <a className="button button-primary" href={mailtoHref} onClick={prepareEmailDraft}>Open email draft <Mail size={16} /></a> : <button className="button button-primary" type="button" disabled>Open email draft <Mail size={16} /></button>}<button className="button button-secondary" type="button" disabled={!canExport} onClick={copyRichContent}>Copy rich content</button><button className="button button-secondary" type="button" disabled={!canExport} onClick={copyPlainText}>Copy plain text</button><button className="button button-secondary" type="button" disabled={!canExport} onClick={downloadHtml}>Download HTML <Download size={16} /></button></div>{blankNoteIncomplete ? <p className="communications-notice">Add a subject and message before exporting this blank note.</p> : null}{notice ? <p className="communications-notice" role="status">{notice}</p> : null}</> : <div className="communication-empty"><Mail size={20} /><div><strong>Select an approved applicant or tester.</strong><p>The preview uses their first name only. No email address or account detail is included in the exported message.</p></div></div>}</div><p className="admin-page-note">The secure Netlify invitation remains the only account-activation email. This page never exposes credentials or private AmirOS data, makes no delivery claim, and does not support bulk campaigns.</p></section>;
+}
 
 function Metric({ label, value, detail, icon: Icon }: { label: string; value: string; detail: string; icon: typeof Users }) { return <article className="metric"><span className="metric-icon"><Icon size={20} /></span><p>{label}</p><strong>{value}</strong><small>{detail}</small></article>; }
 
