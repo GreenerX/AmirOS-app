@@ -29,20 +29,20 @@ export const AMIROS_VERSION = packageVersion();
 
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
-  releasedAt: "2026-08-16",
-  headline: "A calmer, more relevant daily view",
+  releasedAt: "2026-08-18",
+  headline: "More natural replies and smarter daily planning",
   notes: [
     {
-      title: "Choose people AmirOS should keep learning from",
-      detail: "The people you select during setup now receive an initial, bounded profile and continue learning from new messages in those chats. You can also start this from any direct chat in Inbox later.",
+      title: "Auto Mode responds more naturally",
+      detail: "When someone sends a few messages in a row, AmirOS now understands them together and sends one natural reply in your voice.",
     },
     {
-      title: "Suggested actions stay timely",
-      detail: "Older chat history can still help AmirOS understand relationships, but it no longer creates unattended action suggestions. New suggestions show when their source message was received.",
+      title: "Your calendar stays in your preferred view",
+      detail: "Calendar remembers whether you last used Day, Week, or Month view. Suggested plans, tasks, and replies now open the right review screen before anything is changed or sent.",
     },
     {
-      title: "A more comfortable Overview",
-      detail: "World clocks adapt cleanly to your window, weather and time stay aligned, and a double-click on the clock enables Andrew Mode when you want the seconds to disappear for a while.",
+      title: "Helpful details stay up to date",
+      detail: "Clear relationship details can be saved automatically when AmirOS has strong direct evidence, while uncertain information still waits for your review.",
     },
   ],
 };

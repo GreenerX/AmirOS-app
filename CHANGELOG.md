@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.10.11] - 2026-08-18
+
+### Fixed
+
+- Updated the in-app release notes so they accurately describe the current release for people who update AmirOS.
+
 ## [0.10.10] - 2026-08-18
 
 ### Changed
