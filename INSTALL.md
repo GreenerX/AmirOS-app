@@ -121,7 +121,7 @@ different private beta, add a monitored support address in `.env.local` before
 starting AmirOS:
 
 ```dotenv
-AMIROS_BETA_SUPPORT_EMAIL=amirfriedman@icloud.com
+AMIROS_BETA_SUPPORT_EMAIL=support.AmirOS@icloud.com
 # Optional fallback if email is deliberately not configured:
 AMIROS_BETA_SUPPORT_URL=https://support.example.com/amiros-beta
 ```

@@ -200,7 +200,7 @@ updater correctly preserves an older private `.env`. To change a fallback for
 a different private beta, set it in `.env.local`:
 
 ```dotenv
-AMIROS_BETA_SUPPORT_EMAIL=amirfriedman@icloud.com
+AMIROS_BETA_SUPPORT_EMAIL=support.AmirOS@icloud.com
 # Optional fallback if email is deliberately not configured:
 AMIROS_BETA_SUPPORT_URL=https://support.example.com/amiros-beta
 ```
