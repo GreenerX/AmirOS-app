@@ -149,6 +149,35 @@ describe("AI contact personalization", () => {
     expect(instructions).not.toContain("VERIFIED CALENDAR ACTION RESULT");
     expect(instructions).not.toContain("added and is awaiting review");
     expect(instructions).not.toContain("AMIROS WRITE CONFIRMATION (mandatory)");
+
+    const perspective = buildRequesterPerspectiveInstructions({
+      ...context,
+      autoReplyAsOwner: true,
+      triggerAuthor: "contact",
+      ownerName: "Amir",
+      requesterName: "Sana",
+    });
+    expect(perspective).toContain("Write as Amir. The recipient is Sana");
+    expect(perspective).toContain("never write as Sana");
+    expect(perspective).not.toContain("The current request was written by Sana");
+  });
+
+  it("keeps owner-authored conversation history in the owner role", () => {
+    const ownerHistory: ReplyContext = {
+      ...context,
+      ownerName: "Amir",
+      memory: [{
+        role: "user",
+        author: "owner",
+        content: "I can make it after work.",
+        timestamp: 1,
+      }],
+    };
+
+    expect(buildResponseInput("Sounds good", ownerHistory, true)).toEqual([
+      { role: "assistant", content: "[Amir] I can make it after work." },
+      { role: "user", content: "[Sana] Sounds good" },
+    ]);
   });
 
   it("makes a rude custom style explicit instead of letting the warm default soften it", () => {

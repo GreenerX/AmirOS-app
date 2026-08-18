@@ -1,16 +1,17 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "whatsapp-web.js";
-import type { AiService, ReplyContext } from "../src/ai.js";
+import { calendarEventEvidenceForSource, type AiService, type ReplyContext } from "../src/ai.js";
 import { AmirosState } from "../src/amiros-state.js";
 import type { AppConfig } from "../src/config.js";
-import { MessageProcessor, naturalFailureMessage } from "../src/processor.js";
+import { MessageProcessor, hasAutoReplyPersonaLeak, naturalFailureMessage } from "../src/processor.js";
 
 const directories: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -52,6 +53,76 @@ function textMessage(input: {
 }
 
 describe("AI reply context privacy routing", () => {
+  it("only joins a current, explicit calendar agreement with a concrete time", () => {
+    const at = new Date(2026, 7, 18, 12).getTime();
+    expect(calendarEventEvidenceForSource([
+      { content: "We should get coffee tomorrow at 3pm.", timestamp: at - 3_600_000, candidate: true },
+      { content: "Sure", timestamp: at, candidate: true },
+    ], 1)).toBeUndefined();
+    expect(calendarEventEvidenceForSource([
+      { content: "נפגש לקפה מחר ב-15:00.", timestamp: at - 3_600_000, candidate: true },
+      { content: "סבבה", timestamp: at, candidate: true },
+    ], 1)).toBeUndefined();
+
+    const english = calendarEventEvidenceForSource([
+      { content: "Let's meet for coffee tomorrow at 3pm.", timestamp: at - 2_000, candidate: true },
+      { content: "That works for me.", timestamp: at, candidate: true },
+    ], 1);
+    expect(english?.excerpt).toContain("coffee tomorrow at 3pm");
+
+    const hebrew = calendarEventEvidenceForSource([
+      { content: "נפגש לקפה מחר ב-15:00.", timestamp: at - 2_000, candidate: true },
+      { content: "מחר מתאים, נקבע ב-15:00.", timestamp: at, candidate: true },
+    ], 1);
+    expect(hebrew?.excerpt).toContain("נפגש לקפה");
+  });
+
+  it("holds direct Auto Mode recipient impersonation for owner review", () => {
+    expect(hasAutoReplyPersonaLeak("I'm Yuvi, Amir's brother.", "Yuvi")).toBe(true);
+    expect(hasAutoReplyPersonaLeak("אני Yuvi", "Yuvi")).toBe(true);
+    expect(hasAutoReplyPersonaLeak("Haha, I just got home.", "Yuvi")).toBe(false);
+  });
+
+  it("coalesces a burst of incoming Auto Mode messages into one owner reply with the full context", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "amiros-auto-burst-"));
+    directories.push(directory);
+    const state = new AmirosState(join(directory, "state.json"));
+    state.updateOwnerProfile({ displayName: "Amir" });
+    state.updateContact("yuvi@c.us", { mode: "auto", autoReplyInitialDelaySeconds: 15 });
+    const contexts: ReplyContext[] = [];
+    const prompts: string[] = [];
+    const ai = {
+      reply: async (_chatId: string, prompt: string, _web: boolean, context: ReplyContext) => {
+        prompts.push(prompt);
+        contexts.push(context);
+        return "Sounds good — I can make that work.";
+      },
+    } as unknown as AiService;
+    const processor = new MessageProcessor(config, ai, state);
+    const replies: string[] = [];
+    const firstMessage = textMessage({
+      id: "yuvi-burst-one", chatId: "yuvi@c.us", chatName: "Yuvi", body: "Are you free to work together later?", fromMe: false,
+    });
+    const secondMessage = textMessage({
+      id: "yuvi-burst-two", chatId: "yuvi@c.us", chatName: "Yuvi", body: "A coffee shop with good internet would be perfect.", fromMe: false,
+    });
+    Object.assign(firstMessage, { reply: async (body: string) => { replies.push(body); } });
+    Object.assign(secondMessage, { reply: async (body: string) => { replies.push(body); } });
+
+    vi.useFakeTimers();
+    const first = processor.process(firstMessage, false);
+    await vi.advanceTimersByTimeAsync(0);
+    const second = processor.process(secondMessage, false);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.all([first, second]);
+
+    expect(replies).toEqual(["Sounds good — I can make that work."]);
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.autoReplyAsOwner).toBe(true);
+    expect(contexts[0]?.memory?.map((item) => item.content)).toContain("Are you free to work together later?");
+    expect(prompts).toEqual(["A coffee shop with good internet would be perfect."]);
+  });
+
   it("injects global knowledge for self-chat and omits it from a contact chat", async () => {
     const directory = mkdtempSync(join(tmpdir(), "amiros-context-routing-"));
     directories.push(directory);
@@ -260,16 +331,19 @@ describe("AI reply context privacy routing", () => {
     expect(contexts[0]?.ownerEvents?.some((item) => item.title === "Theater night")).toBe(true);
     expect(contexts[0]?.ownerKnowledge).toBeUndefined();
 
-    await processor.process(textMessage({
+    // Automatic replies now deliberately wait for a natural pause so that
+    // several incoming messages can receive one coherent reply. Advance that
+    // timer here while keeping this privacy-routing test on the real path.
+    vi.useFakeTimers();
+    const automaticReply = processor.process(textMessage({
       id: "dani-automatic-message",
       chatId: "dani@c.us",
       chatName: "Dani",
       body: "What is on Amir's upcoming schedule?",
       fromMe: false,
-      // The real Auto Mode pause is covered by state tests. Use an already
-      // elapsed timestamp here so this privacy-routing test stays immediate.
-      timestamp: Math.floor(Date.now() / 1_000) - 60,
     }), false);
+    await vi.advanceTimersByTimeAsync(61_000);
+    await automaticReply;
 
     expect(contexts[1]?.scope).toBe("chat");
     expect(contexts[1]?.autoReplyAsOwner).toBe(true);

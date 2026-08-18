@@ -6,7 +6,12 @@ import {
 import { SiApple, SiGooglecalendar } from "react-icons/si";
 import { useEffect, useMemo, useState } from "react";
 import { getCalendarSubscription, type CalendarSubscriptionInfo } from "../api";
-import { calendarSubscriptionBannerHidden, setCalendarSubscriptionBannerHidden } from "../calendar-preferences";
+import {
+  calendarSubscriptionBannerHidden,
+  readCalendarDisplayMode,
+  saveCalendarDisplayMode,
+  setCalendarSubscriptionBannerHidden,
+} from "../calendar-preferences";
 import { downloadIcs, googleCalendarUrl } from "../calendar-export";
 import { formatDateTime, formatTime } from "../format";
 import type { CalendarEvent, IntelligenceData } from "../types";
@@ -76,7 +81,7 @@ function eventEnd(event: CalendarEvent) {
 export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: CalendarViewProps) {
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [dates, setDates] = useState<Record<string, string>>({});
-  const [displayMode, setDisplayMode] = useState<CalendarDisplayMode>("month");
+  const [displayMode, setDisplayMode] = useState<CalendarDisplayMode>(readCalendarDisplayMode);
   const [focusDate, setFocusDate] = useState(() => atStartOfDay(new Date()));
   const [selectedEvent, setSelectedEvent] = useState<EnrichedEvent>();
   const [editDraft, setEditDraft] = useState<CalendarEventDraft>();
@@ -240,7 +245,11 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
 
   const openDay = (date: Date) => {
     setFocusDate(atStartOfDay(date));
-    setDisplayMode("day");
+    selectDisplayMode("day");
+  };
+  const selectDisplayMode = (mode: CalendarDisplayMode) => {
+    saveCalendarDisplayMode(mode);
+    setDisplayMode(mode);
   };
   const moveCalendar = (amount: number) => {
     setFocusDate((current) => displayMode === "day"
@@ -261,7 +270,7 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
       : confirmed.length;
 
   return <main className="main-content secondary-page calendar-page">
-    <header className="page-header compact-header"><div><h1>Calendar</h1><p>Plans discovered in conversations, with evidence attached.</p></div><div className="calendar-view-switcher" role="group" aria-label="Calendar view"><button className={displayMode === "day" ? "active" : ""} type="button" aria-pressed={displayMode === "day"} onClick={() => setDisplayMode("day")}>Day</button><button className={displayMode === "week" ? "active" : ""} type="button" aria-pressed={displayMode === "week"} onClick={() => setDisplayMode("week")}>Week</button><button className={displayMode === "month" ? "active" : ""} type="button" aria-pressed={displayMode === "month"} onClick={() => setDisplayMode("month")}>Month</button></div></header>
+    <header className="page-header compact-header"><div><h1>Calendar</h1><p>Plans discovered in conversations, with evidence attached.</p></div><div className="calendar-view-switcher" role="group" aria-label="Calendar view"><button className={displayMode === "day" ? "active" : ""} type="button" aria-pressed={displayMode === "day"} onClick={() => selectDisplayMode("day")}>Day</button><button className={displayMode === "week" ? "active" : ""} type="button" aria-pressed={displayMode === "week"} onClick={() => selectDisplayMode("week")}>Week</button><button className={displayMode === "month" ? "active" : ""} type="button" aria-pressed={displayMode === "month"} onClick={() => selectDisplayMode("month")}>Month</button></div></header>
 
     {suggestions.length > 0 ? <section className="panel calendar-suggestions calendar-suggestions-top"><div className="panel-heading"><h2>Suggested from messages</h2><small>{suggestions.length} awaiting review</small></div>
       <div className="calendar-agenda">{suggestions.map((event) => { const title = titles[event.id] ?? event.title; const dateValue = dates[event.id] ?? localDateTime(event.startAt); const startAt = new Date(dateValue).getTime(); return <article key={event.id}>

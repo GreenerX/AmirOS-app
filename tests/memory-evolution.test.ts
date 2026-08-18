@@ -98,7 +98,7 @@ describe("canonical memory evolution", () => {
     expect(assessKnowledgeFreshness({ ...base, kind: "preference", content: "David likes ramen.", reinforcementCount: 3 }, now).state).toBe("aging");
   });
 
-  it("automatically confirms repeated direct evidence and preserves the prior truth as history", () => {
+  it("automatically confirms clear direct evidence and preserves the prior truth as history", () => {
     const { state, filePath } = createState();
     const chatId = "dani@c.us";
     mergeInsight(state, chatId, {
@@ -127,7 +127,7 @@ describe("canonical memory evolution", () => {
     const reloaded = new AmirosState(filePath);
     const current = reloaded.getInsights(chatId).find((item) => item.content.includes("New York"))!;
     expect(current).toMatchObject({
-      status: "confirmed", validity: "current", maintenanceConfirmationReason: "repeated_direct_evidence",
+      status: "confirmed", validity: "current", autonomousConfirmationReason: "direct_contact_statement",
       reinforcementCount: 2,
     });
     expect(reloaded.getInsights(chatId).find((item) => item.id === oldResidence.id)).toMatchObject({
@@ -341,6 +341,63 @@ describe("canonical memory evolution", () => {
         autonomousConfirmationReason: "direct_contact_statement",
         reinforcementCount: 2,
       }),
+    ]);
+  });
+
+  it("accepts a clear direct fact at the 85% threshold but keeps an ambiguous owner statement reviewable", () => {
+    const { state } = createState();
+    const chatId = "dan@c.us";
+    state.rememberChatName(chatId, "Dan");
+    state.rememberMessage(chatId, {
+      role: "user", author: "contact", senderName: "Dan", content: "I joined Anthropic this month.",
+      messageId: "joined-anthropic", timestamp: 100,
+    });
+    state.mergeRoutedAnalyzedIntelligence(chatId, {
+      insights: [{
+        kind: "fact", content: "Dan works at Anthropic.", confidence: .85, canonicalKey: "employer", evolution: "replace", subjectNames: ["Dan"],
+        evidence: { messageId: "joined-anthropic", excerpt: "I joined Anthropic this month.", senderName: "Dan", timestamp: 100 },
+      }], commitments: [],
+    });
+    expect(state.getInsights(chatId)[0]).toMatchObject({ status: "confirmed", autonomousConfirmationReason: "direct_contact_statement" });
+
+    state.rememberMessage(chatId, {
+      role: "user", author: "owner", senderName: "Amir", content: "We need reliable internet for work.",
+      messageId: "internet", timestamp: 200, countAsIncoming: false,
+    });
+    state.mergeRoutedAnalyzedIntelligence(chatId, {
+      insights: [{
+        kind: "preference", content: "Dan prefers reliable internet.", confidence: .9, canonicalKey: "work_preferences", evolution: "append", subjectNames: ["Dan"],
+        evidence: { messageId: "internet", excerpt: "We need reliable internet for work.", senderName: "Amir", timestamp: 200 },
+      }], commitments: [],
+    });
+    expect(state.getInsights(chatId).find((item) => item.content.includes("reliable internet"))?.status).toBe("inferred");
+  });
+
+  it("keeps an 85% contact proposal reviewable when its claimed value is not in the direct message", () => {
+    const { state } = createState();
+    const chatId = "dan@c.us";
+    mergeDirectContactInsight(state, chatId, {
+      kind: "fact", content: "Dan works at Anthropic.", confidence: .9,
+      canonicalKey: "employer", evolution: "replace", messageId: "vague-job",
+      source: "I started somewhere new this month.", timestamp: 100, contactName: "Dan",
+    });
+
+    expect(state.getInsights(chatId)).toEqual([
+      expect.objectContaining({ content: "Dan works at Anthropic.", status: "inferred" }),
+    ]);
+  });
+
+  it("does not mistake a direct membership statement for an employment fact at 85%", () => {
+    const { state } = createState();
+    const chatId = "dan@c.us";
+    mergeDirectContactInsight(state, chatId, {
+      kind: "fact", content: "Dan works at the gym.", confidence: .9,
+      canonicalKey: "employer", evolution: "replace", messageId: "gym-membership",
+      source: "I joined a gym yesterday.", timestamp: 100, contactName: "Dan",
+    });
+
+    expect(state.getInsights(chatId)).toEqual([
+      expect.objectContaining({ content: "Dan works at the gym.", status: "inferred" }),
     ]);
   });
 

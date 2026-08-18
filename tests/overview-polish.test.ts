@@ -65,7 +65,11 @@ describe("Overview polish", () => {
     expect(overview).toContain("overview-todos-panel");
     expect(overview).not.toContain("Quick actions");
     expect(overview).not.toContain('className="panel quick-panel"');
-    expect(overview.indexOf("overview-secondary-grid")).toBeLessThan(overview.indexOf("overview-secondary-activity"));
+    expect(overview).not.toContain("overview-secondary-grid");
+    expect(overview).not.toContain("overview-secondary-activity");
+    expect(overview).toContain("next-best-list");
+    expect(overview).toContain("CalendarEventForm");
+    expect(overview).toContain("suggestReplyForMessage");
     expect(overview).toContain("filteredTrackedTodos.map");
     expect(overview).toContain("View full agenda");
     expect(overview).toContain("Nothing is scheduled for today yet.");
@@ -74,9 +78,11 @@ describe("Overview polish", () => {
     expect(overview).not.toContain('className="intelligence-focus caught-up" onClick={() => onNavigate("intelligence")}');
     expect(calendar).toContain("calendar-day-more");
     expect(calendar).toContain("calendar-view-switcher");
-    expect(calendar).toContain('setDisplayMode("day")');
-    expect(calendar).toContain('setDisplayMode("week")');
-    expect(calendar).toContain('setDisplayMode("month")');
+    expect(calendar).toContain('selectDisplayMode("day")');
+    expect(calendar).toContain('selectDisplayMode("week")');
+    expect(calendar).toContain('selectDisplayMode("month")');
+    expect(calendar).toContain("readCalendarDisplayMode");
+    expect(calendar).toContain("saveCalendarDisplayMode");
     expect(calendar).toContain("openDay(day)");
     expect(calendar).toContain("calendar-day-schedule");
     expect(calendar).toContain("calendar-week-grid");

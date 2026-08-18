@@ -9,7 +9,7 @@ import whatsappWeb from "whatsapp-web.js";
 import type { Message } from "whatsapp-web.js";
 import type { AiService } from "./ai.js";
 import { inferMessageLanguage } from "./ai.js";
-import type { AmirosState, ReplyMode } from "./amiros-state.js";
+import { AUTO_REPLY_FOLLOW_UP_DELAY_MS, type AmirosState, type ReplyMode } from "./amiros-state.js";
 import { parseCommand, type BotCommand } from "./commands.js";
 import type { AppConfig } from "./config.js";
 import type { ControlCenterEntitlement } from "./control-center-entitlement.js";
@@ -45,6 +45,30 @@ const { MessageMedia } = whatsappWeb;
 
 const wait = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+type PendingAutoReply = {
+  version: number;
+  /** The selected first-reply delay remains a minimum even if a short burst arrives. */
+  initialDueAt: number;
+  dueAt: number;
+};
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * An Auto Mode reply must never impersonate the recipient. This deliberately
+ * narrow guard catches the most harmful direct role leaks while leaving normal
+ * conversational wording to the model and the learned per-chat style.
+ */
+export function hasAutoReplyPersonaLeak(answer: string, recipientName: string): boolean {
+  const recipient = recipientName.replace(/\s+/g, " ").trim();
+  if (!recipient) return false;
+  const escaped = escapeRegExp(recipient);
+  return new RegExp(`\\b(?:i(?:'m| am)|this is)\\s+${escaped}\\b|(?:אני|אנוכי)\\s+${escaped}`, "iu").test(answer)
+    || /\b(?:i(?:'m| am)|this is)\s+(?:Amir'?s|the owner'?s)\s+(?:brother|sister|partner|wife|husband|girlfriend|boyfriend)\b|אני\s+(?:אח|אחות|בן זוג|בת זוג)\s+של\s+אמיר/iu.test(answer);
+}
 
 type ConversationAddressMessage = Pick<Message, "fromMe" | "from" | "to" | "getChat"> & {
   id?: { remote?: string | { _serialized?: string } };
@@ -249,6 +273,8 @@ export async function downloadMessageMediaWithRetry(
 export class MessageProcessor {
   private readonly processedMessageIds = new Set<string>();
   private readonly suppressedOutputs = new Map<string, number>();
+  /** One pending automatic response per chat keeps a message burst natural. */
+  private readonly pendingAutoReplies = new Map<string, PendingAutoReply>();
 
   constructor(
     private readonly config: AppConfig,
@@ -285,7 +311,7 @@ export class MessageProcessor {
     if (!chatId) return;
     const isGroup = chatId.endsWith("@g.us");
     let claimedAutoReplyDelay: { delayMs: number; initial: boolean } | undefined;
-    let autoReplyDueAt: number | undefined;
+    let autoReplySchedule: PendingAutoReply | undefined;
     let capturedIncomingText = "";
     if (!message.fromMe) {
       try {
@@ -370,9 +396,31 @@ export class MessageProcessor {
       // Explicit !bot requests remain immediate. The pause applies only to
       // ordinary replies that Auto Mode decides to send on the owner's behalf.
       if (!message.fromMe && !isSelfChat && !resolved.explicit && contactMode === "auto" && this.amiros) {
-        claimedAutoReplyDelay = this.amiros.claimAutoReplyDelay(chatId);
-        const receivedAt = message.timestamp ? message.timestamp * 1_000 : Date.now();
-        autoReplyDueAt = receivedAt + claimedAutoReplyDelay.delayMs;
+        // WhatsApp timestamps describe when the message was sent, but delivery
+        // can be delayed. The quiet window needs to begin when AmirOS actually
+        // receives the message or an old message could trigger an immediate
+        // reply before later messages in the same burst arrive.
+        const receivedAt = Date.now();
+        const existing = this.pendingAutoReplies.get(chatId);
+        if (existing) {
+          autoReplySchedule = {
+            ...existing,
+            version: existing.version + 1,
+            // The first selected delay remains the earliest automatic reply;
+            // every additional inbound message then gets a quiet 15-second
+            // settling window so the reply can address the whole batch.
+            dueAt: Math.max(existing.initialDueAt, receivedAt + AUTO_REPLY_FOLLOW_UP_DELAY_MS),
+          };
+        } else {
+          claimedAutoReplyDelay = this.amiros.claimAutoReplyDelay(chatId);
+          const initialDueAt = receivedAt + claimedAutoReplyDelay.delayMs;
+          autoReplySchedule = {
+            version: 1,
+            initialDueAt,
+            dueAt: initialDueAt,
+          };
+        }
+        this.pendingAutoReplies.set(chatId, autoReplySchedule);
       }
       console.log("Bot command recognized", { messageId, kind: command.kind });
 
@@ -689,6 +737,13 @@ export class MessageProcessor {
           : contactTriggered && (includeGlobalKnowledge || includeGlobalCalendar)
             ? "contact-trigger"
           : "chat";
+      if (autoReplySchedule) {
+        const remainingDelay = Math.max(0, autoReplySchedule.dueAt - Date.now());
+        if (remainingDelay > 0) await wait(remainingDelay);
+        // A later message owns the response. Its processor will rebuild the
+        // context from the saved messages and respond once for the full burst.
+        if (this.pendingAutoReplies.get(chatId)?.version !== autoReplySchedule.version) return;
+      }
       console.log("AI context prepared", {
         messageId,
         scope: contextScope,
@@ -745,6 +800,20 @@ export class MessageProcessor {
       const answer = message.fromMe && !ownerAction && !hasVerifiedCalendarAction
         ? preventUnverifiedAmirosWriteClaim(aiAnswer)
         : aiAnswer;
+      if (autoReplySchedule && this.pendingAutoReplies.get(chatId)?.version !== autoReplySchedule.version) return;
+      if (autoReplySchedule && hasAutoReplyPersonaLeak(answer, requesterName)) {
+        console.warn("Auto Mode reply held because it may impersonate the recipient", { chatId, messageId });
+        this.amiros?.addDraft({
+          chatId,
+          contactName: requesterName,
+          sourcePreview: command.prompt.slice(0, 180),
+          body: answer,
+        });
+        if (this.pendingAutoReplies.get(chatId)?.version === autoReplySchedule.version) {
+          this.pendingAutoReplies.delete(chatId);
+        }
+        return;
+      }
       if (message.fromMe && includeGlobalKnowledge && this.amiros) {
         const sourceRefs = (globalContext?.knowledge || [])
           // Keep the bounded retrieval set rather than guessing which prose
@@ -781,12 +850,11 @@ export class MessageProcessor {
         console.log("AI draft prepared for AmirOS review", { messageId });
         return;
       }
-      if (autoReplyDueAt) {
-        const remainingDelay = Math.max(0, autoReplyDueAt - Date.now());
-        if (remainingDelay > 0) await wait(remainingDelay);
-      }
       this.suppressOutput(chatId, "chat", answer);
       await message.reply(answer, chatId);
+      if (autoReplySchedule && this.pendingAutoReplies.get(chatId)?.version === autoReplySchedule.version) {
+        this.pendingAutoReplies.delete(chatId);
+      }
       this.amiros?.addActivity(
         command.kind === "web" ? "web" : "text",
         command.kind === "web" ? "Web answer sent" : "Text reply sent",
@@ -808,12 +876,20 @@ export class MessageProcessor {
       }
       console.log("AI reply sent", { messageId });
     } catch (error) {
-      if (claimedAutoReplyDelay?.initial) this.amiros?.restoreInitialAutoReplyDelay(chatId);
+      const stillOwnsAutoReply = !autoReplySchedule
+        || this.pendingAutoReplies.get(chatId)?.version === autoReplySchedule.version;
+      if (claimedAutoReplyDelay?.initial && stillOwnsAutoReply) this.amiros?.restoreInitialAutoReplyDelay(chatId);
       console.error("Failed to process WhatsApp message", {
         messageId,
         error: error instanceof Error ? error.message : String(error),
       });
       this.ai.clearConversation(chatId);
+      if (autoReplySchedule) {
+        // Never expose an internal failure message to a contact from Auto
+        // Mode. A later inbound message may still create a fresh response.
+        if (stillOwnsAutoReply) this.pendingAutoReplies.delete(chatId);
+        return;
+      }
       const failureMessage = naturalFailureMessage(error);
       this.suppressOutput(chatId, "chat", failureMessage);
       await message

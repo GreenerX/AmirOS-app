@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.10.10] - 2026-08-18
+
+### Changed
+
+- Auto Mode now treats a short run of incoming messages as one conversational turn. It waits for the conversation to settle, understands the messages together, and sends one natural owner-style reply.
+- Calendar now remembers whether you last used the Day, Week, or Month view.
+- Suggested actions open the appropriate review experience: an editable calendar event, an editable to-do, or a prepared reply that you explicitly send.
+- The Suggested action panel now uses the same practical height as Agenda and To-dos, supports several prioritized actions, and removes the lower Overview cards for a cleaner daily view.
+- Control Center communications now include branded, exportable templates for invitations, setup, support, updates, personal AI access, and a blank note. They are manually reviewed and sent outside the Control Center.
+
+### Improved
+
+- Strengthened Auto Mode's owner/contact separation so replies do not speak as the recipient or expose AmirOS workflow language.
+- Improved owner-writing examples in reply context so automatic replies better follow the owner's voice.
+- Clear, durable relationship knowledge can now be confirmed automatically at 85% confidence only when the original message directly supports the same fact type and value. Ambiguous or weak claims stay reviewable.
+- Calendar suggestions based on more than one message now require a recent, explicit agreement and a concrete time, preventing old unconfirmed plans from becoming events.
+- Suggested-action text is more compact without losing its distinguishing intent.
+
+### Fixed
+
+- Prevented rapid inbound messages in Auto Mode from producing a reply to each message individually.
+- Prevented plausible but unsupported knowledge promotions, including treating a gym membership as employment.
+
+### Testing
+
+- Added coverage for automatic-reply perspective, reply coalescing, calendar-evidence boundaries, direct knowledge confirmation, and calendar-view preferences.
+
 ## [0.10.9] - 2026-08-18
 
 ### Added

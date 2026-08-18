@@ -646,6 +646,13 @@ export async function replyToMessage(chatId: string, messageId: string, body: st
   })).message;
 }
 
+export async function suggestReplyForMessage(chatId: string, messageId: string): Promise<{ body: string }> {
+  if (isDemo) return { body: "Sounds good — thank you!" };
+  return request<{ body: string }>(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/reply-suggestion`, {
+    method: "POST",
+  });
+}
+
 export async function forwardMessage(chatId: string, messageId: string, targetChatId: string): Promise<void> {
   if (isDemo) return;
   await request(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/forward`, {

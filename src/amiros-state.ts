@@ -179,7 +179,7 @@ type AnalyzedInsight = Pick<ContactInsight, "kind" | "content" | "confidence" | 
  * This threshold is intentionally paired with direct-source and uncertainty
  * checks in `autonomousConfirmationFor`, rather than used on its own.
  */
-export const AUTONOMOUS_KNOWLEDGE_CONFIDENCE = 0.94;
+export const AUTONOMOUS_KNOWLEDGE_CONFIDENCE = 0.85;
 
 export type RelationshipCommitment = {
   id: string;
@@ -3840,7 +3840,7 @@ export class AmirosState {
    */
   private autonomousConfirmationFor(
     sourceChatId: string,
-    insight: AnalyzedInsight,
+    insight: AnalyzedInsight & { subjectNames?: string[] },
   ): { at: number; reason: NonNullable<ContactInsight["autonomousConfirmationReason"]> } | undefined {
     if (
       insight.confidence < AUTONOMOUS_KNOWLEDGE_CONFIDENCE ||
@@ -3864,12 +3864,80 @@ export class AmirosState {
     if (!statement || this.isUncertainKnowledgeStatement(statement) || this.isSensitiveKnowledgeStatement(statement, insight.content)) {
       return undefined;
     }
+    // At 85%, a model score and a first-person sentence alone are not enough
+    // to make a fact canonical. The source must state the *same kind* of fact
+    // as the proposal (employment, residence, diet, or preference) and retain
+    // a meaningful value such as Anthropic, New York, vegetarian, or sushi.
+    // This keeps a plausible but broader paraphrase reviewable.
+    if (!this.hasPropertyGroundedDirectKnowledgeEvidence(statement, insight)) return undefined;
 
     if (source.author === "owner") {
+      // An owner saying "we need reliable internet" in Dan's chat is useful
+      // conversation context, but it is not a direct statement that Dan has a
+      // durable preference. At the lower confidence threshold, require an
+      // explicit subject reference (or a first-person fact about the owner)
+      // before bypassing review.
+      const ownerName = this.getSettings().ownerProfile.displayName.replace(/\s+/g, " ").trim();
+      const normalizedStatement = statement.toLocaleLowerCase();
+      const subjectNames = (insight.subjectNames || []).map((name) => name.replace(/\s+/g, " ").trim()).filter(Boolean);
+      const explicitlyNamesSubject = subjectNames.some((name) => normalizedStatement.includes(name.toLocaleLowerCase()));
+      const explicitlyAboutOwner = Boolean(ownerName)
+        && subjectNames.some((name) => name.localeCompare(ownerName, undefined, { sensitivity: "base" }) === 0)
+        && this.isDirectFirstPersonKnowledgeStatement(statement);
+      if (!explicitlyNamesSubject && !explicitlyAboutOwner) return undefined;
       return { at: Date.now(), reason: "direct_owner_statement" };
     }
     if (!this.isDirectFirstPersonKnowledgeStatement(statement)) return undefined;
     return { at: Date.now(), reason: "direct_contact_statement" };
+  }
+
+  private hasPropertyGroundedDirectKnowledgeEvidence(
+    statement: string,
+    insight: AnalyzedInsight & { subjectNames?: string[] },
+  ): boolean {
+    const tokenize = (value: string) => value
+      .toLocaleLowerCase()
+      .normalize("NFKD")
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .split(/\s+/u)
+      .filter((token) => token.length >= 3);
+    const generic = new Set([
+      "the", "and", "for", "with", "from", "that", "this", "works", "work", "working", "lives", "live", "living", "likes", "like", "prefers", "prefer", "current", "new", "old", "they", "their", "them", "his", "her", "she", "him", "he", "is", "are", "was", "were", "דני", "דוד", "אמיר", "הוא", "היא", "שלו", "שלה", "עובד", "עובדת", "גר", "גרה", "אוהב", "אוהבת", "מעדיף", "מעדיפה",
+    ]);
+    const statementTokens = new Set(tokenize(statement));
+    const subjectTokens = new Set((insight.subjectNames || []).flatMap(tokenize));
+    const meaningfulClaimTokens = tokenize(insight.content)
+      .filter((token) => !generic.has(token) && !subjectTokens.has(token));
+    if (!meaningfulClaimTokens.some((token) => statementTokens.has(token))) return false;
+
+    const canonicalKey = this.normalizeCanonicalKnowledgeKey(insight.canonicalKey);
+    const lower = statement.toLocaleLowerCase();
+    if (canonicalKey === "employer") {
+      // “I joined a gym” is not evidence of employment. A bare “I joined X”
+      // is accepted only when it is not phrased as membership in a gym, club,
+      // team, group, class, or course.
+      return /\bi\s+(?:work|am\s+working|started)\s+(?:at|for)\b|\bmy\s+(?:new\s+)?(?:job|employer|company|office)\b|\bi\s+left\b.{0,80}\b(?:joined|started)\b|\bi\s+joined\s+(?!a\s+(?:gym|club|team|group|class|course)\b|the\s+(?:gym|club|team|group|class|course)\b)/iu.test(lower)
+        || /(?:אני\s+עובד(?:ת)?\s+(?:ב|עם)|התחלתי\s+לעבוד\s+(?:ב|עם)|עזבתי.{0,80}(?:והצטרפתי|והתחלתי)|הצטרפתי\s+ל(?!חדר\s*כושר|קבוצה|חוג|קורס))/iu.test(statement);
+    }
+    if (canonicalKey === "residence") {
+      return /\bi\s+(?:live|reside)\s+in\b|\bi\s+moved\s+to\b|\bmy\s+(?:new\s+)?(?:home|apartment|place)\s+(?:is\s+)?in\b/iu.test(lower)
+        || /(?:אני\s+גר(?:ה)?\s+ב|עברתי\s+ל|הבית\s+החדש\s+שלי\s+ב)/iu.test(statement);
+    }
+    if (canonicalKey === "diet") {
+      return /\bi(?:\s+am|['’]m)\s+(?:still\s+)?(?:vegetarian|vegan)\b|\bi\s+(?:do not|don't)\s+eat\b|\bmy\s+diet\s+is\b/iu.test(lower)
+        || /(?:אני\s+(?:טבעוני(?:ת)?|צמחוני(?:ת)?)|אני\s+לא\s+אוכל(?:ת)?|התזונה\s+שלי)/iu.test(statement);
+    }
+    if (canonicalKey === "birthday") {
+      return /\bmy\s+birthday\s+(?:is|falls)\b|\bi\s+was\s+born\b/iu.test(lower)
+        || /(?:יום\s+ההולדת\s+שלי|נולדתי)/iu.test(statement);
+    }
+    if (insight.kind === "preference") {
+      return /\bi\s+(?:still\s+)?(?:prefer|love|like|enjoy)\b|\bmy\s+(?:favorite|favourite)\b/iu.test(lower)
+        || /(?:אני\s+(?:מעדיף(?:ה)?|אוהב(?:ת)?|נהנה(?:ית)?)|האהוב(?:ה)?\s+עליי)/iu.test(statement);
+    }
+    // Other fact shapes remain reviewable at this confidence level until a
+    // property-specific proof rule exists.
+    return false;
   }
 
   private isDirectFirstPersonKnowledgeStatement(value: string): boolean {

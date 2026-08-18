@@ -2681,6 +2681,54 @@ export function startAmirosDashboard(options: DashboardOptions) {
       const messageActionMatch = pathname.match(
         /^\/api\/chats\/([^/]+)\/messages\/([^/]+)\/(react|reply|forward)$/,
       );
+      const replySuggestionMatch = pathname.match(
+        /^\/api\/chats\/([^/]+)\/messages\/([^/]+)\/reply-suggestion$/,
+      );
+      if (request.method === "POST" && replySuggestionMatch?.[1] && replySuggestionMatch[2]) {
+        const chatId = decodeURIComponent(replySuggestionMatch[1]);
+        const messageId = decodeURIComponent(replySuggestionMatch[2]);
+        const contact = state.getContact(chatId);
+        if (contact.mode === "off") {
+          sendJson(response, 400, { error: "Enable this chat before asking AmirOS to draft a reply" });
+          return;
+        }
+        const memory = state.getConversationMemory(chatId, 60);
+        const message = memory.find((entry) => entry.messageId === messageId);
+        if (!message || message.author === "owner" || message.author === "assistant") {
+          sendJson(response, 404, { error: "The message is no longer available for a reply suggestion" });
+          return;
+        }
+        const contactName = chatNameCache.get(chatId) || state.getChatName(chatId) || "your contact";
+        const reply = await ai.reply(`dashboard-reply-${chatId}-${messageId}`, [
+          `Draft one short, natural WhatsApp reply from ${state.getSettings().ownerProfile.displayName} to ${contactName}.`,
+          "Use the recent local conversation only for context. Do not mention AmirOS, automation, review, memory, tasks, calendars, or how the reply was generated.",
+          "Return only the reply text. Keep the reply editable and do not send it yourself.",
+          `Their message: ${message.content}`,
+        ].join("\n"), false, {
+          scope: "chat",
+          autoReplyAsOwner: true,
+          triggerAuthor: "contact",
+          requesterName: contactName,
+          ownerName: state.getSettings().ownerProfile.displayName,
+          contact,
+          chatName: contactName,
+          memory,
+          manualMemory: state.getManualMemory(chatId),
+          profile: state.getContactProfile(chatId),
+          insights: state.getInsights(chatId),
+          styleProfile: state.getWritingStyleProfile(chatId),
+          events: state.getCalendarEvents(chatId),
+          currentLocalDateTime: new Date().toString(),
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        });
+        const body = cleanNetworkAnswerText(reply, []).replace(/^['“]|['”]$/g, "").trim();
+        if (!body) {
+          sendJson(response, 502, { error: "AmirOS could not prepare a reply just now" });
+          return;
+        }
+        sendJson(response, 200, { body: body.slice(0, 2_000) });
+        return;
+      }
       if (request.method === "POST" && messageActionMatch?.[1] && messageActionMatch[2] && messageActionMatch[3]) {
         const chatId = decodeURIComponent(messageActionMatch[1]);
         const messageId = decodeURIComponent(messageActionMatch[2]);

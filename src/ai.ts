@@ -15,7 +15,8 @@ import {
   webSearchCostUsd,
 } from "./pricing.js";
 import { cleanSourceUrl, formatWhatsAppText } from "./whatsapp-format.js";
-import { hasCalendarPlanIntent, isOwnerTodoSource } from "./amiros-state.js";
+import { hasCalendarPlanIntent, inferCalendarEventFromMessage, isOwnerTodoSource } from "./amiros-state.js";
+import { parseExplicitClockTime } from "./temporal-classifier.js";
 import { relationshipLearningInstructions } from "./prompts/relationship-learning.js";
 import type { ReplyAssessmentContextEntry } from "./reply-needed.js";
 import { presentTodo } from "./todo-presentation.js";
@@ -220,6 +221,63 @@ function sanitizeApiText(value: string): string {
     .join("");
 }
 
+/**
+ * Deliberately narrower than a generic acknowledgement. This is used only
+ * when joining two messages into calendar evidence, where "sure" by itself
+ * must not revive an older unconfirmed plan.
+ */
+function isExplicitCalendarAgreement(content: string): boolean {
+  return /\b(?:that|this|it)\s+(?:sounds|works|is)\s+(?:(?:good|great|perfect)(?:\s+(?:to me|for me))?|for me|with me)\b|\b(?:sounds|works)\s+(?:good|great|perfect)\s+(?:to me|for me)?\b|\b(?:let'?s|we(?:'ll| will))\s+(?:meet|do it|go|make it)\b|\b(?:confirmed|booked)\b|(?:זה|הזמן|המקום|מחר|ביום\s+\p{L}+)\s+(?:מתאים|מעולה|טוב|סגור)|(?:נפגש|נקבע|קבענו)\s+(?:אז|שם|ב|ב־)/iu.test(content);
+}
+
+export type RelationshipAnalysisSourceEntry = {
+  messageId?: string;
+  speaker?: string;
+  content: string;
+  timestamp: number;
+  candidate?: boolean;
+};
+
+/**
+ * Selects proof for a calendar suggestion without allowing an old plan plus a
+ * later generic acknowledgement to become a new event. A direct calendar
+ * plan remains valid on its own; a bundled plan must be immediately accepted
+ * and include a written clock time.
+ */
+export function calendarEventEvidenceForSource(
+  source: RelationshipAnalysisSourceEntry[],
+  index: number,
+): { messageId?: string; excerpt: string; senderName?: string; timestamp: number } | undefined {
+  const selectedIndex = Math.max(0, Math.min(source.length - 1, index));
+  const selected = source[selectedIndex];
+  if (!selected || selected.candidate === false) return undefined;
+  const direct = {
+    messageId: selected.messageId,
+    excerpt: selected.content || "Conversation evidence",
+    senderName: selected.speaker,
+    timestamp: selected.timestamp || Date.now(),
+  };
+  if (hasCalendarPlanIntent(direct.excerpt)) return direct;
+
+  const nearby = source
+    .slice(Math.max(0, selectedIndex - 4), Math.min(source.length, selectedIndex + 2))
+    .filter((entry) => entry.candidate !== false);
+  const planIndex = nearby.findIndex((entry) => hasCalendarPlanIntent(entry.content));
+  const plan = planIndex >= 0 ? nearby[planIndex] : undefined;
+  const agreement = plan
+    ? nearby.slice(planIndex + 1).find((entry) => isExplicitCalendarAgreement(entry.content))
+    : undefined;
+  const withinActiveTurn = Boolean(plan && agreement && Math.abs(agreement.timestamp - plan.timestamp) <= 15 * 60_000);
+  const bundleEntries = plan && agreement ? nearby.slice(planIndex, nearby.indexOf(agreement) + 1) : [];
+  const bundle = bundleEntries.map((entry) => entry.content).join(" ").replace(/\s+/g, " ").trim();
+  const hasConcreteTime = bundleEntries.some((entry) => Boolean(parseExplicitClockTime(entry.content)));
+  if (!withinActiveTurn || !hasConcreteTime || !plan || !inferCalendarEventFromMessage(bundle, plan.timestamp)) return undefined;
+  return {
+    ...direct,
+    excerpt: bundle.slice(0, 1_000),
+  };
+}
+
 export function replyConversationKey(userId: string, context: ReplyContext): string {
   const author = context.triggerAuthor || (context.scope === "owner" || context.scope === "owner-trigger" ? "owner" : "contact");
   const requester = cleanInstructionValue(context.requesterName, 120).toLocaleLowerCase() || author;
@@ -231,6 +289,14 @@ export function buildRequesterPerspectiveInstructions(context: ReplyContext): st
   const requesterName = cleanInstructionValue(context.requesterName, 120)
     || (context.triggerAuthor === "owner" ? ownerName : cleanInstructionValue(context.senderName, 120) || cleanInstructionValue(context.chatName, 120));
   if (!requesterName) return "";
+  if (context.autoReplyAsOwner) {
+    return [
+      "AUTO MODE SPEAKER AND RECIPIENT (mandatory):",
+      `- Write as ${ownerName}. The recipient is ${requesterName}.`,
+      `- Use first-person language only for ${ownerName}; never write as ${requesterName}, claim to be ${requesterName}, or describe ${requesterName}'s relationship to ${ownerName} in first person.`,
+      "- All recent incoming messages since Amir last replied are one conversational turn. Understand their combined meaning and send one natural response, not a separate answer to each message.",
+    ].join("\n");
+  }
   if (context.triggerAuthor !== "contact") {
     return [
       "REQUESTER IDENTITY AND PERSPECTIVE (mandatory):",
@@ -457,6 +523,7 @@ export function buildPersonalizedInstructions(context: ReplyContext, prompt = ""
       "Write only the message Amir himself would naturally send in this conversation. Never mention AmirOS, AI, an assistant, automation, a system, review, or an internal record.",
       "Do not turn an ordinary contact message into a calendar, reminder, to-do, commitment, knowledge, or other AmirOS action. In particular, a casual reminder should receive a natural acknowledgement or reply, not a status update.",
       "Do not say that something was added, saved, awaiting review, pending, confirmed by a system, or otherwise managed behind the scenes.",
+      "When several recent messages arrived before this response, treat them as one message bundle and respond once to the overall conversation.",
     );
   }
   if (upcomingEvents.length > 0) {
@@ -553,11 +620,16 @@ export function buildResponseInput(
     ? (context.memory || []).slice(-40)
     : [];
   const history: ResponseInputMessage[] = memory.map((entry) => ({
-    role: entry.role,
+    // WhatsApp messages sent by the owner are examples of the owner's voice,
+    // not questions from the contact. Preserving that role prevents the model
+    // from collapsing the two speakers in Auto Mode.
+    role: entry.author === "owner" ? "assistant" : entry.role,
     content:
-      entry.role === "user" && entry.senderName
-        ? `[${cleanInstructionValue(entry.senderName, 120)}] ${sanitizeApiText(entry.content)}`
-        : sanitizeApiText(entry.content),
+      entry.author === "owner"
+        ? `[${cleanInstructionValue(context.ownerName, 120) || "Amir"}] ${sanitizeApiText(entry.content)}`
+        : entry.role === "user" && entry.senderName
+          ? `[${cleanInstructionValue(entry.senderName, 120)}] ${sanitizeApiText(entry.content)}`
+          : sanitizeApiText(entry.content),
   }));
   const currentRequester = cleanInstructionValue(context.requesterName, 120)
     || (context.isGroup ? cleanInstructionValue(context.senderName, 120) : "");
@@ -963,6 +1035,7 @@ export class AiService {
       };
     };
     const hasCandidateEvidence = (index: number) => source[Math.max(0, Math.min(source.length - 1, index))]?.candidate !== false;
+    const calendarEvidenceFor = (index: number) => calendarEventEvidenceForSource(source, index);
     return {
       insights: result.insights.filter((item) => hasCandidateEvidence(item.sourceIndex)).map((item) => ({
         kind: item.kind,
@@ -982,13 +1055,16 @@ export class AiService {
         dueAt: item.dueAt > 0 ? item.dueAt : undefined,
         evidence: evidenceFor(item.sourceIndex),
       })),
-      events: result.events.filter((item) => hasCandidateEvidence(item.sourceIndex) && hasCalendarPlanIntent(evidenceFor(item.sourceIndex).excerpt)).map((item) => ({
-        title: item.title,
-        startAt: item.startAt,
-        allDay: false,
-        location: item.location || undefined,
-        evidence: evidenceFor(item.sourceIndex),
-      })),
+      events: result.events.flatMap((item) => {
+        const evidence = calendarEvidenceFor(item.sourceIndex);
+        return evidence ? [{
+          title: item.title,
+          startAt: item.startAt,
+          allDay: false,
+          location: item.location || undefined,
+          evidence,
+        }] : [];
+      }),
       todos: (result.todos || [])
         .filter((item) => {
           const sourceEntry = source[Math.max(0, Math.min(source.length - 1, item.sourceIndex))];

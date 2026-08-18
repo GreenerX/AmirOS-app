@@ -9,28 +9,24 @@ import {
   CalendarClock,
   Check,
   ExternalLink,
-  Image,
   ListTodo,
   MessageCircle,
-  Mic,
-  Pause,
   PencilLine,
-  Search,
-  ShieldCheck,
   Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ensureTodaysFocusIcon, summarizeDashboardActionMessage } from "../api";
+import { ensureTodaysFocusIcon, suggestReplyForMessage, summarizeDashboardActionMessage } from "../api";
 import { readDashboardActionSummaries, saveDashboardActionSummary } from "../dashboard-action-summary-cache";
-import { compactNumber, formatDateTime, formatTime, timeOfDayGreeting } from "../format";
+import { formatDateTime, formatTime, timeOfDayGreeting } from "../format";
 import { hideIntelligenceAction, readHiddenIntelligenceActions, replyActionId } from "../intelligence-visibility";
 import { buildIntelligenceSnapshot, isKnownIntelligenceContactName } from "../intelligence-snapshot";
 import { replyAssessmentCopy } from "../reply-assessment-copy";
 import { buildTodaysFocus, todaysFocusDismissalIds, todaysFocusPresentation, type TodaysFocusItem } from "../todays-focus";
 import { readHiddenTodaysFocus, saveHiddenTodaysFocus } from "../todays-focus-visibility";
-import type { Activity, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, ProactiveIntelligenceItem, TodoTask, ViewName } from "../types";
+import type { CalendarEvent, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, ProactiveIntelligenceItem, TodoTask, ViewName } from "../types";
+import { CalendarEventForm, type CalendarEventDraft } from "./CalendarEventForm";
 import { ContactAvatar } from "./ContactAvatar";
 import { TodoEditorDialog } from "./IntelligenceView";
 import { OverviewHeaderExperience } from "./OverviewHeaderExperience";
@@ -45,7 +41,9 @@ type OverviewProps = {
   onOpenNextBestAction: (chatId: string, messageId?: string) => void;
   onTodoStatus: (chatId: string, todoId: string, status: TodoTask["status"]) => Promise<void>;
   onTodoUpdate: (chatId: string, todoId: string, patch: { title?: string; dueAt?: number | null; priority?: TodoTask["priority"] }) => Promise<void>;
-  onCalendarStatus: (chatId: string, eventId: string, patch: { status?: "inferred" | "confirmed" | "completed" | "dismissed" }) => Promise<void>;
+  onCalendarStatus: (chatId: string, eventId: string, patch: { status?: CalendarEvent["status"]; title?: string; startAt?: number; endAt?: number; allDay?: boolean; location?: string }) => Promise<void>;
+  onRegenerateCalendarTitle: (chatId: string, eventId: string) => Promise<string>;
+  onReplyToMessage: (chatId: string, messageId: string, body: string) => Promise<void>;
   onInsightStatus: (chatId: string, insightId: string, status: "confirmed" | "outdated") => Promise<void>;
   onDismissNextBestAction: (action: NextBestAction) => Promise<void>;
   onProactiveDecision: (item: ProactiveIntelligenceItem, status: "opened" | "dismissed" | "resolved") => Promise<void>;
@@ -90,14 +88,6 @@ function chooseOverviewQuote() {
   return OVERVIEW_QUOTES[index]!;
 }
 
-function activityIcon(kind: Activity["kind"]) {
-  if (kind === "voice") return <Mic size={20} />;
-  if (kind === "image") return <Image size={20} />;
-  if (kind === "web") return <Search size={20} />;
-  if (kind === "system") return <ShieldCheck size={20} />;
-  return <MessageCircle size={20} />;
-}
-
 function sameLocalDay(left: number, right: Date) {
   const date = new Date(left);
   return date.getFullYear() === right.getFullYear()
@@ -140,19 +130,27 @@ function suggestedSourceTime(timestamp: number | undefined) {
 function compactTodoSuggestionTitle(title: string) {
   const normalized = title.replace(/\s+/g, " ").trim();
   const contextualClause = normalized.search(/\s+(?:when|if|after|before|because|so|for|at|on|כש|אחרי|לפני|אם|כי|כדי)\s+/i);
-  const compact = contextualClause > 0 ? normalized.slice(0, contextualClause) : normalized;
-  return compact.length > 52 ? `${compact.slice(0, 49).trimEnd()}…` : compact;
+  // Prefer the task itself to the conversational context, but never cut a
+  // meaningful title off with an ellipsis. Long task names wrap in the card.
+  return contextualClause > 0 ? normalized.slice(0, contextualClause).trim() : normalized;
 }
 
-function compactNextBestText(value: string, maxLength = 96) {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxLength) return normalized;
-  const cut = normalized.slice(0, maxLength + 1);
-  const lastSpace = cut.lastIndexOf(" ");
-  return `${cut.slice(0, lastSpace > 48 ? lastSpace : maxLength).trimEnd()}…`;
+function nextBestText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
 }
 
-export function Overview({ data, chats, intelligence, onNavigate, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onTodoStatus, onTodoUpdate, onCalendarStatus, onInsightStatus, onDismissNextBestAction, onProactiveDecision }: OverviewProps) {
+function localDateTime(value: number) {
+  const timestamp = toMilliseconds(value);
+  const date = new Date(timestamp);
+  return new Date(timestamp - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
+function calendarEnd(event: CalendarEvent) {
+  const startAt = toMilliseconds(event.startAt);
+  return event.endAt && toMilliseconds(event.endAt) > startAt ? toMilliseconds(event.endAt) : startAt + 60 * 60 * 1_000;
+}
+
+export function Overview({ data, chats, intelligence, onNavigate, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onTodoStatus, onTodoUpdate, onCalendarStatus, onRegenerateCalendarTitle, onReplyToMessage, onInsightStatus, onDismissNextBestAction, onProactiveDecision }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
   const [todoFilter, setTodoFilter] = useState<TodoFilter>("open");
@@ -165,19 +163,20 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
   const failedTodaysFocusIcons = useRef(new Set<string>());
   const [completingTodoIds, setCompletingTodoIds] = useState<Set<string>>(() => new Set());
   const [todoEditor, setTodoEditor] = useState<(TodoTask & { contactName: string }) | undefined>();
+  const [calendarEditor, setCalendarEditor] = useState<(CalendarEvent & { chatId: string; contactName: string }) | undefined>();
+  const [calendarDraft, setCalendarDraft] = useState<CalendarEventDraft>();
+  const [calendarSaving, setCalendarSaving] = useState(false);
+  const [calendarError, setCalendarError] = useState("");
+  const [calendarRegeneratingTitle, setCalendarRegeneratingTitle] = useState(false);
+  const [replyEditor, setReplyEditor] = useState<NextBestAction>();
+  const [replyBody, setReplyBody] = useState("");
+  const [replyLoading, setReplyLoading] = useState(false);
+  const [replySending, setReplySending] = useState(false);
+  const [replyError, setReplyError] = useState("");
   useEffect(() => {
     const interval = window.setInterval(() => setDeviceTime(new Date()), 1_000);
     return () => window.clearInterval(interval);
   }, []);
-  const modeCounts = chats.reduce(
-    (counts, chat) => ({ ...counts, [chat.mode]: counts[chat.mode] + 1 }),
-    { auto: 0, suggest: 0, off: 0 },
-  );
-  const totalModeCount = Math.max(chats.length, 1);
-  const estimatedCost = data.usage.estimatedCostUsd;
-  const budget = data.settings.monthlyBudgetUsd;
-  const progress = Math.min(100, (estimatedCost / budget) * 100);
-  const formattedCost = estimatedCost < 0.01 ? estimatedCost.toFixed(4) : estimatedCost.toFixed(2);
   const firstName = data.settings.ownerProfile.displayName.trim().split(/\s+/)[0] || "Amir";
   const intelligenceSnapshot = useMemo(() => buildIntelligenceSnapshot(
     intelligence,
@@ -252,43 +251,65 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
         .finally(() => pendingTodaysFocusIcons.current.delete(item.id));
     }
   }, [chats, todaysFocusIcons, visibleTodaysFocus]);
-  const focus = visibleNeedsReply[0]
-    ? {
-        kind: "May need your reply",
-        title: visibleNeedsReply[0].contactName,
-        detail: visibleNeedsReply[0].lastIncoming?.content || "A recent message is waiting for you.",
-        chatId: visibleNeedsReply[0].chatId,
-        contactName: visibleNeedsReply[0].contactName,
-        messageId: visibleNeedsReply[0].lastIncoming?.messageId,
-        actionType: "reply" as const,
-        actionId: replyActionId(visibleNeedsReply[0]),
-        replyAssessment: visibleNeedsReply[0].replyAssessment,
-      }
-    : planSuggestions[0]
-      ? { kind: "Calendar suggestion", title: compactNextBestText(planSuggestions[0].title, 64), detail: `From ${planSuggestions[0].contactName} · ${eventDateTime(planSuggestions[0].startAt)}${suggestedSourceTime(planSuggestions[0].evidence.timestamp) ? ` · Suggested from ${suggestedSourceTime(planSuggestions[0].evidence.timestamp)}` : ""}`, chatId: planSuggestions[0].chatId, contactName: planSuggestions[0].contactName, messageId: planSuggestions[0].evidence.messageId, actionType: "calendar" as const, actionId: planSuggestions[0].id }
-      : suggestedTodos[0]
-        ? { kind: "To-do suggestion", title: compactTodoSuggestionTitle(suggestedTodos[0].title), detail: `From ${suggestedTodos[0].contactName} · ${todoTimingLabel(suggestedTodos[0])}`, chatId: suggestedTodos[0].chatId, contactName: suggestedTodos[0].contactName, messageId: suggestedTodos[0].evidence.messageId, actionType: "todo" as const, actionId: suggestedTodos[0].id }
-        : newSignals[0]
-          ? { kind: "New relationship detail", title: newSignals[0].contactName, detail: `${compactNextBestText(newSignals[0].content, 70)}${suggestedSourceTime(newSignals[0].evidence.timestamp) ? ` · Suggested from ${suggestedSourceTime(newSignals[0].evidence.timestamp)}` : ""}`, chatId: newSignals[0].chatId, contactName: newSignals[0].contactName, messageId: newSignals[0].evidence.messageId, actionType: "insight" as const, actionId: newSignals[0].id }
-          : undefined;
-  const focusReplyCopy = focus?.actionType === "reply" ? replyAssessmentCopy(focus.replyAssessment) : undefined;
-  const focusChat = focus ? chats.find((chat) => chat.id === focus.chatId) : undefined;
+  const focusActions = useMemo<NextBestAction[]>(() => [
+    ...visibleNeedsReply.map((reply) => ({
+      kind: "May need your reply",
+      title: reply.contactName,
+      detail: reply.lastIncoming?.content || "A recent message is waiting for you.",
+      chatId: reply.chatId,
+      contactName: reply.contactName,
+      messageId: reply.lastIncoming?.messageId,
+      actionType: "reply" as const,
+      actionId: replyActionId(reply),
+      replyAssessment: reply.replyAssessment,
+    })),
+    ...planSuggestions.map((event) => ({
+      kind: "Calendar suggestion",
+      title: nextBestText(event.title),
+      detail: `From ${event.contactName} · ${eventDateTime(event.startAt)}${suggestedSourceTime(event.evidence.timestamp) ? ` · Suggested from ${suggestedSourceTime(event.evidence.timestamp)}` : ""}`,
+      chatId: event.chatId,
+      contactName: event.contactName,
+      messageId: event.evidence.messageId,
+      actionType: "calendar" as const,
+      actionId: event.id,
+    })),
+    ...suggestedTodos.map((todo) => ({
+      kind: "To-do suggestion",
+      title: compactTodoSuggestionTitle(todo.title),
+      detail: `From ${todo.contactName} · ${todoTimingLabel(todo)}`,
+      chatId: todo.chatId,
+      contactName: todo.contactName,
+      messageId: todo.evidence.messageId,
+      actionType: "todo" as const,
+      actionId: todo.id,
+    })),
+    ...newSignals.map((insight) => ({
+      kind: "New relationship detail",
+      title: insight.contactName,
+      detail: `${nextBestText(insight.content)}${suggestedSourceTime(insight.evidence.timestamp) ? ` · Suggested from ${suggestedSourceTime(insight.evidence.timestamp)}` : ""}`,
+      chatId: insight.chatId,
+      contactName: insight.contactName,
+      messageId: insight.evidence.messageId,
+      actionType: "insight" as const,
+      actionId: insight.id,
+    })),
+  ].slice(0, 6), [newSignals, planSuggestions, suggestedTodos, visibleNeedsReply]);
+  const focus = focusActions[0];
 
   useEffect(() => {
-    if (!focus || focus.actionType !== "reply" || !focus.detail || actionSummaries[focus.actionId] || pendingActionSummaries.current.has(focus.actionId)) return;
-    pendingActionSummaries.current.add(focus.actionId);
-    void summarizeDashboardActionMessage(focus.detail)
-      .then(({ summary }) => {
-        const nextSummary = summary.trim();
-        if (!nextSummary) return;
-        setActionSummaries((current) => {
-          if (current[focus.actionId]) return current;
-          return saveDashboardActionSummary(focus.actionId, nextSummary);
-        });
-      })
-      .catch(() => undefined)
-      .finally(() => pendingActionSummaries.current.delete(focus.actionId));
-  }, [actionSummaries, focus]);
+    for (const action of focusActions) {
+      if (action.actionType !== "reply" || !action.detail || actionSummaries[action.actionId] || pendingActionSummaries.current.has(action.actionId)) continue;
+      pendingActionSummaries.current.add(action.actionId);
+      void summarizeDashboardActionMessage(action.detail)
+        .then(({ summary }) => {
+          const nextSummary = summary.trim();
+          if (!nextSummary) return;
+          setActionSummaries((current) => current[action.actionId] ? current : saveDashboardActionSummary(action.actionId, nextSummary));
+        })
+        .catch(() => undefined)
+        .finally(() => pendingActionSummaries.current.delete(action.actionId));
+    }
+  }, [actionSummaries, focusActions]);
   const toggleTodo = async (todo: TodoTask) => {
     const isCompleting = todo.status !== "done";
     if (isCompleting) setCompletingTodoIds((current) => new Set(current).add(todo.id));
@@ -304,32 +325,59 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
       });
     }
   };
-  const dismissFocus = async () => {
-    if (!focus) return;
-    if (focus.actionType === "reply" || (focus.actionType === "todo" && focus.kind === "To-do")) {
-      hideIntelligenceAction(focus.actionId);
+  const dismissFocus = async (action: NextBestAction) => {
+    if (action.actionType === "reply" || (action.actionType === "todo" && action.kind === "To-do")) {
+      hideIntelligenceAction(action.actionId);
       setHiddenActionVersion((version) => version + 1);
       return;
     }
-    await onDismissNextBestAction(focus);
+    await onDismissNextBestAction(action);
   };
-  const applyFocus = async () => {
-    if (!focus) return;
-    if (focus.actionType === "calendar") {
-      await onCalendarStatus(focus.chatId, focus.actionId, { status: "confirmed" });
+  const openCalendarSuggestion = (action: NextBestAction) => {
+    const event = planSuggestions.find((candidate) => candidate.id === action.actionId && candidate.chatId === action.chatId);
+    if (!event) return;
+    setCalendarEditor(event);
+    setCalendarDraft({ title: event.title, startAt: localDateTime(event.startAt), endAt: localDateTime(calendarEnd(event)), location: event.location || "" });
+    setCalendarError("");
+  };
+  const openTodoSuggestion = (action: NextBestAction) => {
+    const todo = suggestedTodos.find((candidate) => candidate.id === action.actionId && candidate.chatId === action.chatId);
+    if (todo) setTodoEditor(todo);
+  };
+  const openReplySuggestion = async (action: NextBestAction) => {
+    if (!action.messageId) {
+      onOpenNextBestAction(action.chatId);
       return;
     }
-    if (focus.actionType === "insight") {
-      await onInsightStatus(focus.chatId, focus.actionId, "confirmed");
+    setReplyEditor(action);
+    setReplyBody("");
+    setReplyError("");
+    setReplyLoading(true);
+    try {
+      const response = await suggestReplyForMessage(action.chatId, action.messageId);
+      setReplyBody(response.body);
+    } catch (error) {
+      setReplyError(error instanceof Error ? error.message : "Could not prepare a reply.");
+    } finally {
+      setReplyLoading(false);
+    }
+  };
+  const openFocus = (action: NextBestAction) => {
+    if (action.actionType === "calendar") return openCalendarSuggestion(action);
+    if (action.actionType === "todo") return openTodoSuggestion(action);
+    if (action.actionType === "reply") return void openReplySuggestion(action);
+    onOpenNextBestAction(action.chatId, action.messageId);
+  };
+  const applyFocus = async (action: NextBestAction) => {
+    if (action.actionType === "calendar") {
+      openCalendarSuggestion(action);
       return;
     }
-    if (focus.actionType === "todo" && focus.kind === "To-do suggestion") {
-      await onTodoStatus(focus.chatId, focus.actionId, "open");
-      hideIntelligenceAction(focus.actionId);
-      setHiddenActionVersion((version) => version + 1);
+    if (action.actionType === "insight") {
+      await onInsightStatus(action.chatId, action.actionId, "confirmed");
       return;
     }
-    onOpenNextBestAction(focus.chatId, focus.messageId);
+    openFocus(action);
   };
   const openTodaysFocus = (item: TodaysFocusItem) => {
     if (item.proactive) void onProactiveDecision(item.proactive, "opened").catch(() => {
@@ -371,6 +419,19 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
     if (!window.confirm(`Remove “${todo.title}” from your to-do list?`)) return;
     await onTodoStatus(todo.chatId, todo.id, "dismissed");
     if (todoEditor?.id === todo.id) setTodoEditor(undefined);
+  };
+  const regenerateCalendarSuggestionTitle = async () => {
+    if (!calendarEditor) return;
+    setCalendarRegeneratingTitle(true);
+    setCalendarError("");
+    try {
+      const title = await onRegenerateCalendarTitle(calendarEditor.chatId, calendarEditor.id);
+      setCalendarDraft((current) => current ? { ...current, title } : current);
+    } catch (error) {
+      setCalendarError(error instanceof Error ? error.message : "Could not generate a title.");
+    } finally {
+      setCalendarRegeneratingTitle(false);
+    }
   };
   return (
     <main className="main-content overview-page">
@@ -541,64 +602,52 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
         <div className="overview-command-rail">
           <section className="panel next-best-panel">
             <div className="panel-heading"><h2>Suggested action</h2><span className={focus ? "attention-label" : "attention-label clear"}>{focus ? "Priority" : "All clear"}</span></div>
-            {focus ? <div className="intelligence-focus next-best-focus">
-              <ContactAvatar name={focus.contactName} src={focusChat?.avatarUrl} className="intelligence-focus-avatar" />
-              <button className="next-best-focus-copy" type="button" onClick={() => onOpenNextBestAction(focus.chatId, focus.messageId)}>
-                <small>{focus.kind}</small><strong dir="auto">{focus.title}</strong><p dir="auto">{focus.actionType === "reply" ? actionSummaries[focus.actionId] || focus.detail : focus.detail}</p>{focusReplyCopy ? <span className="reply-assessment-indicator">{focusReplyCopy.text}</span> : null}
-              </button>
-              <span className="next-best-focus-actions">
-                <button className="next-best-action-control primary" type="button" title={focus.actionType === "reply" ? "Reply in chat" : focus.actionType === "calendar" ? "Add to calendar" : focus.actionType === "todo" ? "Add to to-do list" : "Confirm detail"} aria-label={focus.actionType === "reply" ? "Reply in chat" : focus.actionType === "calendar" ? "Add to calendar" : focus.actionType === "todo" ? "Add to to-do list" : "Confirm detail"} onClick={() => void applyFocus()}>
-                  {focus.actionType === "reply" ? <MessageCircle size={16} /> : focus.actionType === "calendar" ? <CalendarCheck size={16} /> : focus.actionType === "todo" && focus.kind === "To-do suggestion" ? <Check size={16} /> : focus.actionType === "todo" ? <ListTodo size={16} /> : <Brain size={16} />}
-                </button>
-                {focus.actionType !== "reply" ? <button className="next-best-action-control" type="button" title="Open source message" aria-label="Open source message" onClick={() => onOpenNextBestAction(focus.chatId, focus.messageId)}><ExternalLink size={16} /></button> : null}
-                <button className="next-best-action-control dismiss" type="button" title="Dismiss action" aria-label="Dismiss action" onClick={() => void dismissFocus()}><X size={16} /></button>
-              </span>
+            {focusActions.length > 0 ? <div className="next-best-list">
+              {focusActions.map((action) => {
+                const chat = chats.find((candidate) => candidate.id === action.chatId);
+                const replyCopy = action.actionType === "reply" ? replyAssessmentCopy(action.replyAssessment) : undefined;
+                return <div className="intelligence-focus next-best-focus" key={action.actionId}>
+                  <ContactAvatar name={action.contactName} src={chat?.avatarUrl} className="intelligence-focus-avatar" />
+                  <button className="next-best-focus-copy" type="button" onClick={() => openFocus(action)}>
+                    <small>{action.kind}</small><strong dir="auto">{action.title}</strong><p dir="auto">{action.actionType === "reply" ? actionSummaries[action.actionId] || action.detail : action.detail}</p>{replyCopy ? <span className="reply-assessment-indicator">{replyCopy.text}</span> : null}
+                  </button>
+                  <span className="next-best-focus-actions">
+                    <button className="next-best-action-control primary" type="button" title={action.actionType === "reply" ? "Write reply" : action.actionType === "calendar" ? "Review calendar event" : action.actionType === "todo" ? "Review to-do" : "Confirm detail"} aria-label={action.actionType === "reply" ? "Write reply" : action.actionType === "calendar" ? "Review calendar event" : action.actionType === "todo" ? "Review to-do" : "Confirm detail"} onClick={() => void applyFocus(action)}>
+                      {action.actionType === "reply" ? <MessageCircle size={16} /> : action.actionType === "calendar" ? <CalendarCheck size={16} /> : action.actionType === "todo" ? <ListTodo size={16} /> : <Brain size={16} />}
+                    </button>
+                    {action.actionType === "insight" ? <button className="next-best-action-control" type="button" title="Open source message" aria-label="Open source message" onClick={() => onOpenNextBestAction(action.chatId, action.messageId)}><ExternalLink size={16} /></button> : null}
+                    <button className="next-best-action-control dismiss" type="button" title="Dismiss action" aria-label="Dismiss action" onClick={() => void dismissFocus(action)}><X size={16} /></button>
+                  </span>
+                </div>;
+              })}
             </div> : <div className="intelligence-focus caught-up" role="status"><span className="intelligence-focus-symbol"><Sparkles size={19} /></span><span><small>Current status</small><strong>You’re caught up</strong><p>AmirOS will surface the next useful action here.</p></span></div>}
           </section>
 
         </div>
       </div>
-
-      <div className="overview-secondary-grid">
-        <section className="panel metric-panel">
-          <h2>Current session</h2>
-          <div className="spend-line">
-            <strong>${formattedCost}</strong>
-            <span>of ${budget} monthly target</span>
-          </div>
-          <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
-          <p>{compactNumber(data.usage.inputTokens + data.usage.outputTokens)} text tokens · {data.preset} preset</p>
-          <button className="text-button panel-link" onClick={() => onNavigate("usage")}>View usage details <ArrowRight size={16} /></button>
-        </section>
-
-        <section className="panel modes-panel">
-          <h2>Reply modes</h2>
-          {(["auto", "suggest", "off"] as const).map((mode) => (
-            <div className="mode-row" key={mode}>
-              <span className={`mode-icon ${mode}`}>{mode === "auto" ? <Bot size={17} /> : mode === "suggest" ? <PencilLine size={17} /> : <Pause size={17} />}</span>
-              <span className="row-copy"><strong className="capitalize">{mode}</strong><small>{mode === "auto" ? "Replies sent automatically" : mode === "suggest" ? "Suggestions for review" : "Trigger-only contacts"}</small></span>
-              <strong>{modeCounts[mode]}</strong>
-              <span className={`mode-percent ${mode}`}>{Math.round((modeCounts[mode] / totalModeCount) * 100)}%</span>
-            </div>
-          ))}
-          <button className="text-button panel-link" onClick={() => onNavigate("contacts")}>Manage modes <ArrowRight size={16} /></button>
-        </section>
-
-        <section className="panel activity-panel overview-secondary-activity">
-          <div className="panel-heading"><h2>Recent activity</h2><small>Live</small></div>
-          <div className="activity-list">
-            {data.activities.slice(0, 3).map((activity) => (
-              <div className="activity-row" key={activity.id}>
-                <span className="activity-symbol">{activityIcon(activity.kind)}</span>
-                <span className="activity-line" />
-                <span className="row-copy"><strong>{activity.title}</strong><small>{activity.detail}</small></span>
-                <time>{formatTime(activity.timestamp)}</time>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
       {todoEditor ? <TodoEditorDialog todo={todoEditor} onClose={() => setTodoEditor(undefined)} onSave={(patch) => onTodoUpdate(todoEditor.chatId, todoEditor.id, patch)} /> : null}
+      {calendarEditor && calendarDraft ? <div className="event-detail-backdrop" role="presentation" onMouseDown={() => !calendarSaving && setCalendarEditor(undefined)}>
+        <section className="event-detail-bubble reply-suggestion-editor" role="dialog" aria-modal="true" aria-labelledby="overview-calendar-suggestion-title" onMouseDown={(event) => event.stopPropagation()}>
+          <header><span><small>Calendar suggestion</small><h2 id="overview-calendar-suggestion-title">Review event</h2></span><button className="icon-button" type="button" aria-label="Close" disabled={calendarSaving} onClick={() => setCalendarEditor(undefined)}><X size={18} /></button></header>
+          <CalendarEventForm draft={calendarDraft} error={calendarError} saving={calendarSaving} regeneratingTitle={calendarRegeneratingTitle} submitLabel="Add to calendar" onChange={setCalendarDraft} onCancel={() => setCalendarEditor(undefined)} onRegenerateTitle={() => void regenerateCalendarSuggestionTitle()} onSubmit={() => void (async () => {
+            const startAt = new Date(calendarDraft.startAt).getTime(); const endAt = new Date(calendarDraft.endAt).getTime();
+            if (!calendarDraft.title.trim() || !Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt <= startAt) { setCalendarError("Add a title and a valid end time after the start."); return; }
+            setCalendarSaving(true); setCalendarError("");
+            try { await onCalendarStatus(calendarEditor.chatId, calendarEditor.id, { status: "confirmed", title: calendarDraft.title.trim(), startAt, endAt, allDay: false, location: calendarDraft.location.trim() || undefined }); setCalendarEditor(undefined); }
+            catch (error) { setCalendarError(error instanceof Error ? error.message : "Could not save this event."); }
+            finally { setCalendarSaving(false); }
+          })()} />
+        </section>
+      </div> : null}
+      {replyEditor ? <div className="event-detail-backdrop" role="presentation" onMouseDown={() => !replySending && setReplyEditor(undefined)}>
+        <section className="event-detail-bubble reply-suggestion-editor" role="dialog" aria-modal="true" aria-labelledby="overview-reply-suggestion-title" onMouseDown={(event) => event.stopPropagation()}>
+          <header><span><small>Reply suggestion</small><h2 id="overview-reply-suggestion-title">Reply to {replyEditor.contactName}</h2></span><button className="icon-button" type="button" aria-label="Close" disabled={replySending} onClick={() => setReplyEditor(undefined)}><X size={18} /></button></header>
+          <p className="reply-suggestion-context" dir="auto">{replyEditor.detail}</p>
+          <label className="reply-suggestion-compose"><span>Your reply</span><textarea autoFocus value={replyBody} placeholder={replyLoading ? "Preparing a reply…" : "Write a reply"} disabled={replyLoading || replySending} onChange={(event) => setReplyBody(event.target.value)} /></label>
+          {replyError ? <p className="event-action-error">{replyError}</p> : null}
+          <footer><button className="button compact" type="button" disabled={replySending} onClick={() => setReplyEditor(undefined)}>Cancel</button><button className="button primary compact" type="button" disabled={replyLoading || replySending || !replyBody.trim()} onClick={() => void (async () => { if (!replyEditor.messageId) return; setReplySending(true); setReplyError(""); try { await onReplyToMessage(replyEditor.chatId, replyEditor.messageId, replyBody.trim()); setReplyEditor(undefined); } catch (error) { setReplyError(error instanceof Error ? error.message : "Could not send this reply."); } finally { setReplySending(false); } })()}><MessageCircle size={15} />{replySending ? "Sending…" : "Send reply"}</button></footer>
+        </section>
+      </div> : null}
     </main>
   );
 }
