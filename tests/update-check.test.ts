@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AMIROS_LATEST_RELEASE_URL, checkForAmirosUpdate, compareVersions } from "../src/update-check.js";
+import { AMIROS_LATEST_RELEASE_URL, checkForAmirosUpdate, checkForManagedAmirosUpdate, compareVersions } from "../src/update-check.js";
 
 describe("AmirOS update checks", () => {
   it("compares release versions by each numeric part", () => {
@@ -31,5 +31,38 @@ describe("AmirOS update checks", () => {
       fetcher: async () => ({ ok: true, json: async () => ({ tag_name: "v0.5.1", prerelease: true }) }),
     });
     expect(result.status).toBe("unavailable");
+  });
+
+  it("does not prompt a managed Mac while its channel is held", () => {
+    expect(checkForManagedAmirosUpdate("0.10.10", { action: "hold" }, 123)).toMatchObject({
+      status: "held",
+      currentVersion: "0.10.10",
+      checkedAt: 123,
+    });
+  });
+
+  it("offers only a fully specified release approved for a managed Mac", () => {
+    const update = checkForManagedAmirosUpdate("0.10.10", {
+      action: "available",
+      version: "v0.10.11",
+      downloadUrl: "https://downloads.example.com/AmirOS-v0.10.11.zip",
+      sha256: "a".repeat(64),
+      releaseNotesUrl: "https://github.com/GreenerX/AmirOS-app/releases/tag/v0.10.11",
+    }, 456);
+    expect(update).toMatchObject({
+      status: "available",
+      latestVersion: "0.10.11",
+      downloadUrl: "https://downloads.example.com/AmirOS-v0.10.11.zip",
+      sha256: "a".repeat(64),
+      checkedAt: 456,
+    });
+  });
+
+  it("fails closed when an approved release is incomplete", () => {
+    expect(checkForManagedAmirosUpdate("0.10.10", {
+      action: "available",
+      version: "0.10.11",
+      downloadUrl: "https://downloads.example.com/AmirOS-v0.10.11.zip",
+    })).toMatchObject({ status: "unavailable" });
   });
 });

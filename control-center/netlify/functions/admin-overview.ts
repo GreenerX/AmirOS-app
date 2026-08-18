@@ -19,12 +19,12 @@ export default async (request: Request, _context: Context): Promise<Response> =>
   if (operator instanceof Response) return operator;
 
   const [accountsResult, devicesResult, definitionsResult, assignmentsResult, ticketsResult, applicationsResult] = await Promise.all([
-    client.from("control_accounts").select("netlify_user_id,email,display_name,access_status,setup_state,release_channel,created_at").order("created_at", { ascending: false }),
+    client.from("control_accounts").select("netlify_user_id,email,display_name,first_name,last_name,access_status,setup_state,release_channel,created_at").order("created_at", { ascending: false }),
     client.from("control_devices").select("id,account_id,label,platform,app_version,first_seen_at,last_seen_at,access_status,revoked_at,whatsapp_connected_at,first_people_selected_at").order("last_seen_at", { ascending: false }),
     client.from("control_feature_definitions").select("feature_key,name,description,default_enabled").order("feature_key"),
     client.from("control_feature_assignments").select("account_id,feature_key,enabled"),
     client.from("control_support_tickets").select("id,account_id,type,subject,details,state,created_at,updated_at").order("created_at", { ascending: false }).limit(25),
-    client.from("control_beta_applications").select("id,full_name,email,interest,state,created_at,approved_at,invited_at,account_user_id").order("created_at", { ascending: false }).limit(100),
+    client.from("control_beta_applications").select("id,full_name,first_name,last_name,email,interest,source,internal_note,archived_at,state,created_at,approved_at,invited_at,account_user_id").order("created_at", { ascending: false }).limit(100),
   ]);
   if (accountsResult.error || devicesResult.error || definitionsResult.error || assignmentsResult.error || ticketsResult.error || applicationsResult.error) return databaseUnavailable();
 
@@ -66,6 +66,8 @@ export default async (request: Request, _context: Context): Promise<Response> =>
         id: account.netlify_user_id,
         initials: initials(account.display_name, account.email),
         displayName: account.display_name || account.email,
+        firstName: account.first_name || undefined,
+        lastName: account.last_name || undefined,
         email: account.email,
         status: account.access_status,
         setupState: account.setup_state,
@@ -104,8 +106,13 @@ export default async (request: Request, _context: Context): Promise<Response> =>
     }),
     applications: (applicationsResult.data || []).map((application) => ({
       id: application.id,
-      fullName: application.full_name,
-      email: application.email,
+        fullName: application.full_name,
+        firstName: application.first_name || undefined,
+        lastName: application.last_name || undefined,
+        email: application.email,
+        source: application.source === "manual" ? "manual" : "landing",
+        internalNote: application.internal_note || undefined,
+        archivedAt: application.archived_at || undefined,
       interest: application.interest || undefined,
       state: application.state,
       requestedAt: application.created_at,

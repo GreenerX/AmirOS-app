@@ -30,9 +30,12 @@ export type AmirOSRelease = {
 };
 
 export type AmirOSUpdateStatus = {
-  status: "available" | "current" | "unavailable";
+  status: "available" | "current" | "held" | "unavailable";
   currentVersion: string;
   latestVersion?: string;
+  downloadUrl?: string;
+  sha256?: string;
+  releaseNotesUrl?: string;
   checkedAt: number;
   detail?: string;
 };
@@ -49,6 +52,14 @@ export type ControlCenterStatus = {
   setupState?: "setup_required" | "device_pending" | "active";
   activationRequired?: boolean;
   releaseChannel?: "internal" | "beta" | "stable";
+  release?: {
+    action: "available" | "hold" | "none";
+    channel: "internal" | "beta" | "stable";
+    version?: string;
+    downloadUrl?: string;
+    sha256?: string;
+    releaseNotesUrl?: string;
+  };
   features: Array<{ id: string; enabled: boolean }>;
 };
 export type ThemeName =
@@ -163,6 +174,7 @@ export type DashboardData = {
     };
     models?: { text: string; image: string; voice: string };
     ownerProfile: { displayName: string; avatarUrl: string };
+    deletedMessageArchive: { enabled: boolean; saveMedia: boolean };
   };
 };
 
@@ -187,7 +199,26 @@ export type ChatMessage = {
   timestamp: number;
   type: string;
   hasMedia: boolean;
+  /** The source message could no longer be quoted, so this was safely sent as a new chat message. */
+  sentAsNewMessage?: boolean;
   mediaUrl?: string;
+  /** Local-only placeholder for a message revoked in WhatsApp. Never enters memory or AI context. */
+  deletedArchive?: {
+    id: string;
+    kind: "deleted" | "view_once";
+    deletedAt: number;
+    hasText: boolean;
+    hasMedia: boolean;
+    viewOnce: boolean;
+    revealed?: boolean;
+    /** Content fetched only after the owner explicitly reveals this local archive entry. */
+    revealedText?: string;
+    revealedMediaUrl?: string;
+  };
+  /** A message deleted in WhatsApp that was not present in the local archive. */
+  deleted?: {
+    deletedAt: number;
+  };
   senderId?: string;
   senderName?: string;
   quotedMessage?: {
@@ -433,11 +464,23 @@ export type ProactiveIntelligenceItem = {
 export type IntelligenceSearchResult = {
   answer: string;
   evidenceIds: string[];
+  /** Ordered semantic icon tokens for bulleted answer points. */
+  listIcons?: AnswerPointIcon[];
+  /** Stable direct-contact identity resolved from a full name or picker choice. */
+  resolvedContactId?: string;
+  disambiguation?: Array<{
+    chatId: string;
+    contactName: string;
+    /** Optional presentation context for a compact person-picker row. */
+    detail?: string;
+    avatarUrl?: string;
+    lastInteractionAt?: number;
+  }>;
   sources: Array<{
     id: string;
     chatId: string;
     contactName: string;
-    kind: "message" | "memory" | "insight" | "commitment" | "profile" | "calendar_event";
+    kind: "message" | "memory" | "insight" | "commitment" | "todo" | "profile" | "calendar_event";
     content: string;
     senderName?: string;
     explanation?: MemoryExplanation;
@@ -445,6 +488,25 @@ export type IntelligenceSearchResult = {
     score: number;
   }>;
 };
+
+export type AnswerPointIcon =
+  | "calendar"
+  | "collaboration"
+  | "communication"
+  | "connection"
+  | "event"
+  | "home"
+  | "idea"
+  | "location"
+  | "money"
+  | "music"
+  | "people"
+  | "preference"
+  | "task"
+  | "time"
+  | "travel"
+  | "wellbeing"
+  | "work";
 
 export type TerminalLog = {
   output: string;

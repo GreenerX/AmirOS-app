@@ -13,6 +13,8 @@ import {
   MessageCircle,
   PencilLine,
   Sparkles,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
   X,
 } from "lucide-react";
@@ -44,6 +46,7 @@ type OverviewProps = {
   onCalendarStatus: (chatId: string, eventId: string, patch: { status?: CalendarEvent["status"]; title?: string; startAt?: number; endAt?: number; allDay?: boolean; location?: string }) => Promise<void>;
   onRegenerateCalendarTitle: (chatId: string, eventId: string) => Promise<string>;
   onReplyToMessage: (chatId: string, messageId: string, body: string) => Promise<void>;
+  onReplySuggestionFeedback?: (chatId: string, messageId: string, input: { rating: "helpful" | "needs_work"; reasons?: string[]; note?: string }) => Promise<void>;
   onInsightStatus: (chatId: string, insightId: string, status: "confirmed" | "outdated") => Promise<void>;
   onDismissNextBestAction: (action: NextBestAction) => Promise<void>;
   onProactiveDecision: (item: ProactiveIntelligenceItem, status: "opened" | "dismissed" | "resolved") => Promise<void>;
@@ -150,7 +153,7 @@ function calendarEnd(event: CalendarEvent) {
   return event.endAt && toMilliseconds(event.endAt) > startAt ? toMilliseconds(event.endAt) : startAt + 60 * 60 * 1_000;
 }
 
-export function Overview({ data, chats, intelligence, onNavigate, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onTodoStatus, onTodoUpdate, onCalendarStatus, onRegenerateCalendarTitle, onReplyToMessage, onInsightStatus, onDismissNextBestAction, onProactiveDecision }: OverviewProps) {
+export function Overview({ data, chats, intelligence, onNavigate, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onTodoStatus, onTodoUpdate, onCalendarStatus, onRegenerateCalendarTitle, onReplyToMessage, onReplySuggestionFeedback, onInsightStatus, onDismissNextBestAction, onProactiveDecision }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
   const [todoFilter, setTodoFilter] = useState<TodoFilter>("open");
@@ -173,6 +176,10 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
   const [replyLoading, setReplyLoading] = useState(false);
   const [replySending, setReplySending] = useState(false);
   const [replyError, setReplyError] = useState("");
+  const [replyFeedback, setReplyFeedback] = useState<"helpful" | "needs_work">();
+  const [replyFeedbackReasons, setReplyFeedbackReasons] = useState<string[]>([]);
+  const [replyFeedbackNote, setReplyFeedbackNote] = useState("");
+  const [replyFeedbackState, setReplyFeedbackState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   useEffect(() => {
     const interval = window.setInterval(() => setDeviceTime(new Date()), 1_000);
     return () => window.clearInterval(interval);
@@ -352,12 +359,53 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
     setReplyEditor(action);
     setReplyBody("");
     setReplyError("");
+    setReplyFeedback(undefined);
+    setReplyFeedbackReasons([]);
+    setReplyFeedbackNote("");
+    setReplyFeedbackState("idle");
     setReplyLoading(true);
     try {
       const response = await suggestReplyForMessage(action.chatId, action.messageId);
       setReplyBody(response.body);
     } catch (error) {
       setReplyError(error instanceof Error ? error.message : "Could not prepare a reply.");
+    } finally {
+      setReplyLoading(false);
+    }
+  };
+  const saveHelpfulReplyFeedback = async () => {
+    if (!replyEditor?.messageId || !onReplySuggestionFeedback) return;
+    setReplyFeedback("helpful");
+    setReplyFeedbackState("saving");
+    try {
+      await onReplySuggestionFeedback(replyEditor.chatId, replyEditor.messageId, { rating: "helpful" });
+      setReplyFeedbackState("saved");
+    } catch {
+      setReplyFeedbackState("error");
+    }
+  };
+  const improveReplyFromFeedback = async () => {
+    if (!replyEditor?.messageId || !onReplySuggestionFeedback) return;
+    const note = replyFeedbackNote.trim() || undefined;
+    if (replyFeedbackReasons.length === 0 && !note) return;
+    setReplyFeedbackState("saving");
+    setReplyLoading(true);
+    setReplyError("");
+    try {
+      await onReplySuggestionFeedback(replyEditor.chatId, replyEditor.messageId, {
+        rating: "needs_work",
+        reasons: replyFeedbackReasons,
+        note,
+      });
+      const response = await suggestReplyForMessage(replyEditor.chatId, replyEditor.messageId);
+      setReplyBody(response.body);
+      setReplyFeedback(undefined);
+      setReplyFeedbackReasons([]);
+      setReplyFeedbackNote("");
+      setReplyFeedbackState("saved");
+    } catch (error) {
+      setReplyFeedbackState("error");
+      setReplyError(error instanceof Error ? error.message : "Could not improve this reply.");
     } finally {
       setReplyLoading(false);
     }
@@ -576,7 +624,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
                   <ArrowRight size={15} />
                 </button>;
               })}
-            </div> : <div className="overview-agenda-empty overview-today-agenda-empty"><CalendarDays size={22} /><span><strong>Your day is clear.</strong><small>Nothing is scheduled for today yet.</small></span></div>}
+            </div> : <div className="overview-agenda-empty overview-today-agenda-empty overview-empty-state"><CalendarDays size={22} /><span><strong>Your day is clear.</strong><small>Nothing is scheduled for today yet.</small></span></div>}
             <footer className="overview-today-agenda-footer"><button className="text-button" type="button" onClick={() => onNavigate("calendar")}>View full agenda <ArrowRight size={15} /></button></footer>
           </section>
 
@@ -594,14 +642,14 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
                 <button className="overview-todo-title" type="button" onClick={() => setTodoEditor(todo)} title={`Edit ${todo.title}`}><span className={`overview-todo-priority priority-${todo.priority || "normal"}`} role="img" aria-label={`${todo.priority || "normal"} priority`} /><strong dir="auto">{todo.title}</strong></button>
                 <span className="overview-todo-actions"><button className="overview-todo-action" type="button" title={`Edit ${todo.title}`} aria-label={`Edit ${todo.title}`} onClick={() => setTodoEditor(todo)}><PencilLine size={14} /></button><button className="overview-todo-action danger" type="button" title={`Remove ${todo.title}`} aria-label={`Remove ${todo.title}`} onClick={() => void removeTodo(todo)}><Trash2 size={14} /></button></span>
               </div>)}
-            </div> : <div className="overview-agenda-empty overview-todo-filter-empty"><ListTodo size={19} /><span><strong>No {todoFilter === "completed" ? "completed" : "open"} to-dos</strong><small>Try another filter to see saved tasks.</small></span></div>}
-            </> : suggestedTodos.length > 0 ? <div className="overview-agenda-empty"><ListTodo size={19} /><span><strong>{suggestedTodos.length} task {suggestedTodos.length === 1 ? "suggestion" : "suggestions"} waiting</strong><small>Review a message before it becomes a to-do.</small></span></div> : <div className="overview-agenda-empty"><ListTodo size={19} /><span><strong>No to-dos yet</strong><small>Actionable messages will appear here for review.</small></span></div>}
+            </div> : <div className="overview-agenda-empty overview-todo-filter-empty overview-empty-state"><ListTodo size={19} /><span><strong>No {todoFilter === "completed" ? "completed" : "open"} to-dos</strong><small>Try another filter to see saved tasks.</small></span></div>}
+            </> : suggestedTodos.length > 0 ? <div className="overview-agenda-empty overview-empty-state"><ListTodo size={19} /><span><strong>{suggestedTodos.length} task {suggestedTodos.length === 1 ? "suggestion" : "suggestions"} waiting</strong><small>Review a message before it becomes a to-do.</small></span></div> : <div className="overview-agenda-empty overview-empty-state"><ListTodo size={19} /><span><strong>No to-dos yet</strong><small>Actionable messages will appear here for review.</small></span></div>}
           </section>
         </div>
 
         <div className="overview-command-rail">
           <section className="panel next-best-panel">
-            <div className="panel-heading"><h2>Suggested action</h2><span className={focus ? "attention-label" : "attention-label clear"}>{focus ? "Priority" : "All clear"}</span></div>
+            <div className="panel-heading"><h2>Suggested actions</h2><span className={focus ? "attention-label" : "attention-label clear"}>{focus ? "Priority" : "All clear"}</span></div>
             {focusActions.length > 0 ? <div className="next-best-list">
               {focusActions.map((action) => {
                 const chat = chats.find((candidate) => candidate.id === action.chatId);
@@ -640,10 +688,25 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
         </section>
       </div> : null}
       {replyEditor ? <div className="event-detail-backdrop" role="presentation" onMouseDown={() => !replySending && setReplyEditor(undefined)}>
-        <section className="event-detail-bubble reply-suggestion-editor" role="dialog" aria-modal="true" aria-labelledby="overview-reply-suggestion-title" onMouseDown={(event) => event.stopPropagation()}>
-          <header><span><small>Reply suggestion</small><h2 id="overview-reply-suggestion-title">Reply to {replyEditor.contactName}</h2></span><button className="icon-button" type="button" aria-label="Close" disabled={replySending} onClick={() => setReplyEditor(undefined)}><X size={18} /></button></header>
+        <section className="event-detail-bubble reply-suggestion-editor reply-suggestion-editor--reply" role="dialog" aria-modal="true" aria-labelledby="overview-reply-suggestion-title" onMouseDown={(event) => event.stopPropagation()}>
+          <header><ContactAvatar name={replyEditor.contactName} src={chats.find((chat) => chat.id === replyEditor.chatId)?.avatarUrl} className="reply-suggestion-avatar" /><span><small>Reply suggestion</small><h2 id="overview-reply-suggestion-title">Reply to {replyEditor.contactName}</h2></span><button className="icon-button" type="button" aria-label="Close" disabled={replySending} onClick={() => setReplyEditor(undefined)}><X size={18} /></button></header>
           <p className="reply-suggestion-context" dir="auto">{replyEditor.detail}</p>
           <label className="reply-suggestion-compose"><span>Your reply</span><textarea autoFocus value={replyBody} placeholder={replyLoading ? "Preparing a reply…" : "Write a reply"} disabled={replyLoading || replySending} onChange={(event) => setReplyBody(event.target.value)} /></label>
+          <div className="reply-suggestion-compose-tools">
+            <button className="reply-draft-clear" type="button" disabled={replyLoading || replySending || !replyBody} onClick={() => { setReplyBody(""); setReplyError(""); }}>Clear draft</button>
+            {onReplySuggestionFeedback && replyEditor.messageId ? <div className="reply-suggestion-feedback-quick" aria-label="Reply suggestion feedback">
+              <span className="sr-only" aria-live="polite">{replyFeedbackState === "saved" ? "Feedback saved for future drafts." : replyFeedbackState === "error" ? "Could not save feedback. Try again." : ""}</span>
+              <button type="button" className={replyFeedback === "helpful" ? "selected helpful" : ""} aria-label="This sounds like me" title="This sounds like me" disabled={replyLoading || replySending || replyFeedbackState === "saving"} onClick={() => void saveHelpfulReplyFeedback()}><ThumbsUp size={15} /></button>
+              <button type="button" className={replyFeedback === "needs_work" ? "selected" : ""} aria-label="This needs work" title="This needs work" disabled={replyLoading || replySending || replyFeedbackState === "saving"} onClick={() => { setReplyFeedback("needs_work"); setReplyFeedbackState("idle"); }}><ThumbsDown size={15} /></button>
+            </div> : null}
+          </div>
+          {replyFeedbackState === "error" ? <p className="reply-feedback-error" role="alert">Couldn’t save that feedback. Please try again.</p> : null}
+          {onReplySuggestionFeedback && replyEditor.messageId && replyFeedback === "needs_work" ? <section className="reply-suggestion-feedback-details" aria-label="Improve this reply">
+            <div><strong>What should be better?</strong><small>Your feedback helps shape future replies in this chat.</small></div>
+            <div className="reply-suggestion-feedback-reasons">{["Doesn’t sound like me", "Too formal", "Too long", "Missed the point"].map((reason) => <button type="button" className={replyFeedbackReasons.includes(reason) ? "selected" : ""} key={reason} onClick={() => setReplyFeedbackReasons((current) => current.includes(reason) ? current.filter((item) => item !== reason) : [...current, reason])}>{reason}</button>)}</div>
+            <textarea className="reply-suggestion-feedback-note" value={replyFeedbackNote} maxLength={320} placeholder="Optional note" disabled={replyLoading || replySending} onChange={(event) => setReplyFeedbackNote(event.target.value)} />
+            <button className="button compact reply-feedback-save" type="button" disabled={replyLoading || replySending || replyFeedbackState === "saving" || (replyFeedbackReasons.length === 0 && !replyFeedbackNote.trim())} onClick={() => void improveReplyFromFeedback()}>{replyFeedbackState === "saving" ? "Improving…" : "Improve reply"}</button>
+          </section> : null}
           {replyError ? <p className="event-action-error">{replyError}</p> : null}
           <footer><button className="button compact" type="button" disabled={replySending} onClick={() => setReplyEditor(undefined)}>Cancel</button><button className="button primary compact" type="button" disabled={replyLoading || replySending || !replyBody.trim()} onClick={() => void (async () => { if (!replyEditor.messageId) return; setReplySending(true); setReplyError(""); try { await onReplyToMessage(replyEditor.chatId, replyEditor.messageId, replyBody.trim()); setReplyEditor(undefined); } catch (error) { setReplyError(error instanceof Error ? error.message : "Could not send this reply."); } finally { setReplySending(false); } })()}><MessageCircle size={15} />{replySending ? "Sending…" : "Send reply"}</button></footer>
         </section>

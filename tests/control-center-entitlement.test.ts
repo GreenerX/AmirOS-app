@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ControlCenterEntitlement, controlCenterFeatureEnabled } from "../src/control-center-entitlement.js";
+import { ControlCenterEntitlement, controlCenterFeatureEnabled, validControlCenterReleaseDecision } from "../src/control-center-entitlement.js";
 
 type RecordedRequest = { url: string; body: Record<string, unknown> };
 
@@ -16,6 +16,25 @@ describe("ControlCenterEntitlement", () => {
     expect(controlCenterFeatureEnabled({ configured: true, status: "pending", features: [] }, "auto-mode")).toBe(true);
     expect(controlCenterFeatureEnabled({ configured: true, status: "active", features: [{ id: "auto-mode", enabled: false }] }, "auto-mode")).toBe(false);
     expect(controlCenterFeatureEnabled({ configured: true, status: "offline_grace", features: [{ id: "auto-mode", enabled: true }] }, "auto-mode")).toBe(true);
+  });
+
+  it("keeps only a complete, safe Control Center release decision", () => {
+    expect(validControlCenterReleaseDecision({ action: "hold", channel: "beta", version: "0.10.11" }))
+      .toEqual({ action: "hold", channel: "beta" });
+    expect(validControlCenterReleaseDecision({
+      action: "available",
+      channel: "beta",
+      version: "v0.10.11",
+      downloadUrl: "https://downloads.example.com/AmirOS-v0.10.11.zip",
+      sha256: "b".repeat(64),
+    })).toMatchObject({ action: "available", channel: "beta", version: "0.10.11" });
+    expect(validControlCenterReleaseDecision({
+      action: "available",
+      channel: "beta",
+      version: "0.10.11",
+      downloadUrl: "http://downloads.example.com/AmirOS.zip",
+      sha256: "b".repeat(64),
+    })).toBeUndefined();
   });
 
   it("keeps an unconfigured copy local and does not create a credential", () => {

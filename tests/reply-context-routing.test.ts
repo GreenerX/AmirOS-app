@@ -6,7 +6,12 @@ import type { Message } from "whatsapp-web.js";
 import { buildResponseInput, calendarEventEvidenceForSource, type AiService, type ReplyContext } from "../src/ai.js";
 import { AmirosState } from "../src/amiros-state.js";
 import type { AppConfig } from "../src/config.js";
-import { MessageProcessor, hasAutoReplyPersonaLeak, naturalFailureMessage } from "../src/processor.js";
+import {
+  MessageProcessor,
+  hasAutoReplyPersonaLeak,
+  hasRepeatedAutoModeStyleAcknowledgement,
+  naturalFailureMessage,
+} from "../src/processor.js";
 
 const directories: string[] = [];
 
@@ -83,6 +88,22 @@ describe("AI reply context privacy routing", () => {
     expect(hasAutoReplyPersonaLeak("[Amir Friedman] It’s me 😂", "Yuvi", "Amir Friedman")).toBe(true);
     expect(hasAutoReplyPersonaLeak("I'm Jordan's brother.", "Yuvi", "Jordan Doe")).toBe(true);
     expect(hasAutoReplyPersonaLeak("Haha, I just got home.", "Yuvi")).toBe(false);
+  });
+
+  it("holds a repeated Auto Mode repair acknowledgement instead of sending it twice", () => {
+    const memory = [{
+      role: "assistant",
+      author: "assistant",
+      content: "Fair enough. No more emojis. I’ll keep it normal.",
+    }];
+    expect(hasRepeatedAutoModeStyleAcknowledgement(
+      "Fair. I’ll stop being annoying and keep it normal.",
+      memory,
+    )).toBe(true);
+    expect(hasRepeatedAutoModeStyleAcknowledgement(
+      "I can meet you at eight.",
+      memory,
+    )).toBe(false);
   });
 
   it("keeps owner voice examples unlabeled in Auto Mode context", () => {

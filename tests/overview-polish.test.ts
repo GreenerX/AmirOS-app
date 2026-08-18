@@ -68,8 +68,10 @@ describe("Overview polish", () => {
     expect(overview).not.toContain("overview-secondary-grid");
     expect(overview).not.toContain("overview-secondary-activity");
     expect(overview).toContain("next-best-list");
+    expect(overview).toContain("Suggested actions");
     expect(overview).toContain("CalendarEventForm");
     expect(overview).toContain("suggestReplyForMessage");
+    expect(overview).toContain("Reply to {replyEditor.contactName}");
     expect(overview).toContain("filteredTrackedTodos.map");
     expect(overview).toContain("View full agenda");
     expect(overview).toContain("Nothing is scheduled for today yet.");
@@ -108,6 +110,7 @@ describe("Overview polish", () => {
     expect(styles).toContain("flex-wrap: nowrap");
     expect(styles).toContain("overflow-x: auto");
     expect(styles).toContain("height: 360px");
+    expect(styles).toContain(".event-detail-bubble.reply-suggestion-editor > header { grid-template-columns: minmax(0, 1fr) auto; }");
     expect(styles).toContain("grid-auto-rows: 48px");
     expect(styles).toContain('.overview-today-agenda[data-event-count="3"]');
     expect(styles).toContain('.overview-today-agenda[data-event-count="4"]');

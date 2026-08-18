@@ -1,5 +1,6 @@
 export type AccessStatus = "active" | "paused" | "revoked";
 export type ReleaseChannel = "internal" | "beta" | "stable";
+export type ReleaseMode = "hold" | "available";
 export type SetupState = "setup_required" | "device_pending" | "active";
 export type BetaApplicationState = "requested" | "reviewing" | "approved" | "invited" | "device_pending" | "active" | "declined";
 export type ActivationStepId = "account_created" | "mac_connection" | "mac_approved" | "whatsapp_connected" | "first_people_selected";
@@ -58,6 +59,8 @@ export type AdminUser = {
   id: string;
   initials: string;
   displayName: string;
+  firstName?: string;
+  lastName?: string;
   email: string;
   status: AccessStatus;
   setupState: SetupState;
@@ -73,7 +76,12 @@ export type AdminUser = {
 export type BetaApplication = {
   id: string;
   fullName: string;
+  firstName?: string;
+  lastName?: string;
   email: string;
+  source?: "landing" | "manual";
+  internalNote?: string;
+  archivedAt?: string;
   interest?: string;
   state: BetaApplicationState;
   requestedAt: string;
@@ -99,4 +107,28 @@ export type AdminOverview = {
   users: AdminUser[];
   tickets: SupportTicket[];
   applications: BetaApplication[];
+};
+
+export type ManagedRelease = {
+  id: number;
+  channel: ReleaseChannel;
+  version: string;
+  downloadUrl: string;
+  sha256: string;
+  releaseNotesUrl?: string;
+  publishedAt?: string;
+  isActive: boolean;
+  createdAt: string;
+};
+
+export type ReleaseChannelControl = {
+  channel: ReleaseChannel;
+  mode: ReleaseMode;
+  approvedReleaseId?: number;
+  updatedAt: string;
+};
+
+export type ReleaseControlSnapshot = {
+  channels: ReleaseChannelControl[];
+  releases: ManagedRelease[];
 };

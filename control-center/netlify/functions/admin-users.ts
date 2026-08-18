@@ -12,6 +12,8 @@ type UpdateInput = {
   releaseChannel?: unknown;
   featureId?: unknown;
   enabled?: unknown;
+  firstName?: unknown;
+  lastName?: unknown;
 };
 
 export default async (request: Request, _context: Context): Promise<Response> => {
@@ -24,17 +26,29 @@ export default async (request: Request, _context: Context): Promise<Response> =>
   const hasAccessChange = typeof input.accessStatus === "string";
   const hasChannelChange = typeof input.releaseChannel === "string";
   const hasFeatureChange = typeof input.featureId === "string" || typeof input.enabled === "boolean";
-  if (Number(hasAccessChange) + Number(hasChannelChange) + Number(hasFeatureChange) !== 1) {
-    return json({ message: "Submit one access, channel, or feature change at a time." }, 400);
+  const hasProfileChange = typeof input.firstName === "string" || typeof input.lastName === "string";
+  if (Number(hasAccessChange) + Number(hasChannelChange) + Number(hasFeatureChange) + Number(hasProfileChange) !== 1) {
+    return json({ message: "Submit one access, channel, feature, or profile change at a time." }, 400);
   }
   if (hasAccessChange && !accessStatuses.has(input.accessStatus as string)) return json({ message: "Choose a valid access status." }, 400);
   if (hasChannelChange && !releaseChannels.has(input.releaseChannel as string)) return json({ message: "Choose a valid release channel." }, 400);
   if (hasFeatureChange && (typeof input.featureId !== "string" || typeof input.enabled !== "boolean")) return json({ message: "Choose a feature and whether it is enabled." }, 400);
+  if (hasProfileChange && (typeof input.firstName !== "string" || typeof input.lastName !== "string")) return json({ message: "Enter a first and last name." }, 400);
 
   const client = getSupabaseAdmin();
   if (client instanceof Response) return client;
   const operator = await ensureControlAccount(client, admin);
   if (operator instanceof Response) return operator;
+  if (hasProfileChange) {
+    const { error } = await client.rpc("control_update_account_profile", {
+      p_actor_user_id: operator.netlify_user_id,
+      p_target_user_id: input.userId,
+      p_first_name: input.firstName,
+      p_last_name: input.lastName,
+    });
+    if (error) return databaseUnavailable();
+    return json({ ok: true });
+  }
   const { error } = await client.rpc("control_update_account_access", {
     p_actor_user_id: operator.netlify_user_id,
     p_target_user_id: input.userId,

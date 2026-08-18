@@ -126,6 +126,46 @@ describe("relationship intelligence", () => {
     expect(result).toMatchObject({
       requested: true, briefs: [], disambiguation: ["David Cohen", "David Levy"],
     });
+    expect(result.disambiguationCandidates).toEqual([
+      { chatId: "david-one@c.us", contactName: "David Cohen" },
+      { chatId: "david-two@c.us", contactName: "David Levy" },
+    ]);
+  });
+
+  it("disambiguates a short status question before a group can become the selected identity", () => {
+    const state = createState();
+    state.rememberChatName("michelle-soffen@c.us", "Michelle Soffen");
+    state.rememberChatName("michelle-chechi@c.us", "Michelle Chechi");
+    state.rememberChatName("wonder-crew@g.us", "Wonder Crew");
+    state.rememberMessage("michelle-soffen@c.us", { role: "user", author: "contact", content: "Hi", timestamp: NOW });
+    state.rememberMessage("michelle-chechi@c.us", { role: "user", author: "contact", content: "Hi", timestamp: NOW });
+    state.rememberMessage("wonder-crew@g.us", {
+      role: "user", author: "group_member", senderName: "Michelle Soffen",
+      content: "I am tired today", timestamp: NOW - 30 * 86_400_000,
+    });
+
+    const result = state.relationshipIntelligence("How is Michelle?", NOW);
+    expect(result.disambiguationCandidates).toEqual([
+      { chatId: "michelle-chechi@c.us", contactName: "Michelle Chechi" },
+      { chatId: "michelle-soffen@c.us", contactName: "Michelle Soffen" },
+    ]);
+    expect(result.disambiguationCandidates?.some((candidate) => candidate.chatId === "wonder-crew@g.us")).toBe(false);
+  });
+
+  it("treats an exact full name or a selected stable identity as unambiguous", () => {
+    const state = createState();
+    state.rememberChatName("david-one@c.us", "David Cohen");
+    state.rememberChatName("david-two@c.us", "David Levy");
+    state.rememberMessage("david-one@c.us", { role: "user", author: "contact", content: "Hi", timestamp: NOW });
+    state.rememberMessage("david-two@c.us", { role: "user", author: "contact", content: "Hi", timestamp: NOW });
+
+    const exactName = state.relationshipIntelligence("What has been going on with David Levy lately?", NOW);
+    expect(exactName.disambiguation).toBeUndefined();
+    expect(exactName.briefs.map((brief) => brief.chatId)).toEqual(["david-two@c.us"]);
+
+    const selected = state.relationshipIntelligence("What has been going on with David lately?", NOW, "david-one@c.us");
+    expect(selected.disambiguation).toBeUndefined();
+    expect(selected.briefs.map((brief) => brief.chatId)).toEqual(["david-one@c.us"]);
   });
 
   it("does not run the relationship projection for an ordinary fact lookup", () => {
@@ -165,6 +205,25 @@ describe("relationship intelligence", () => {
     expect(filtered.some((record) => record.kind === "calendar_event" && record.content.includes("Coffee with Morgan"))).toBe(true);
   });
 
+  it("resolves proactive suggestion sources only while every referenced plan is still current", () => {
+    const state = createState();
+    const chatId = "laura@c.us";
+    state.rememberChatName(chatId, "Laura");
+    const future = state.addOwnerCalendarEvent(chatId, {
+      title: "Laura's house party", startAt: NOW + 2 * 86_400_000, allDay: false,
+      evidence: { excerpt: "Saturday at 8 at Laura's", timestamp: NOW },
+    }).event;
+    const past = state.addOwnerCalendarEvent(chatId, {
+      title: "Old dinner", startAt: NOW - 3 * 86_400_000, allDay: false,
+      evidence: { excerpt: "Dinner last week", timestamp: NOW - 8 * 86_400_000 },
+    }).event;
+
+    expect(state.intelligenceRecordsByReferences([{ id: future.id, chatId }], new Set(), NOW))
+      .toEqual([expect.objectContaining({ id: future.id, kind: "calendar_event", score: 100 })]);
+    expect(state.intelligenceRecordsByReferences([{ id: past.id, chatId }], new Set(), NOW)).toEqual([]);
+    expect(state.intelligenceRecordsByReferences([{ id: "missing", chatId }], new Set(), NOW)).toEqual([]);
+  });
+
   it("keeps historical calendar context when the owner asks about the past", () => {
     const state = createState();
     const chatId = "morgan@c.us";
@@ -182,11 +241,14 @@ describe("relationship intelligence", () => {
   });
 
   it("sets a natural briefing boundary for Ask AmirOS", () => {
-    const instructions = buildNetworkAnswerInstructions("Amir");
+    const instructions = buildNetworkAnswerInstructions("Amir", NOW);
     expect(instructions).toContain("speak warmly and naturally");
     expect(instructions).toContain("Never say “supplied records,” “retrieved context,” “newer update,” “supporting data,”");
     expect(instructions).toContain("what the owner should know, not what the owner should do");
     expect(instructions).toContain("Never present past events as upcoming");
+    expect(instructions).toContain("authoritative current local date and time");
+    expect(instructions).toContain("Never repeat “today” as current truth");
+    expect(instructions).toContain("current status is unknown unless newer evidence confirms it");
   });
 
   it("routes upcoming and advice questions through distinct relationship lenses", () => {

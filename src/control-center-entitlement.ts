@@ -7,6 +7,20 @@ export type ControlCenterReleaseChannel = "internal" | "beta" | "stable";
 export type ControlCenterSetupState = "setup_required" | "device_pending" | "active";
 export type ControlCenterOnboardingEvent = "whatsapp_connected" | "first_people_selected";
 
+/**
+ * A release decision is supplied by the Control Center for managed beta
+ * installs. It is deliberately separate from access: holding a release never
+ * pauses AmirOS or changes what the owner can do locally.
+ */
+export type ControlCenterReleaseDecision = {
+  action: "available" | "hold" | "none";
+  channel: ControlCenterReleaseChannel;
+  version?: string;
+  downloadUrl?: string;
+  sha256?: string;
+  releaseNotesUrl?: string;
+};
+
 export type ControlCenterFeature = {
   id: string;
   enabled: boolean;
@@ -22,6 +36,7 @@ export type ControlCenterSnapshot = {
   setupState: ControlCenterSetupState;
   activationRequired: boolean;
   releaseChannel?: ControlCenterReleaseChannel;
+  release?: ControlCenterReleaseDecision;
   features: ControlCenterFeature[];
 };
 
@@ -44,6 +59,7 @@ type EntitlementResponse = {
   detail?: unknown;
   checkedAt?: unknown;
   releaseChannel?: unknown;
+  release?: unknown;
   features?: unknown;
   setupState?: unknown;
 };
@@ -62,6 +78,7 @@ type SavedEntitlement = {
   detail: string;
   checkedAt: string;
   releaseChannel?: ControlCenterReleaseChannel;
+  release?: ControlCenterReleaseDecision;
   features: ControlCenterFeature[];
   setupState: ControlCenterSetupState;
 };
@@ -98,6 +115,7 @@ export type ControlCenterEntitlementOptions = {
 const DEVICE_KEY_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
 const ACCESS_STATUSES = new Set(["active", "paused", "revoked"]);
 const RELEASE_CHANNELS = new Set(["internal", "beta", "stable"]);
+const RELEASE_ACTIONS = new Set(["available", "hold", "none"]);
 const SETUP_STATES = new Set(["setup_required", "device_pending", "active"]);
 const OFFLINE_GRACE_MS = 7 * 24 * 60 * 60 * 1_000;
 const ACTIVATION_LIFETIME_MS = 10 * 60 * 1_000;
@@ -132,6 +150,37 @@ function validFeatures(value: unknown): ControlCenterFeature[] {
   });
 }
 
+function validHttpsUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The local client verifies the rollout decision again instead of trusting an
+ * arbitrary server payload. An invalid decision fails closed: no update
+ * prompt, no download and no change to the user's existing AmirOS access.
+ */
+export function validControlCenterReleaseDecision(value: unknown): ControlCenterReleaseDecision | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Partial<ControlCenterReleaseDecision>;
+  if (!RELEASE_ACTIONS.has(candidate.action || "") || !RELEASE_CHANNELS.has(candidate.channel || "")) return undefined;
+  const action = candidate.action as ControlCenterReleaseDecision["action"];
+  const channel = candidate.channel as ControlCenterReleaseChannel;
+  if (action !== "available") return { action, channel };
+  const version = typeof candidate.version === "string" ? candidate.version.trim().replace(/^v/i, "") : "";
+  const downloadUrl = validHttpsUrl(candidate.downloadUrl);
+  const sha256 = typeof candidate.sha256 === "string" ? candidate.sha256.trim() : "";
+  if (!/^\d+\.\d+\.\d+$/u.test(version) || !downloadUrl || !/^[a-f0-9]{64}$/u.test(sha256)) return undefined;
+  const releaseNotesUrl = validHttpsUrl(candidate.releaseNotesUrl);
+  return { action, channel, version, downloadUrl, sha256, ...(releaseNotesUrl ? { releaseNotesUrl } : {}) };
+}
+
 function validSavedDevice(value: unknown): SavedDevice | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Partial<SavedDevice>;
@@ -153,6 +202,7 @@ function validSavedDevice(value: unknown): SavedDevice | undefined {
           releaseChannel: RELEASE_CHANNELS.has(candidate.entitlement.releaseChannel || "")
             ? candidate.entitlement.releaseChannel as ControlCenterReleaseChannel
             : undefined,
+          release: validControlCenterReleaseDecision(candidate.entitlement.release),
           features: validFeatures(candidate.entitlement.features),
           // Existing paired installations predate the setup-state response and
           // must remain usable when their next entitlement refresh succeeds.
@@ -215,6 +265,7 @@ export class ControlCenterEntitlement {
         setupState: entitlement.setupState,
         activationRequired: Boolean(this.options.requireActivation),
         releaseChannel: entitlement.releaseChannel,
+        release: entitlement.release,
         features: entitlement.features,
       };
     }
@@ -229,6 +280,7 @@ export class ControlCenterEntitlement {
         setupState: entitlement.setupState,
         activationRequired: Boolean(this.options.requireActivation),
         releaseChannel: entitlement.releaseChannel,
+        release: entitlement.release,
         features: entitlement.features,
       };
     }
@@ -240,6 +292,7 @@ export class ControlCenterEntitlement {
       setupState: entitlement.setupState,
       activationRequired: Boolean(this.options.requireActivation),
       releaseChannel: entitlement.releaseChannel,
+      release: entitlement.release,
       features: entitlement.features,
     };
   }
@@ -327,6 +380,7 @@ export class ControlCenterEntitlement {
         detail: typeof result.detail === "string" && result.detail.trim() ? result.detail.trim().slice(0, 240) : "Access checked by the Control Center.",
         checkedAt,
         releaseChannel: RELEASE_CHANNELS.has(result.releaseChannel as string) ? result.releaseChannel as ControlCenterReleaseChannel : undefined,
+        release: validControlCenterReleaseDecision(result.release),
         features: validFeatures(result.features),
         setupState: SETUP_STATES.has(result.setupState as string)
           ? result.setupState as ControlCenterSetupState

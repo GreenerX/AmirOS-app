@@ -2,10 +2,13 @@ export type WhatsAppFormatOptions = {
   ensureEmoji?: boolean;
   emojiFallback?: string;
   removeParenthesizedLinks?: boolean;
+  /** Removes emoji emitted by the model when the current conversation forbids them. */
+  stripEmoji?: boolean;
 };
 
 const emojiPattern = /\p{Extended_Pictographic}/u;
 const leadingEmojiPattern = /^((?:\p{Extended_Pictographic}(?:\uFE0F|\u200D|\p{Extended_Pictographic}|\p{Emoji_Modifier})*\s*)+)(\S[\s\S]*)$/u;
+const emojiClusterPattern = /(?:\p{Extended_Pictographic}|\p{Regional_Indicator})(?:\uFE0F|\u200D|\p{Extended_Pictographic}|\p{Regional_Indicator}|\p{Emoji_Modifier})*/gu;
 
 export function formatWhatsAppText(
   input: string,
@@ -15,6 +18,7 @@ export function formatWhatsAppText(
     ensureEmoji = true,
     emojiFallback = "✨",
     removeParenthesizedLinks = false,
+    stripEmoji = false,
   } = options;
 
   let text = input.replace(/\r\n?/g, "\n");
@@ -37,6 +41,15 @@ export function formatWhatsAppText(
     .replace(/^[ \t]*-{3,}[ \t]*$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+
+  if (stripEmoji) {
+    text = text
+      .replace(emojiClusterPattern, "")
+      .replace(/[\uFE0F\u200D]/gu, "")
+      .replace(/[ \t]+([,.;:!?])/gu, "$1")
+      .replace(/[ \t]{2,}/gu, " ")
+      .trim();
+  }
 
   const leadingEmoji = text.match(leadingEmojiPattern);
   const leadingEmojiBody = leadingEmoji?.[2];

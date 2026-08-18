@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.10.13] - 2026-08-19
+
+### Added
+
+- Added identity-first Ask AmirOS clarification with clickable contact choices when names overlap.
+- Added opt-in, local-only preservation of deleted WhatsApp text and media with an explicit reveal action in Inbox.
+- Added private per-chat feedback for suggested replies, including regeneration from feedback and a clear-draft action.
+- Added managed release-channel controls for staged beta updates while leaving unmanaged installations on their existing update path.
+
+### Changed
+
+- Ask AmirOS now uses current, source-backed relationship context and qualifies older or historical information instead of presenting it as current.
+- Ask AmirOS now opens as a full-height right-side drawer with clearer answer hierarchy, grounded suggestions, keyboard dismissal, and mobile fallback.
+- Suggested replies can be generated and sent from Suggested actions without requiring Suggest mode.
+- Auto Mode better respects a contact's latest writing preferences, avoids repeated style acknowledgements, and removes unwanted fallback emojis.
+- Overview now aligns Agenda, To-dos, and Suggested actions across large displays, expands cards toward the bottom of the viewport, and uses full-card empty-state gradients.
+- Simplified the account drawer by removing Automations, Terminal, and Usage, and moving Help & feedback alongside Settings.
+
+### Fixed
+
+- Fixed reply suggestions failing to send when the original message identifier was no longer present in the live Inbox snapshot.
+- Fixed reply feedback failing to persist or produce a revised draft.
+- Fixed deleted messages appearing as blank bubbles or generic media previews instead of a clear deleted-message state.
+- Fixed the deleted-message preference resetting after refresh.
+- Fixed relationship briefs aging open commitments against the system clock instead of the requested authoritative time.
+- Fixed owner-authored reply examples carrying a visible owner label that could leak into automatic replies.
+- Fixed stale dashboard recovery and managed update checks so Control Center holds do not accidentally fall back to an unmanaged update prompt.
+
+### Infrastructure
+
+- Added Control Center release rollout records, tested-artifact metadata, and explicit hold/available decisions per internal, beta, and stable channel.
+- Added safer applicant administration, profile editing, archived declines, and audited access operations.
+
+### Testing
+
+- Added focused coverage for deleted-message capture and privacy boundaries, reply generation/sending/feedback, managed release decisions, Ask AmirOS identity resolution and grounding, Auto Mode style constraints, dashboard recovery, and responsive Overview behavior.
+
 ## [0.10.12] - 2026-08-18
 
 ### Fixed

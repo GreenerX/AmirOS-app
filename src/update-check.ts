@@ -1,9 +1,22 @@
 export type UpdateStatus = {
-  status: "available" | "current" | "unavailable";
+  status: "available" | "current" | "held" | "unavailable";
   currentVersion: string;
   latestVersion?: string;
+  /** Present only for an explicitly approved Control Center release. */
+  downloadUrl?: string;
+  /** SHA-256 for the exact approved archive, in lower-case hexadecimal. */
+  sha256?: string;
+  releaseNotesUrl?: string;
   checkedAt: number;
   detail?: string;
+};
+
+export type ManagedReleaseDecision = {
+  action: "available" | "hold" | "none";
+  version?: string;
+  downloadUrl?: string;
+  sha256?: string;
+  releaseNotesUrl?: string;
 };
 
 /**
@@ -26,6 +39,52 @@ export function compareVersions(left: string, right: string): number {
     if (difference !== 0) return difference;
   }
   return 0;
+}
+
+function validApprovedUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Converts the Control Center's additive release decision into the same shape
+ * used by the dashboard update prompt. This has no GitHub fallback: a managed
+ * Mac may update only when its administrator made a fully specified release
+ * available for its channel.
+ */
+export function checkForManagedAmirosUpdate(
+  currentVersion: string,
+  release: ManagedReleaseDecision | undefined,
+  checkedAt = Date.now(),
+): UpdateStatus {
+  if (!release || release.action === "none") {
+    return { status: "held", currentVersion, checkedAt, detail: "No update is available for this Mac right now." };
+  }
+  if (release.action === "hold") {
+    return { status: "held", currentVersion, checkedAt, detail: "Updates for this AmirOS channel are currently on hold." };
+  }
+  const latestVersion = typeof release.version === "string" ? release.version.trim().replace(/^v/i, "") : "";
+  const downloadUrl = validApprovedUrl(release.downloadUrl);
+  const sha256 = typeof release.sha256 === "string" ? release.sha256.trim() : "";
+  if (!/^\d+\.\d+\.\d+$/u.test(latestVersion) || !downloadUrl || !/^[a-f0-9]{64}$/u.test(sha256)) {
+    return { status: "unavailable", currentVersion, checkedAt, detail: "AmirOS could not confirm an approved update right now." };
+  }
+  const releaseNotesUrl = validApprovedUrl(release.releaseNotesUrl);
+  return {
+    status: compareVersions(latestVersion, currentVersion) > 0 ? "available" : "current",
+    currentVersion,
+    latestVersion,
+    downloadUrl,
+    sha256,
+    ...(releaseNotesUrl ? { releaseNotesUrl } : {}),
+    checkedAt,
+  };
 }
 
 export async function checkForAmirosUpdate(

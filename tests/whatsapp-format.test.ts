@@ -31,6 +31,12 @@ describe("WhatsApp formatting", () => {
     expect(formatWhatsAppText("Good morning 🌤️")).toBe("Good morning 🌤️");
   });
 
+  it("removes model-produced emojis when a conversation explicitly forbids them", () => {
+    expect(
+      formatWhatsAppText("Got it 😂 I'll keep it normal. ✨", { ensureEmoji: false, stripEmoji: true }),
+    ).toBe("Got it I'll keep it normal.");
+  });
+
   it("turns ordinary Markdown links into compact labels", () => {
     expect(
       formatWhatsAppText("Read [the guide](https://example.com/guide)", {

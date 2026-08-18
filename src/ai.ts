@@ -119,6 +119,37 @@ export type ReplyContext = {
   timeZone?: string;
 };
 
+export type AutoModeReplyConstraints = {
+  forbidEmojis: boolean;
+};
+
+const noEmojiRequestPattern = /(?:\b(?:no|without|zero|less|fewer|stop(?:\s+using)?|don['’]?t|do\s+not|never)\b[\s\p{L}\p{N},.'’-]{0,36}\b(?:emoji|emojis|emote|emotes)\b|(?:בלי|ללא|לא)\s+(?:אימוג['’׳]?י(?:ים)?))/iu;
+const allowEmojiRequestPattern = /(?:\b(?:use|bring back|you can use|feel free to use|emojis? (?:are|is) (?:okay|ok|fine))\b[\s\p{L}\p{N},.'’-]{0,28}\b(?:emoji|emojis|emote|emotes)\b|(?:אפשר|אפשרי|בסדר)\s+(?:עם\s+)?אימוג['’׳]?י(?:ים)?)/iu;
+
+/**
+ * Reads the latest direct contact instruction as a narrow, enforceable Auto
+ * Mode constraint. It intentionally ignores owner-written examples: an owner
+ * mentioning emojis must not silently change what the contact requested.
+ */
+export function resolveAutoModeReplyConstraints(
+  context: ReplyContext,
+  prompt = "",
+): AutoModeReplyConstraints {
+  if (!context.autoReplyAsOwner) return { forbidEmojis: false };
+  const incomingTurns = [
+    ...(context.memory || []).filter((entry) => entry.role === "user" && entry.author !== "owner"),
+    { role: "user" as const, author: "contact" as const, content: prompt },
+  ];
+  let forbidEmojis = false;
+  for (const turn of incomingTurns) {
+    const text = turn.content.trim();
+    if (!text) continue;
+    if (noEmojiRequestPattern.test(text)) forbidEmojis = true;
+    if (allowEmojiRequestPattern.test(text)) forbidEmojis = false;
+  }
+  return { forbidEmojis };
+}
+
 export type RelationshipAnalysis = {
   insights: Array<{
     kind: "fact" | "preference" | "relationship_change" | "important_date";
@@ -164,12 +195,42 @@ export type AiReplyNeedAssessment = {
 export type NetworkAnswer = {
   answer: string;
   evidenceIds: string[];
+  /** Ordered semantic icon tokens for bulleted answer points. */
+  listIcons: NetworkAnswerIcon[];
 };
 
-export function buildNetworkAnswerInstructions(ownerName = "Amir"): string {
+export type NetworkAnswerIcon =
+  | "calendar"
+  | "collaboration"
+  | "communication"
+  | "connection"
+  | "event"
+  | "home"
+  | "idea"
+  | "location"
+  | "money"
+  | "music"
+  | "people"
+  | "preference"
+  | "task"
+  | "time"
+  | "travel"
+  | "wellbeing"
+  | "work";
+
+const networkAnswerIcons: NetworkAnswerIcon[] = [
+  "calendar", "collaboration", "communication", "connection", "event", "home", "idea", "location",
+  "money", "music", "people", "preference", "task", "time", "travel", "wellbeing", "work",
+];
+
+export function buildNetworkAnswerInstructions(ownerName = "Amir", now = Date.now()): string {
   const owner = cleanInstructionValue(ownerName, 120) || "Amir";
+  const currentDateTime = new Date(now).toString();
   return [
     `Answer ${owner}'s question using only the supplied private local-memory records. Address ${owner} as "you".`,
+    `The authoritative current local date and time for this answer is ${currentDateTime}. Interpret every relative word such as "today", "tomorrow", "yesterday", "this week", or "recently" against that value and the timestamp on its source record.`,
+    "A relative word inside an older message describes the date when that message was sent, not the current day. Never repeat “today” as current truth when the supporting record is from an earlier local date. Use the source's absolute date instead and say that the person's current status is unknown unless newer evidence confirms it.",
+    "Do not turn an old temporary state—such as feeling ill, being busy, traveling, or considering a same-day plan—into a current fact. If time materially changes the meaning, name the date or age of the evidence in natural language.",
     `A record with sourceAuthor "owner" was stated or written by ${owner}. Interpret first-person words such as "I", "my", and "me" as ${owner}; restate them naturally in second person.`,
     `For example, if an owner record says "Michal is like my little sister," answer "Michal is like your little sister"—never say that another contact supplied it.`,
     "A record's contactName or [Chat: ...] label identifies the source conversation, not necessarily the speaker. Never call the source chat a person.",
@@ -179,6 +240,8 @@ export function buildNetworkAnswerInstructions(ownerName = "Amir"): string {
     "For a relationship briefing, speak warmly and naturally, as someone helping the owner remember a person they know. Never say “supplied records,” “retrieved context,” “newer update,” “supporting data,” or similar database language. Say plainly what you know and what you do not know. For example, say “I don’t know whether there’s anything specific he wants to talk about,” not “the records don’t confirm.”",
     "A current relationship briefing answers what the owner should know, not what the owner should do. Do not add behavioral coaching, emotional interpretation, or broad advice unless relationshipBrief.adviceRequested is true because the owner explicitly asked for advice. Even then, keep any advice modest and tied to confirmed current context. Never present past events as upcoming; use only the future plans in a current relationshipBrief. Historical relationship questions may discuss past plans as history.",
     "For ordinary factual questions, keep the answer clean and concise. For explanation questions, briefly mention the current fact, any historical replacement, confidence, reinforcement, and evidence origin in natural language.",
+    "When the answer contains two or more distinct things worth remembering, use a compact Markdown bullet list. Begin each bullet with a bold, specific lead phrase of 2 to 7 words, followed by the supporting detail in normal weight.",
+    `For each Markdown bullet, return one matching semantic token in listIcons, in the same order. Use only: ${networkAnswerIcons.join(", ")}. Return an empty listIcons array when the answer has no bullets. Icons are presentation hints only and must not change the facts or wording.`,
     "Never expose raw explanation field names, scores, IDs, or implementation terms. Say things like “direct message,” “older evidence,” “reinforced by later messages,” or “previously” instead.",
     "Be concise, distinguish facts from uncertainty, and keep the visible answer under 180 words. If evidence is insufficient, say specifically what is missing.",
     "Never put record IDs, message IDs, UUIDs, chat IDs, bracketed citations, source labels, or other internal identifiers in the answer text. Return supporting record IDs only in the separate evidenceIds field.",
@@ -449,6 +512,7 @@ export function buildPersonalizedInstructions(context: ReplyContext, prompt = ""
   const styleGuidance = styleProfile?.replyGuidance
     .map((item) => cleanInstructionValue(item, 300))
     .filter(Boolean) || [];
+  const autoModeConstraints = resolveAutoModeReplyConstraints(context, prompt);
   const upcomingEvents = (context.events || [])
     .filter((item) => item.status !== "dismissed" && item.startAt >= Date.now() - 86_400_000)
     .sort((a, b) => a.startAt - b.startAt)
@@ -525,7 +589,15 @@ export function buildPersonalizedInstructions(context: ReplyContext, prompt = ""
       "Do not turn an ordinary contact message into a calendar, reminder, to-do, commitment, knowledge, or other AmirOS action. In particular, a casual reminder should receive a natural acknowledgement or reply, not a status update.",
       "Do not say that something was added, saved, awaiting review, pending, confirmed by a system, or otherwise managed behind the scenes.",
       "When several recent messages arrived before this response, treat them as one message bundle and respond once to the overall conversation.",
+      "Before writing, compare the proposed reply with Amir's latest messages in the supplied history. Answer the newest unresolved point; do not repeat the same acknowledgement, apology, promise, joke, or opening from an earlier owner reply.",
+      "If the contact objects to a repeated behavior, correct the behavior immediately. Do not make another joke, promise, or meta-commentary about the same mistake; keep the reply short, direct, and human.",
     );
+    if (autoModeConstraints.forbidEmojis) {
+      lines.push(
+        "LIVE CONTACT PREFERENCE (hard constraint):",
+        "The contact explicitly asked for no emojis. Use no emoji, emoticon, or decorative symbol in this reply. This overrides the default assistant personality and the learned writing style until the contact explicitly reverses it.",
+      );
+    }
   }
   if (upcomingEvents.length > 0) {
     lines.push(
@@ -837,7 +909,7 @@ export class AiService {
         });
       }
       this.recordTextUsage(response);
-      return this.formatResponse(response);
+      return this.formatResponse(response, context, prompt);
     } catch (error) {
       this.conversations.delete(conversationKey);
       try {
@@ -850,7 +922,7 @@ export class AiService {
           this.conversations.set(conversationKey, { previousResponseId: response.id, turns: 1 });
         }
         this.recordTextUsage(response);
-        return this.formatResponse(response);
+        return this.formatResponse(response, context, prompt);
       } catch (retryError) {
         if (!this.options.webSearchEnabled || forceWebSearch) {
           if (isContextPayloadFailure(retryError)) {
@@ -871,7 +943,7 @@ export class AiService {
             this.conversations.set(conversationKey, { previousResponseId: response.id, turns: 1 });
           }
           this.recordTextUsage(response);
-          return this.formatResponse(response);
+          return this.formatResponse(response, context, prompt);
         } catch (finalError) {
           if (isContextPayloadFailure(finalError)) {
             return this.recoverFromContextFailure(conversationKey, userId, prompt, context, finalError);
@@ -908,7 +980,7 @@ export class AiService {
       this.conversations.set(conversationKey, { previousResponseId: response.id, turns: 1 });
     }
     this.recordTextUsage(response);
-    return this.formatResponse(response);
+    return this.formatResponse(response, context, prompt);
   }
 
   async summarizeContact(input: {
@@ -1202,12 +1274,15 @@ export class AiService {
   ): Promise<NetworkAnswer> {
     this.assertAvailable();
     if (records.length === 0 && relationshipBriefs.length === 0) {
-      return { answer: "I couldn't find anything relevant in saved local chat memory yet.", evidenceIds: [] };
+      return { answer: "I couldn't find anything relevant in saved local chat memory yet.", evidenceIds: [], listIcons: [] };
     }
+    const answeredAt = Date.now();
     const result = await this.structuredResponse<NetworkAnswer>({
       name: "network_answer",
-      instructions: buildNetworkAnswerInstructions(ownerName),
+      instructions: buildNetworkAnswerInstructions(ownerName, answeredAt),
       input: JSON.stringify({
+        currentLocalDateTime: new Date(answeredAt).toString(),
+        currentTimestamp: answeredAt,
         query,
         previousExchange: followUp ? {
           question: followUp.question.slice(0, 500),
@@ -1231,14 +1306,19 @@ export class AiService {
       }),
       schema: {
         type: "object", additionalProperties: false,
-        properties: { answer: { type: "string", maxLength: 2_000 }, evidenceIds: { type: "array", maxItems: 12, items: { type: "string" } } },
-        required: ["answer", "evidenceIds"],
+        properties: {
+          answer: { type: "string", maxLength: 2_000 },
+          evidenceIds: { type: "array", maxItems: 12, items: { type: "string" } },
+          listIcons: { type: "array", maxItems: 12, items: { type: "string", enum: networkAnswerIcons } },
+        },
+        required: ["answer", "evidenceIds", "listIcons"],
       },
     });
     const allowedIds = new Set(records.map((record) => record.id));
     return {
       answer: cleanNetworkAnswerText(result.answer, [...allowedIds]),
       evidenceIds: [...new Set(result.evidenceIds.filter((id) => allowedIds.has(id)))],
+      listIcons: result.listIcons.filter((icon): icon is NetworkAnswerIcon => networkAnswerIcons.includes(icon)).slice(0, 12),
     };
   }
 
@@ -1531,7 +1611,7 @@ export class AiService {
     this.recordSpend(textSpend + searchSpend);
   }
 
-  private formatResponse(response: unknown): string {
+  private formatResponse(response: unknown, context: ReplyContext = {}, prompt = ""): string {
     const value = response as {
       output_text?: string;
       output?: Array<{
@@ -1560,8 +1640,13 @@ export class AiService {
       new Map(citations.map((citation) => [citation.url, citation])).values(),
     ).slice(0, this.options.webSearchMaxSources);
     const formattedAnswer = formatWhatsAppText(answer, {
+      // Auto Mode must mirror the owner; a transport formatter adding a
+      // fallback emoji makes a natural reply look synthetic and can violate a
+      // direct contact preference.
+      ensureEmoji: !context.autoReplyAsOwner,
       emojiFallback: uniqueSources.length > 0 ? "🌐" : "✨",
       removeParenthesizedLinks: uniqueSources.length > 0,
+      stripEmoji: resolveAutoModeReplyConstraints(context, prompt).forbidEmojis,
     });
     if (uniqueSources.length === 0) return formattedAnswer;
 

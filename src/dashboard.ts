@@ -5,8 +5,10 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   readSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { spawn } from "node:child_process";
@@ -25,6 +27,7 @@ import {
   type CalendarEvent,
   type ContactInsight,
   type ContactPreferences,
+  type DeletedMessageArchiveItem,
   type TodoTask,
 } from "./amiros-state.js";
 import {
@@ -38,7 +41,7 @@ import { buildCalendarSubscriptionFeed } from "./calendar-feed.js";
 import type { WritingStyleLearner } from "./writing-style.js";
 import type { IntelligenceLearner } from "./intelligence-learner.js";
 import { CURRENT_RELEASE } from "./release.js";
-import { checkForAmirosUpdate, type UpdateStatus } from "./update-check.js";
+import { checkForAmirosUpdate, checkForManagedAmirosUpdate, type UpdateStatus } from "./update-check.js";
 import { handleAiUsageApiRoute } from "./dashboard/ai-usage-routes.js";
 import { handleSettingsApiRoute } from "./dashboard/settings-routes.js";
 import { handleSystemApiRoute } from "./dashboard/system-routes.js";
@@ -80,6 +83,7 @@ import {
   PROACTIVE_AI_POLICY_VERSION,
 } from "./proactive-intelligence.js";
 import { ControlCenterRequestError, type ControlCenterEntitlement, type ControlCenterOnboardingEvent } from "./control-center-entitlement.js";
+import { DeletedMessageArchive } from "./deleted-message-archive.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -101,6 +105,7 @@ type DashboardOptions = {
   writingStyleLearner?: WritingStyleLearner;
   intelligenceLearner?: IntelligenceLearner;
   controlCenter?: ControlCenterEntitlement;
+  deletedMessageArchive?: DeletedMessageArchive;
   syncControlCenterAccess?: () => void;
   /** Lets isolated checks keep their calendar token outside a user's data folder. */
   calendarFeedTokenPath?: string;
@@ -130,6 +135,67 @@ export function hasFreshSuggestedActionEvidence(
   return Number.isFinite(sourceAt)
     && sourceAt <= now + 5 * 60_000
     && sourceAt >= now - SUGGESTED_ACTION_MESSAGE_WINDOW_MS;
+}
+
+type SuggestedRelationshipEvidence = {
+  messageId?: string;
+  author?: "owner" | "contact" | "group_member" | "assistant";
+  eligibleForActionSuggestions?: boolean;
+  excludeFromAutomaticLearning?: boolean;
+};
+
+function normalizedPersonName(value: string | undefined): string {
+  return (value || "")
+    .normalize("NFKD")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .trim();
+}
+
+function isOwnerName(value: string | undefined, ownerName: string): boolean {
+  const normalized = normalizedPersonName(value);
+  const owner = normalizedPersonName(ownerName);
+  if (!normalized || !owner) return false;
+  if (normalized === owner) return true;
+  return ownerName
+    .split(/\s+/)
+    .map(normalizedPersonName)
+    .filter((part) => part.length >= 3)
+    .includes(normalized);
+}
+
+/**
+ * Relationship details are useful as memory, but only a direct, recent,
+ * contact-originated message can become an unattended Suggested Action.
+ * This keeps a user's own statements from surfacing back as work to review.
+ */
+export function canSurfaceRelationshipSuggestedAction(
+  insight: Pick<ContactInsight, "status" | "validity" | "evidence" | "subjectNames">,
+  input: {
+    chatId: string;
+    contactName: string;
+    ownerName: string;
+    knowledgeTracking: "enabled" | "disabled" | "pending" | "snoozed";
+    source?: SuggestedRelationshipEvidence;
+    now?: number;
+  },
+): boolean {
+  if (
+    insight.status !== "inferred" ||
+    (insight.validity || "current") === "historical" ||
+    input.knowledgeTracking !== "enabled" ||
+    input.chatId.endsWith("@g.us") ||
+    !hasFreshSuggestedActionEvidence(insight, input.now)
+  ) return false;
+  if (isOwnerName(input.contactName, input.ownerName) || insight.subjectNames?.some((name) => isOwnerName(name, input.ownerName))) {
+    return false;
+  }
+  const source = input.source;
+  if (!source) return false;
+  return source.messageId === insight.evidence.messageId &&
+    source.author === "contact" &&
+    source.eligibleForActionSuggestions === true &&
+    source.excludeFromAutomaticLearning !== true;
 }
 
 /**
@@ -374,6 +440,7 @@ type CachedMessageModel = {
   callType?: string;
   subtype?: string;
   _data?: {
+    type?: string;
     body?: string;
     caption?: string;
     mediaData?: { caption?: string };
@@ -423,6 +490,19 @@ export type DashboardMessage = {
     kind?: "voice" | "video";
     missed?: boolean;
     durationSeconds?: number;
+  };
+  deletedArchive?: {
+    id: string;
+    kind: "deleted" | "view_once";
+    deletedAt: number;
+    hasText: boolean;
+    hasMedia: boolean;
+    viewOnce: boolean;
+    revealed?: boolean;
+  };
+  /** A WhatsApp message that was revoked but was not available in the local archive. */
+  deleted?: {
+    deletedAt: number;
   };
 };
 
@@ -747,46 +827,47 @@ async function sendReactionResiliently(
   if (!sent) throw new Error("This message is not currently available for reactions");
 }
 
-async function sendReplyResiliently(
+export function replySendFailureMessage(error: unknown): string {
+  const detail = error instanceof Error
+    ? error.message.trim()
+    : typeof error === "string"
+      ? error.trim()
+      : "";
+  if (detail === "Message does not belong to this chat") return detail;
+  if (detail === "WhatsApp could not open this conversation") return detail;
+  return "WhatsApp could not send this reply right now. Make sure WhatsApp is connected, then try again.";
+}
+
+export async function sendReplyResiliently(
   client: WhatsAppClient,
   chatId: string,
   messageId: string,
   reply: string,
-): Promise<{ id: string; timestamp: number; type: string }> {
+): Promise<{ id: string; timestamp: number; type: string; sentAsNewMessage: boolean }> {
+  const sendAsNewMessage = async (): Promise<{ id: string; timestamp: number; type: string; sentAsNewMessage: true }> => {
+    // Do not preflight through getChatById(). On linked-device sessions that
+    // lookup can fail even though WhatsApp can still send to the known chat ID.
+    const sent = await client.sendMessage(chatId, reply, { sendSeen: true, waitUntilMsgSent: true });
+    if (!sent) throw new Error("WhatsApp did not send the message");
+    return {
+      id: sent.id._serialized,
+      timestamp: sent.timestamp,
+      type: sent.type || "chat",
+      sentAsNewMessage: true,
+    };
+  };
   const page = (client as WhatsAppClient & {
     pupPage: null | {
       evaluate<T, A>(callback: (argument: A) => Promise<T>, argument: A): Promise<T>;
     };
   }).pupPage;
 
-  let publicLookupError: unknown;
-  try {
-    let target = await client.getMessageById(messageId).catch(() => undefined);
-    if (!target) {
-      const chat = await client.getChatById(chatId);
-      const messageToken = messageId.startsWith(`true_${chatId}_`) || messageId.startsWith(`false_${chatId}_`)
-        ? messageId.slice(messageId.indexOf(`_${chatId}_`) + chatId.length + 2).split("_")[0]
-        : undefined;
-      const recentMessages = await chat.fetchMessages({ limit: 500 });
-      target = recentMessages.find((message) =>
-        message.id._serialized === messageId || Boolean(messageToken && message.id.id === messageToken)
-      );
-    }
-    if (target) {
-      const targetChat = await target.getChat();
-      if (targetChat.id._serialized !== chatId) throw new Error("Message does not belong to this chat");
-      const sent = await target.reply(reply, chatId, { sendSeen: true, waitUntilMsgSent: true });
-      if (!sent) throw new Error("WhatsApp did not send the reply");
-      return { id: sent.id._serialized, timestamp: sent.timestamp, type: sent.type || "chat" };
-    }
-  } catch (error) {
-    publicLookupError = error;
-  }
-
-  if (!page && publicLookupError instanceof Error) throw publicLookupError;
-  if (!page) throw new Error("This message is not currently available for replies");
-
-  const result = await page.evaluate(async ({ targetChatId, targetMessageId, replyText }) => {
+  if (page) {
+    // Resolve the source and send inside one WhatsApp-page operation. This
+    // avoids the fragile public getChatById() lookup and, importantly, makes
+    // exactly one send attempt per click. If the source can no longer be
+    // quoted, the same operation sends the user's text as a normal message.
+    const result = await page.evaluate(async ({ targetChatId, targetMessageId, replyText }) => {
     type InternalMessage = {
       id?: { _serialized?: string; id?: string; remote?: string | { _serialized?: string } };
       unsafe?(): unknown;
@@ -820,18 +901,16 @@ async function sendReplyResiliently(
         const remoteId = typeof remote === "string" ? remote : remote?._serialized;
         return remoteId === targetChatId && Boolean(messageToken && message.id?.id === messageToken);
       });
-    const remote = target?.id?.remote;
-    const remoteId = typeof remote === "string" ? remote : remote?._serialized;
-    if (!target || remoteId !== targetChatId) return { status: "not_found" as const };
     const chat = await whatsappWindow.WWebJS.getChat(targetChatId, { getAsModel: false });
     if (!chat) return { status: "chat_not_found" as const };
+    const remote = target?.id?.remote;
+    const remoteId = typeof remote === "string" ? remote : remote?._serialized;
     const replyUtils = whatsappWindow.require("WAWebMsgReply");
-    const canReply = replyUtils.canReplyMsg && target.unsafe
+    const canReply = Boolean(target && remoteId === targetChatId) && (replyUtils.canReplyMsg && target?.unsafe
       ? replyUtils.canReplyMsg(target.unsafe())
-      : target.canReply?.() !== false;
-    if (!canReply || !target.msgContextInfo) return { status: "not_replyable" as const };
-    const quoteContext = target.msgContextInfo(chat);
-    if (!quoteContext || Object.keys(quoteContext).length === 0) return { status: "quote_unavailable" as const };
+      : target?.canReply?.() !== false);
+    const quoteContext = canReply && target?.msgContextInfo ? target.msgContextInfo(chat) : undefined;
+    const sentAsNewMessage = !quoteContext || Object.keys(quoteContext).length === 0;
     await whatsappWindow.WWebJS.sendSeen(targetChatId);
     const sent = await whatsappWindow.WWebJS.sendMessage(chat, replyText, {
       linkPreview: true,
@@ -839,7 +918,7 @@ async function sendReplyResiliently(
       mentionedJidList: [],
       groupMentions: [],
       waitUntilMsgSent: true,
-      extraOptions: quoteContext,
+      ...(sentAsNewMessage ? {} : { extraOptions: quoteContext }),
     });
     // Linked-device chats can accept and enqueue the reply before the newly
     // created message model is added to WAWebCollections.Msg. In that case the
@@ -849,6 +928,7 @@ async function sendReplyResiliently(
       id: `reply-${Date.now()}`,
       timestamp: Math.floor(Date.now() / 1_000),
       type: "chat",
+      sentAsNewMessage,
     };
     const normalized = whatsappWindow.WWebJS.getMessageModel(sent);
     return {
@@ -856,14 +936,31 @@ async function sendReplyResiliently(
       id: normalized.id?._serialized || `reply-${Date.now()}`,
       timestamp: normalized.t || Math.floor(Date.now() / 1_000),
       type: normalized.type || "chat",
+      sentAsNewMessage,
     };
-  }, { targetChatId: chatId, targetMessageId: messageId, replyText: reply });
+    }, { targetChatId: chatId, targetMessageId: messageId, replyText: reply });
 
-  if (result.status === "not_found") throw new Error("This message is not currently available for replies");
-  if (result.status === "chat_not_found") throw new Error("WhatsApp could not open this conversation");
-  if (result.status === "not_replyable") throw new Error("WhatsApp does not allow replies to this message");
-  if (result.status === "quote_unavailable") throw new Error("WhatsApp could not prepare this message for a reply");
-  return result;
+    if (result.status === "chat_not_found") throw new Error("WhatsApp could not open this conversation");
+    return {
+      id: result.id,
+      timestamp: result.timestamp,
+      type: result.type,
+      sentAsNewMessage: result.sentAsNewMessage,
+    };
+  }
+
+  // Fallback for clients without an exposed WhatsApp page (primarily tests
+  // and transient startup states). A failed lookup is safe to fall through;
+  // once a reply send is attempted, its error is returned without retrying so
+  // a delayed acknowledgement cannot create a duplicate message.
+  const target = await client.getMessageById(messageId).catch(() => undefined);
+  if (!target) return sendAsNewMessage();
+  const targetChat = await target.getChat().catch(() => undefined);
+  if (!targetChat) return sendAsNewMessage();
+  if (targetChat.id._serialized !== chatId) throw new Error("Message does not belong to this chat");
+  const sent = await target.reply(reply, chatId, { sendSeen: true, waitUntilMsgSent: true });
+  if (!sent) throw new Error("WhatsApp did not send the reply");
+  return { id: sent.id._serialized, timestamp: sent.timestamp, type: sent.type || "chat", sentAsNewMessage: false };
 }
 
 async function getChatModelsResiliently(client: WhatsAppClient): Promise<ChatLike[]> {
@@ -1347,6 +1444,41 @@ async function listMessages(
   state: AmirosState,
   limit = 100,
 ) {
+  const includeDeletedArchive = (liveMessages: DashboardMessage[]): DashboardMessage[] => {
+    const archivedByMessageId = new Map(state.listDeletedMessageArchive(chatId).map((item) => [item.messageId, item]));
+    const toDeletedDashboardMessage = (item: DeletedMessageArchiveItem, id = `deleted:${item.id}`): DashboardMessage => ({
+        id,
+        body: "A deleted message is saved privately on this Mac",
+        fullBody: "",
+        fromMe: item.fromMe,
+        timestamp: item.timestamp,
+        type: item.type,
+        hasMedia: false,
+        deletedArchive: {
+          id: item.id,
+          kind: item.kind,
+          deletedAt: item.deletedAt,
+          hasText: Boolean(item.body),
+          hasMedia: item.media?.status === "saved" || item.media?.status === "unavailable",
+          viewOnce: item.viewOnce,
+        },
+      });
+    const liveWithDeletedPresentation = liveMessages.map((message) => {
+      const archived = archivedByMessageId.get(message.id);
+      if (!archived) return message;
+      archivedByMessageId.delete(message.id);
+      // WhatsApp often retains a generic media shell after deletion. Replace
+      // that shell with the local archive notice instead of making it look
+      // like an ordinary media message.
+      return {
+        ...toDeletedDashboardMessage(archived, message.id),
+        senderId: message.senderId,
+        senderName: message.senderName,
+      };
+    });
+    const missingDeletedMessages = [...archivedByMessageId.values()].map((item) => toDeletedDashboardMessage(item));
+    return [...liveWithDeletedPresentation, ...missingDeletedMessages].sort((left, right) => left.timestamp - right.timestamp);
+  };
   try {
     const chat = await client.getChatById(chatId);
     if (chat.id._serialized !== chatId) {
@@ -1367,7 +1499,9 @@ async function listMessages(
       } catch {
         // Reactions are optional metadata. A transient WhatsApp lookup must not hide the message.
       }
-      const callMetadata = { ...messageWithCaption._data, ...messageWithCaption, type: message.type };
+      const isDeleted = message.type === "revoked" || messageWithCaption._data?.type === "revoked";
+      const messageType = isDeleted ? "revoked" : message.type;
+      const callMetadata = { ...messageWithCaption._data, ...messageWithCaption, type: messageType };
       const mentionIds = new Set([...message.mentionedIds || [], ...mentionIdsInBody(rawBody)]);
       const mentionedContacts = await message.getMentions().catch(() => []);
       for (const mentionedContact of mentionedContacts) {
@@ -1402,8 +1536,11 @@ async function listMessages(
         fullBody: message.hasMedia && preview === "Media message" ? "" : rawBody,
         fromMe: message.fromMe,
         timestamp: message.timestamp,
-        type: message.type,
+        type: messageType,
         hasMedia: message.hasMedia,
+        deleted: isDeleted
+          ? { deletedAt: message.timestamp < 10_000_000_000 ? message.timestamp * 1_000 : message.timestamp }
+          : undefined,
         mediaUrl: message.hasMedia ? mediaUrlFor(chatId, id) : undefined,
         senderId: chatId.endsWith("@g.us") ? message.author : undefined,
         mentionIds: [...mentionIds],
@@ -1415,7 +1552,7 @@ async function listMessages(
     }));
     const resolvedMessages = resolveQuotedMessageReferences(dashboardMessages);
     const namedMessages = await withGroupSenderNames(client, chatId, resolvedMessages, senderNameCache);
-    return restoreOutgoingMediaCaptions(state, chatId, namedMessages);
+    return includeDeletedArchive(restoreOutgoingMediaCaptions(state, chatId, namedMessages));
   } catch {
     // Fall back to WhatsApp Web's per-chat collection while the public API is syncing.
     const page = (client as WhatsAppClient & {
@@ -1477,7 +1614,7 @@ async function listMessages(
           } catch {
             // Some transient system-message models cannot be serialized; use their cached fields.
           }
-          const type = normalized.type || message.type || "chat";
+          const type = normalized.type || normalized._data?.type || message.type || message._data?.type || "chat";
           const rawId = normalized.id;
           const messageId = typeof rawId === "string" ? undefined : rawId;
           const remote = messageId?.remote;
@@ -1541,6 +1678,9 @@ async function listMessages(
             fromMe: Boolean(messageId?.fromMe),
             timestamp: normalized.t || message.t || 0,
             type,
+            deleted: type === "revoked"
+              ? { deletedAt: (normalized.t || message.t || 0) * 1_000 }
+              : undefined,
             hasMedia:
               Boolean(normalized.directPath || normalized.mediaData || message.mediaData) ||
               ["ptt", "audio", "image", "video", "document", "sticker"].includes(type),
@@ -1594,7 +1734,8 @@ async function listMessages(
     });
     const resolvedMessages = resolveQuotedMessageReferences(dashboardMessages);
     const namedMessages = await withGroupSenderNames(client, chatId, resolvedMessages, senderNameCache);
-    return restoreOutgoingMediaCaptions(state, chatId, namedMessages);
+    const liveMessages = restoreOutgoingMediaCaptions(state, chatId, namedMessages);
+    return includeDeletedArchive(liveMessages);
   }
 }
 
@@ -1604,6 +1745,10 @@ export function rememberDashboardMessages(
   messages: DashboardMessage[],
 ): number {
   return state.rememberMessages(chatId, messages.flatMap((message) => {
+    // Revoked-message archive entries are intentionally a private viewing
+    // feature. They must never become conversation memory or feed any
+    // learner, suggestion, or reply context.
+    if (message.deletedArchive || message.deleted) return [];
     const content = (message.fullBody || message.body).trim();
     if (!content || content === "Media message") return [];
     // WhatsApp can replay an outgoing message after AmirOS restarts. If this
@@ -1649,11 +1794,11 @@ function serveStatic(response: ServerResponse, pathname: string): void {
   const fingerprint = uiBuildFingerprint(root);
   if (filePath.endsWith("index.html") && !uiBuildIsCurrent(root)) {
     response.writeHead(503, {
-      "content-type": "text/plain; charset=utf-8",
+      "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
       "x-amiros-ui-build": fingerprint || "unknown",
     });
-    response.end("AmirOS dashboard assets are stale. Restart AmirOS or run pnpm ui:build, then reload this page.");
+    response.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Refresh AmirOS</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#eef6f2;color:#17202b;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.card{box-sizing:border-box;width:min(520px,calc(100vw - 32px));padding:38px;border:1px solid #cfe4d8;border-radius:24px;background:#fff;box-shadow:0 22px 70px #173b2b20}h1{margin:0 0 12px;font:700 30px/1.15 Georgia,serif}p{margin:0 0 16px;color:#52665d}.mark{display:inline-grid;place-items:center;width:46px;height:46px;margin-bottom:18px;border-radius:14px;background:#eaf6ef;color:#078a56;font-size:26px}button{border:0;border-radius:12px;padding:13px 18px;background:#078a56;color:#fff;font:700 15px inherit;cursor:pointer}button:disabled{opacity:.65;cursor:wait}.detail{margin-top:18px;font-size:13px;color:#6b7c74}</style></head><body><main class="card"><span class="mark" aria-hidden="true">✦</span><h1>AmirOS needs a quick refresh</h1><p>Your WhatsApp connection, settings, and private data are safe on this Mac. AmirOS just needs to refresh its dashboard before continuing.</p><button id="repair" type="button">Refresh AmirOS</button><p class="detail" id="detail">This normally takes a few seconds.</p></main><script>const b=document.getElementById('repair'),d=document.getElementById('detail');b.onclick=async()=>{b.disabled=true;b.textContent='Refreshing…';d.textContent='AmirOS is restarting. This page will reopen automatically.';try{await fetch('/api/system/backend-restart',{method:'POST'});}catch{}let n=0;const t=setInterval(()=>{n++;fetch('/',{cache:'no-store'}).then(r=>r.text()).then(h=>{if(!h.includes('needs a quick refresh'))location.reload()}).catch(()=>{});if(n>30){clearInterval(t);b.disabled=false;b.textContent='Try again';d.textContent='If it is still taking a while, close AmirOS and open it again.'}},2000)};</script></body></html>`);
     return;
   }
   response.writeHead(200, {
@@ -1673,6 +1818,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
     writingStyleLearner,
     intelligenceLearner,
     controlCenter,
+    deletedMessageArchive,
     syncControlCenterAccess,
     calendarFeedTokenPath,
     port,
@@ -1733,13 +1879,56 @@ export function startAmirosDashboard(options: DashboardOptions) {
   };
   let updateCheck: UpdateStatus | undefined;
   let updateCheckExpiresAt = 0;
+  const managedReleaseRollout = Boolean(config.requireControlCenterActivation && controlCenter?.snapshot().configured);
   const latestUpdateStatus = async (force = false): Promise<UpdateStatus> => {
     if (!force && updateCheck && Date.now() < updateCheckExpiresAt) return updateCheck;
-    updateCheck = await checkForAmirosUpdate(CURRENT_RELEASE.version);
-    // Avoid a background GitHub call on every dashboard refresh. A manual
-    // request always refreshes immediately, while normal use checks hourly.
-    updateCheckExpiresAt = Date.now() + 60 * 60_000;
+    if (managedReleaseRollout && controlCenter) {
+      // A managed beta never falls back to GitHub. A channel on hold, an
+      // unavailable Control Center, or a malformed release response simply
+      // means no prompt; it never interrupts use of the local app.
+      const snapshot = await controlCenter.refresh();
+      syncControlCenterAccess?.();
+      updateCheck = snapshot.status === "active" && snapshot.setupState === "active"
+        ? checkForManagedAmirosUpdate(CURRENT_RELEASE.version, snapshot.release)
+        : {
+            status: "unavailable",
+            currentVersion: CURRENT_RELEASE.version,
+            checkedAt: Date.now(),
+            detail: "AmirOS could not confirm an approved update right now.",
+          };
+      updateCheckExpiresAt = Date.now() + 15 * 60_000;
+    } else {
+      updateCheck = await checkForAmirosUpdate(CURRENT_RELEASE.version);
+      // Avoid a background GitHub call on every dashboard refresh. A manual
+      // request always refreshes immediately, while normal use checks hourly.
+      updateCheckExpiresAt = Date.now() + 60 * 60_000;
+    }
     return updateCheck;
+  };
+
+  const writeApprovedUpdatePlan = (update: UpdateStatus): boolean => {
+    if (!update.latestVersion || !update.downloadUrl || !update.sha256) return false;
+    const planPath = resolve("work/approved-update.json");
+    const temporaryPath = `${planPath}.${randomBytes(8).toString("hex")}.tmp`;
+    const plan = {
+      version: update.latestVersion,
+      downloadUrl: update.downloadUrl,
+      sha256: update.sha256,
+      expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+    };
+    try {
+      mkdirSync(dirname(planPath), { recursive: true, mode: 0o700 });
+      writeFileSync(temporaryPath, JSON.stringify(plan), { encoding: "utf8", mode: 0o600 });
+      renameSync(temporaryPath, planPath);
+      return true;
+    } catch {
+      try {
+        if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+      } catch {
+        // The failed temporary plan is never trusted by the updater.
+      }
+      return false;
+    }
   };
   const proactiveJudgmentJobs = new Set<string>();
   const proactiveJudgmentRetryAfter = new Map<string, number>();
@@ -2035,6 +2224,10 @@ export function startAmirosDashboard(options: DashboardOptions) {
           sendJson(response, 409, { error: "This AmirOS copy needs one final ZIP update before one-click updates are available." });
           return;
         }
+        if (managedReleaseRollout && !writeApprovedUpdatePlan(update)) {
+          sendJson(response, 409, { error: "AmirOS could not prepare the approved update. Please try again." });
+          return;
+        }
         state.addActivity("system", "AmirOS update started", `Updating to v${update.latestVersion}`);
         sendJson(response, 202, { ok: true, latestVersion: update.latestVersion });
         // Respond before opening the updater: it stops this server, restores
@@ -2176,6 +2369,68 @@ export function startAmirosDashboard(options: DashboardOptions) {
           groupSummary: state.getGroupSummary(chatId),
           incomingMessageCount: state.getIncomingMessageCount(chatId),
         });
+        return;
+      }
+
+      const deletedMessageMatch = pathname.match(/^\/api\/chats\/([^/]+)\/deleted-messages\/([^/]+)$/);
+      const deletedMessageMediaMatch = pathname.match(/^\/api\/chats\/([^/]+)\/deleted-messages\/([^/]+)\/media$/);
+      if (request.method === "GET" && deletedMessageMatch?.[1] && deletedMessageMatch[2]) {
+        if (!deletedMessageArchive) {
+          sendJson(response, 404, { error: "Saved deleted messages are not available in this AmirOS copy." });
+          return;
+        }
+        const chatId = decodeURIComponent(deletedMessageMatch[1]);
+        const archiveId = decodeURIComponent(deletedMessageMatch[2]);
+        const archived = deletedMessageArchive.read(chatId, archiveId);
+        if (!archived) {
+          sendJson(response, 404, { error: "The saved deleted message is no longer available." });
+          return;
+        }
+        sendJson(response, 200, {
+          body: archived.body || "",
+          media: archived.media ? {
+            status: archived.media.status,
+            mimetype: archived.media.mimetype,
+            filename: archived.media.filename,
+            bytes: archived.media.bytes,
+          } : undefined,
+          mediaUrl: archived.media?.status === "saved"
+            ? `/api/chats/${encodeURIComponent(chatId)}/deleted-messages/${encodeURIComponent(archiveId)}/media`
+            : undefined,
+        });
+        return;
+      }
+      if (request.method === "GET" && deletedMessageMediaMatch?.[1] && deletedMessageMediaMatch[2]) {
+        if (!deletedMessageArchive) {
+          sendJson(response, 404, { error: "Saved deleted media is not available in this AmirOS copy." });
+          return;
+        }
+        const chatId = decodeURIComponent(deletedMessageMediaMatch[1]);
+        const archiveId = decodeURIComponent(deletedMessageMediaMatch[2]);
+        const archived = deletedMessageArchive.read(chatId, archiveId);
+        if (!archived?.mediaBytes || archived.media?.status !== "saved") {
+          sendJson(response, 404, { error: "The saved media is no longer available." });
+          return;
+        }
+        const safeFilename = (archived.media.filename || `deleted-${archiveId}`)
+          .replace(/[\r\n"\\\\/]/g, "-")
+          .slice(0, 120);
+        response.writeHead(200, {
+          "content-type": archived.media.mimetype || "application/octet-stream",
+          "content-length": archived.mediaBytes.length,
+          "content-disposition": `inline; filename="${safeFilename}"`,
+          "cache-control": "private, no-store",
+        });
+        response.end(archived.mediaBytes);
+        return;
+      }
+      if (request.method === "POST" && pathname === "/api/privacy/deleted-message-archive/clear") {
+        if (!deletedMessageArchive) {
+          sendJson(response, 404, { error: "Saved deleted messages are not available in this AmirOS copy." });
+          return;
+        }
+        const removed = deletedMessageArchive.clear();
+        sendJson(response, 200, { removed });
         return;
       }
 
@@ -2346,15 +2601,21 @@ export function startAmirosDashboard(options: DashboardOptions) {
           subjectChatIds: string[];
         }>();
         for (const chat of chats) {
-          for (const insight of chat.insights.filter((item) =>
-            item.status === "inferred" &&
-            (item.validity || "current") !== "historical" &&
-            chat.knowledgeTracking === "enabled" &&
-            hasFreshSuggestedActionEvidence(item, assessedAt),
-          )) {
-            const clusterKey = insight.clusterId || `${chat.chatId}:${insight.id}`;
+          const chatId = chat.chatId;
+          if (!chatId) continue;
+          for (const insight of chat.insights) {
+            const evidenceMessageId = insight.evidence.messageId;
+            if (!evidenceMessageId || !canSurfaceRelationshipSuggestedAction(insight, {
+              chatId,
+              contactName: chat.contactName,
+              ownerName,
+              knowledgeTracking: chat.knowledgeTracking || "disabled",
+              source: state.getConversationMemoryEntry(chatId, evidenceMessageId),
+              now: assessedAt,
+            })) continue;
+            const clusterKey = insight.clusterId || `${chatId}:${insight.id}`;
             const current = changesByCluster.get(clusterKey);
-            const subjectChatIds = [...new Set([...(current?.subjectChatIds || []), ...(insight.subjectChatIds || [chat.chatId])])];
+            const subjectChatIds = [...new Set([...(current?.subjectChatIds || []), ...(insight.subjectChatIds || [chatId])])];
             const subjectNames = [...new Set([
               ...(current?.subjectNames || []),
               ...(insight.subjectNames || []),
@@ -2362,7 +2623,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
             ])];
             const useCurrent = Boolean(current && current.updatedAt >= insight.updatedAt);
             const representative = useCurrent ? current! : insight;
-            const representativeChatId = useCurrent ? current!.chatId : chat.chatId;
+            const representativeChatId = useCurrent ? current!.chatId : chatId;
             changesByCluster.set(clusterKey, {
               ...representative,
               // Keep the representative insight ID and its owning chat together.
@@ -2397,8 +2658,11 @@ export function startAmirosDashboard(options: DashboardOptions) {
           events,
           calendarEvents,
           todos,
+          // A changing relationship can have several supporting observations,
+          // but the Overview should ask for at most one review per person.
           changes: [...changesByCluster.values()]
             .sort((a, b) => b.updatedAt - a.updatedAt)
+            .filter((item, index, items) => items.findIndex((candidate) => candidate.chatId === item.chatId) === index)
             .slice(0, 30),
           chats,
           questionHistory,
@@ -2442,6 +2706,8 @@ export function startAmirosDashboard(options: DashboardOptions) {
           query?: string;
           followUp?: { question?: string; answer?: string; sourceRefs?: Array<{ id?: string; chatId?: string; kind?: string }> };
           scope?: { knowledge?: boolean; calendar?: boolean };
+          selectedContactId?: string;
+          suggestionContext?: { chatId?: string; sourceIds?: string[] };
         }>(request);
         const query = body.query?.replace(/\s+/g, " ").trim() || "";
         if (!query || query.length > 500) {
@@ -2512,15 +2778,48 @@ export function startAmirosDashboard(options: DashboardOptions) {
           sendJson(response, 200, { answer: correction.answer, evidenceIds: [], sources: [] });
           return;
         }
-        const retrievedRecords = state.searchIntelligence(`${query} ${followUp?.question || ""}`.trim(), 48, archived)
-          .filter((record) => record.kind === "calendar_event" ? includeCalendar : includeKnowledge);
-        const relationship = includeKnowledge ? state.relationshipIntelligence(query) : { requested: false, briefs: [] };
+        const selectedContactId = typeof body.selectedContactId === "string"
+          ? body.selectedContactId.replace(/\s+/g, "").slice(0, 240)
+          : undefined;
+        const relationship = includeKnowledge ? state.relationshipIntelligence(query, Date.now(), selectedContactId) : { requested: false, briefs: [] };
         if (relationship.disambiguation?.length) {
           sendJson(response, 200, {
             answer: `I know more than one contact named ${relationship.disambiguation[0]?.split(/\s+/u)[0] || "that"}. Which one do you mean: ${relationship.disambiguation.join(", ")}?`,
             evidenceIds: [],
             sources: [],
+            disambiguation: relationship.disambiguationCandidates || [],
           });
+          return;
+        }
+        const resolvedContactId = selectedContactId || relationship.resolvedChatId;
+        const resolvedContactName = resolvedContactId ? state.getChatName(resolvedContactId) : undefined;
+        const normalizedResolvedName = resolvedContactName?.replace(/\s+/gu, " ").trim().toLocaleLowerCase();
+        let retrievedRecords = state.searchIntelligence(`${query} ${followUp?.question || ""}`.trim(), 48, archived)
+          .filter((record) => record.kind === "calendar_event" ? includeCalendar : includeKnowledge);
+        if (resolvedContactId) {
+          retrievedRecords = retrievedRecords.filter((record) =>
+            record.chatId === resolvedContactId || (
+              Boolean(normalizedResolvedName) &&
+              record.senderName?.replace(/\s+/gu, " ").trim().toLocaleLowerCase() === normalizedResolvedName
+            ),
+          );
+        }
+        const suggestionChatId = typeof body.suggestionContext?.chatId === "string"
+          ? body.suggestionContext.chatId.replace(/\s+/g, "").slice(0, 240)
+          : undefined;
+        const suggestionSourceIds = [...new Set((Array.isArray(body.suggestionContext?.sourceIds) ? body.suggestionContext.sourceIds : [])
+          .filter((id): id is string => typeof id === "string" && Boolean(id.trim()))
+          .map((id) => id.trim().slice(0, 160)))]
+          .slice(0, 8);
+        const anchoredRecords = suggestionChatId && suggestionSourceIds.length
+          ? state.intelligenceRecordsByReferences(
+            suggestionSourceIds.map((id) => ({ id, chatId: suggestionChatId })),
+            archived,
+            Date.now(),
+          )
+          : [];
+        if (suggestionSourceIds.length && anchoredRecords.length !== suggestionSourceIds.length) {
+          sendJson(response, 409, { error: "This suggestion is no longer supported by current knowledge. Ask AmirOS has removed it instead of guessing." });
           return;
         }
         const records = state.relationshipRecordsForQuestion(query, retrievedRecords, relationship);
@@ -2532,23 +2831,24 @@ export function startAmirosDashboard(options: DashboardOptions) {
           ? state.searchIntelligence(relationship.temporalFocus === "historical" ? "historical events" : "", 80, archived)
             .filter((record) => relationshipSourceIds.has(record.id))
           : [];
-        const answerRecords = [...new Map([...records, ...relationshipRecords].map((record) => [record.id, record])).values()].slice(0, 60);
-        const enriched = records.map((record) => ({
+        const groundedRecords = [...new Map([...anchoredRecords, ...records, ...relationshipRecords].map((record) => [record.id, record])).values()].slice(0, 60);
+        const answerRecords = groundedRecords;
+        const enriched = groundedRecords.map((record) => ({
           ...record,
           content: `[Chat: ${chatNameCache.get(record.chatId) || "WhatsApp contact"}] ${record.content}`,
         }));
         const answer = await ai.answerNetworkQuestion(
           query,
-          [...new Map([...enriched, ...relationshipRecords.map((record) => ({
-            ...record,
-            content: `[Chat: ${chatNameCache.get(record.chatId) || "WhatsApp contact"}] ${record.content}`,
-          }))].map((record) => [record.id, record])).values()],
+          enriched,
           state.getSettings().ownerProfile.displayName,
           followUp,
           relationship.briefs,
         );
         const recordsById = new Map(answerRecords.map((record) => [record.id, record]));
-        const sources = answer.evidenceIds
+        const evidenceIds = answer.evidenceIds.length || anchoredRecords.length === 0
+          ? answer.evidenceIds
+          : anchoredRecords.map((record) => record.id);
+        const sources = evidenceIds
           .flatMap((id) => {
             const record = recordsById.get(id);
             return record ? [{
@@ -2558,7 +2858,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
           });
         state.rememberIntelligenceAnswer(query, answer.answer, sources);
         state.addActivity("system", "Relationship memory searched", `${records.length} local records reviewed`);
-        sendJson(response, 200, { ...answer, sources });
+        sendJson(response, 200, { ...answer, evidenceIds, sources, resolvedContactId });
         return;
       }
 
@@ -2688,10 +2988,6 @@ export function startAmirosDashboard(options: DashboardOptions) {
         const chatId = decodeURIComponent(replySuggestionMatch[1]);
         const messageId = decodeURIComponent(replySuggestionMatch[2]);
         const contact = state.getContact(chatId);
-        if (contact.mode === "off") {
-          sendJson(response, 400, { error: "Enable this chat before asking AmirOS to draft a reply" });
-          return;
-        }
         const memory = state.getConversationMemory(chatId, 60);
         const message = memory.find((entry) => entry.messageId === messageId);
         if (!message || message.author === "owner" || message.author === "assistant") {
@@ -2699,11 +2995,13 @@ export function startAmirosDashboard(options: DashboardOptions) {
           return;
         }
         const contactName = chatNameCache.get(chatId) || state.getChatName(chatId) || "your contact";
+        const feedbackGuidance = state.getReplySuggestionGuidance(chatId);
         const reply = await ai.reply(`dashboard-reply-${chatId}-${messageId}`, [
           `Draft one short, natural WhatsApp reply from ${state.getSettings().ownerProfile.displayName} to ${contactName}.`,
           "Use the recent local conversation only for context. Do not mention AmirOS, automation, review, memory, tasks, calendars, or how the reply was generated.",
           "Return only the reply text. Keep the reply editable and do not send it yourself.",
           `Their message: ${message.content}`,
+          feedbackGuidance ? `Private owner feedback from earlier drafts in this same chat: ${feedbackGuidance}` : "",
         ].join("\n"), false, {
           scope: "chat",
           autoReplyAsOwner: true,
@@ -2729,6 +3027,26 @@ export function startAmirosDashboard(options: DashboardOptions) {
         sendJson(response, 200, { body: body.slice(0, 2_000) });
         return;
       }
+      const replySuggestionFeedbackMatch = pathname.match(
+        /^\/api\/chats\/([^/]+)\/messages\/([^/]+)\/reply-suggestion\/feedback$/,
+      );
+      if (request.method === "POST" && replySuggestionFeedbackMatch?.[1] && replySuggestionFeedbackMatch[2]) {
+        const chatId = decodeURIComponent(replySuggestionFeedbackMatch[1]);
+        const messageId = decodeURIComponent(replySuggestionFeedbackMatch[2]);
+        const body = await readJson<{ rating?: unknown; reasons?: unknown; note?: unknown }>(request, 2_048);
+        const rating = body.rating === "helpful" || body.rating === "needs_work" ? body.rating : undefined;
+        const reasons = Array.isArray(body.reasons)
+          ? body.reasons.filter((reason): reason is string => typeof reason === "string").slice(0, 4)
+          : [];
+        const note = typeof body.note === "string" ? body.note : undefined;
+        if (!rating || reasons.some((reason) => reason.trim().length > 80) || (note?.trim().length || 0) > 320) {
+          sendJson(response, 400, { error: "Choose valid feedback for this reply." });
+          return;
+        }
+        state.recordReplySuggestionFeedback(chatId, { rating, reasons, note });
+        sendJson(response, 201, { saved: true });
+        return;
+      }
       if (request.method === "POST" && messageActionMatch?.[1] && messageActionMatch[2] && messageActionMatch[3]) {
         const chatId = decodeURIComponent(messageActionMatch[1]);
         const messageId = decodeURIComponent(messageActionMatch[2]);
@@ -2752,7 +3070,14 @@ export function startAmirosDashboard(options: DashboardOptions) {
             sendJson(response, 400, { error: "Reply must be 1–5,000 characters" });
             return;
           }
-          const sent = await sendReplyResiliently(client, chatId, messageId, reply);
+          let sent: Awaited<ReturnType<typeof sendReplyResiliently>>;
+          try {
+            sent = await sendReplyResiliently(client, chatId, messageId, reply);
+          } catch (error) {
+            console.error("AmirOS could not send the dashboard reply:", error);
+            sendJson(response, 503, { error: replySendFailureMessage(error) });
+            return;
+          }
           state.rememberMessage(chatId, { role: "assistant", author: "owner", content: reply, countAsIncoming: false });
           void intelligenceLearner?.analyzeIncoming(chatId);
           refreshWritingStyle(chatId);
@@ -2765,6 +3090,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
             timestamp: sent.timestamp,
             type: sent.type,
             hasMedia: false,
+            sentAsNewMessage: sent.sentAsNewMessage,
           } });
           return;
         }

@@ -11,13 +11,10 @@ export function requiresControlCenterActivation(controlCenter: ControlCenterStat
 }
 
 /**
- * The Control Center card belongs to a managed beta package or a Mac that has
- * already started using the Control Center. Older local-only installs should
- * not receive a new, irrelevant connection task.
+ * A configured Control Center should always offer a visible connection and
+ * recovery path. This lets an existing local install pair its Mac on demand
+ * without hiding the only way to repair an unpaired connection.
  */
 export function shouldShowControlCenterAccess(controlCenter: ControlCenterStatus | undefined): boolean {
-  return Boolean(
-    controlCenter?.activationRequired
-    || (controlCenter?.configured && controlCenter.status !== "unpaired"),
-  );
+  return Boolean(controlCenter?.configured);
 }

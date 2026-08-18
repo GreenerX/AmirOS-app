@@ -8,7 +8,7 @@ import {
 import whatsappWeb from "whatsapp-web.js";
 import type { Message } from "whatsapp-web.js";
 import type { AiService } from "./ai.js";
-import { inferMessageLanguage } from "./ai.js";
+import { inferMessageLanguage, resolveAutoModeReplyConstraints } from "./ai.js";
 import { AUTO_REPLY_FOLLOW_UP_DELAY_MS, type AmirosState, type ReplyMode } from "./amiros-state.js";
 import { parseCommand, type BotCommand } from "./commands.js";
 import type { AppConfig } from "./config.js";
@@ -75,6 +75,25 @@ export function hasAutoReplyPersonaLeak(answer: string, recipientName: string, o
     : "the owner";
   return new RegExp(`\\b(?:i(?:'m| am)|this is)\\s+${escaped}\\b|(?:אני|אנוכי)\\s+${escaped}`, "iu").test(answer)
     || new RegExp(`\\b(?:i(?:'m| am)|this is)\\s+(?:${ownerAliases})'?s\\s+(?:brother|sister|partner|wife|husband|girlfriend|boyfriend)\\b|אני\\s+(?:אח|אחות|בן זוג|בת זוג)\\s+של\\s+(?:${ownerAliases})`, "iu").test(answer);
+}
+
+/**
+ * A second acknowledgement of the same style complaint is worse than no
+ * automatic reply: it advertises the automation and escalates the contact's
+ * frustration. Keep this deliberately narrow and use it only after a direct
+ * no-emoji request has already activated the hard constraint.
+ */
+export function hasRepeatedAutoModeStyleAcknowledgement(
+  answer: string,
+  memory: Array<{ role?: string; author?: string; content?: string }> = [],
+): boolean {
+  const acknowledgement = /^(?:fair(?:\s+enough)?|got\s+it|okay|ok|sorry|i\s+hear\s+you)\b/iu;
+  const styleRepair = /\b(?:emoji|emoticon|normal|behav(?:e|ing)?|annoying|robot|human|fake|keep(?:ing)?)\b/iu;
+  if (!acknowledgement.test(answer) || !styleRepair.test(answer)) return false;
+  return memory
+    .filter((entry) => entry.author === "owner" || entry.author === "assistant" || entry.role === "assistant")
+    .slice(-6)
+    .some((entry) => acknowledgement.test(entry.content || "") && styleRepair.test(entry.content || ""));
 }
 
 type ConversationAddressMessage = Pick<Message, "fromMe" | "from" | "to" | "getChat"> & {
@@ -810,6 +829,30 @@ export class MessageProcessor {
       if (autoReplySchedule && this.pendingAutoReplies.get(chatId)?.version !== autoReplySchedule.version) return;
       if (autoReplySchedule && hasAutoReplyPersonaLeak(answer, requesterName, ownerName)) {
         console.warn("Auto Mode reply held because it may impersonate the recipient", { chatId, messageId });
+        this.amiros?.addDraft({
+          chatId,
+          contactName: requesterName,
+          sourcePreview: command.prompt.slice(0, 180),
+          body: answer,
+        });
+        if (this.pendingAutoReplies.get(chatId)?.version === autoReplySchedule.version) {
+          this.pendingAutoReplies.delete(chatId);
+        }
+        return;
+      }
+      const recentAutoMemory = this.amiros?.getConversationMemory(
+        chatId,
+        this.config.conversationTurnLimit * 2 + 1,
+      ) || [];
+      const autoModeConstraints = autoReplySchedule
+        ? resolveAutoModeReplyConstraints({ autoReplyAsOwner: true, memory: recentAutoMemory }, command.prompt)
+        : undefined;
+      if (
+        autoReplySchedule &&
+        autoModeConstraints?.forbidEmojis &&
+        hasRepeatedAutoModeStyleAcknowledgement(answer, recentAutoMemory)
+      ) {
+        console.warn("Auto Mode reply held because it repeats an already-resolved style complaint", { chatId, messageId });
         this.amiros?.addDraft({
           chatId,
           contactName: requesterName,

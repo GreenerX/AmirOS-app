@@ -490,6 +490,41 @@ export type OutgoingMediaCaption = {
   timestamp: number;
 };
 
+/** Private owner feedback used only to make future reply drafts fit one chat. */
+export type ReplySuggestionFeedback = {
+  rating: "helpful" | "needs_work";
+  reasons: string[];
+  note?: string;
+  createdAt: number;
+};
+
+/** A local-only record of deleted content or one-time media the owner chose to save. */
+export type DeletedMessageArchiveItem = {
+  id: string;
+  messageId: string;
+  chatId: string;
+  /** One-time media is captured when received; deleted content on WhatsApp's revoke event. */
+  kind: "deleted" | "view_once";
+  fromMe: boolean;
+  timestamp: number;
+  deletedAt: number;
+  body?: string;
+  type: string;
+  viewOnce: boolean;
+  media?: {
+    status: "saved" | "unavailable" | "not_saved";
+    path?: string;
+    mimetype?: string;
+    filename?: string;
+    bytes?: number;
+  };
+};
+
+export type DeletedMessageArchiveSettings = {
+  enabled: boolean;
+  saveMedia: boolean;
+};
+
 type PersistedState = {
   theme: ThemeName;
   knowledgeTrackingDefault: KnowledgeTrackingDefault;
@@ -498,6 +533,13 @@ type PersistedState = {
   memories: Record<string, ConversationMemory>;
   /** AI decisions for only ambiguous reply cases; keyed by one chat and a context fingerprint. */
   replyAssessments: Record<string, CachedReplyAssessment>;
+  /** Per-chat, local feedback on reply drafts. It is never uploaded with intelligence data. */
+  replySuggestionFeedback: Record<string, ReplySuggestionFeedback[]>;
+  /** Opt-in deleted-message archive. The media path is local and is never sent to the dashboard settings payload. */
+  deletedMessageArchive: {
+    settings: DeletedMessageArchiveSettings;
+    messages: Record<string, DeletedMessageArchiveItem[]>;
+  };
   intelligenceHistory: IntelligenceQuestionHistoryItem[];
   /** Durable owner corrections prevent reviewed knowledge from resurfacing unchanged. */
   memoryCorrections: MemoryCorrection[];
@@ -570,6 +612,56 @@ function normalizeContactPronouns(value: unknown): ContactPronouns {
     : "unspecified";
 }
 
+function normalizeReplySuggestionFeedback(value: unknown): ReplySuggestionFeedback[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const item = entry as Partial<ReplySuggestionFeedback>;
+    if (item.rating !== "helpful" && item.rating !== "needs_work") return [];
+    const reasons = Array.isArray(item.reasons)
+      ? item.reasons.filter((reason): reason is string => typeof reason === "string")
+        .map((reason) => reason.replace(/\s+/gu, " ").trim().slice(0, 80))
+        .filter(Boolean).slice(0, 4)
+      : [];
+    const note = typeof item.note === "string" ? item.note.replace(/\s+/gu, " ").trim().slice(0, 320) || undefined : undefined;
+    return [{
+      rating: item.rating,
+      reasons,
+      note,
+      createdAt: Number.isFinite(item.createdAt) ? Number(item.createdAt) : Date.now(),
+    } satisfies ReplySuggestionFeedback];
+  }).slice(-30);
+}
+
+function normalizeDeletedMessageArchiveItem(chatId: string, value: unknown): DeletedMessageArchiveItem | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const item = value as Partial<DeletedMessageArchiveItem>;
+  if (typeof item.id !== "string" || !item.id || typeof item.messageId !== "string" || !item.messageId) return undefined;
+  if (typeof item.timestamp !== "number" || !Number.isFinite(item.timestamp) || typeof item.deletedAt !== "number" || !Number.isFinite(item.deletedAt)) return undefined;
+  const media = item.media && typeof item.media === "object" && (item.media.status === "saved" || item.media.status === "unavailable" || item.media.status === "not_saved")
+    ? {
+        status: item.media.status,
+        path: typeof item.media.path === "string" ? item.media.path.slice(0, 500) : undefined,
+        mimetype: typeof item.media.mimetype === "string" ? item.media.mimetype.slice(0, 160) : undefined,
+        filename: typeof item.media.filename === "string" ? item.media.filename.slice(0, 160) : undefined,
+        bytes: typeof item.media.bytes === "number" && Number.isFinite(item.media.bytes) ? Math.max(0, item.media.bytes) : undefined,
+      } satisfies NonNullable<DeletedMessageArchiveItem["media"]>
+    : undefined;
+  return {
+    id: item.id.slice(0, 120),
+    messageId: item.messageId.slice(0, 240),
+    chatId,
+    kind: item.kind === "view_once" ? "view_once" : "deleted",
+    fromMe: item.fromMe === true,
+    timestamp: item.timestamp,
+    deletedAt: item.deletedAt,
+    body: typeof item.body === "string" ? item.body.slice(0, 8_000) || undefined : undefined,
+    type: typeof item.type === "string" ? item.type.slice(0, 80) : "chat",
+    viewOnce: item.viewOnce === true,
+    media,
+  };
+}
+
 const DEFAULT_STATE: PersistedState = {
   theme: "forest",
   knowledgeTrackingDefault: "ask",
@@ -577,6 +669,8 @@ const DEFAULT_STATE: PersistedState = {
   contacts: {},
   memories: {},
   replyAssessments: {},
+  replySuggestionFeedback: {},
+  deletedMessageArchive: { settings: { enabled: false, saveMedia: false }, messages: {} },
   intelligenceHistory: [],
   memoryCorrections: [],
   quietHours: { enabled: false, start: "23:00", end: "07:00" },
@@ -1345,6 +1439,29 @@ export class AmirosState {
             } satisfies CachedReplyAssessment]];
           }).slice(-500),
         ),
+        replySuggestionFeedback: Object.fromEntries(
+          Object.entries(parsed.replySuggestionFeedback || {}).flatMap(([chatId, value]) => {
+            const feedback = normalizeReplySuggestionFeedback(value);
+            return feedback.length ? [[chatId, feedback]] : [];
+          }),
+        ),
+        deletedMessageArchive: {
+          settings: {
+            enabled: parsed.deletedMessageArchive?.settings?.enabled === true,
+            saveMedia: parsed.deletedMessageArchive?.settings?.saveMedia === true,
+          },
+          messages: Object.fromEntries(
+            Object.entries(parsed.deletedMessageArchive?.messages || {}).flatMap(([chatId, entries]) => {
+              if (!Array.isArray(entries)) return [];
+              const normalized = entries
+                .map((entry) => normalizeDeletedMessageArchiveItem(chatId, entry))
+                .filter((entry): entry is DeletedMessageArchiveItem => Boolean(entry))
+                .sort((left, right) => left.timestamp - right.timestamp)
+                .slice(-200);
+              return normalized.length ? [[chatId, normalized]] : [];
+            }),
+          ),
+        },
         intelligenceHistory: (Array.isArray(parsed.intelligenceHistory) ? parsed.intelligenceHistory : [])
           .filter((item): item is IntelligenceQuestionHistoryItem =>
             Boolean(item) && typeof item.question === "string" && typeof item.answer === "string",
@@ -1743,6 +1860,18 @@ export class AmirosState {
     return structuredClone(this.persisted.memories[chatId]?.entries.slice(-safeLimit) || []);
   }
 
+  /**
+   * Resolves the original local evidence for a proposed insight without
+   * exporting an entire conversation. Review surfaces use this to decide
+   * whether an inferred relationship detail is a live, contact-originated
+   * action rather than an observation from the owner's own message.
+   */
+  getConversationMemoryEntry(chatId: string, messageId: string): ConversationMemoryEntry | undefined {
+    if (!messageId || !this.getContact(chatId).memoryEnabled) return undefined;
+    const entry = this.persisted.memories[chatId]?.entries.find((item) => item.messageId === messageId);
+    return entry ? structuredClone(entry) : undefined;
+  }
+
   rememberOwnerAssistantMemoryContext(
     ownerChatId: string,
     input: Omit<OwnerAssistantMemoryContext, "createdAt"> & { createdAt?: number },
@@ -1817,6 +1946,96 @@ export class AmirosState {
       }
     }
     this.save();
+  }
+
+  recordReplySuggestionFeedback(chatId: string, feedback: Omit<ReplySuggestionFeedback, "createdAt">): void {
+    const cleaned: ReplySuggestionFeedback = {
+      rating: feedback.rating,
+      reasons: feedback.reasons.map((reason) => reason.replace(/\s+/gu, " ").trim().slice(0, 80)).filter(Boolean).slice(0, 4),
+      note: feedback.note?.replace(/\s+/gu, " ").trim().slice(0, 320) || undefined,
+      createdAt: Date.now(),
+    };
+    if (cleaned.rating !== "helpful" && cleaned.rating !== "needs_work") return;
+    this.persisted.replySuggestionFeedback[chatId] = [
+      ...(this.persisted.replySuggestionFeedback[chatId] || []),
+      cleaned,
+    ].slice(-30);
+    this.save();
+  }
+
+  /** A bounded, human-readable hint for a new draft. Never sent anywhere except the configured AI request for this chat. */
+  getReplySuggestionGuidance(chatId: string): string | undefined {
+    const feedback = this.persisted.replySuggestionFeedback[chatId] || [];
+    const concerns = feedback.filter((item) => item.rating === "needs_work").slice(-6);
+    const helpful = feedback.filter((item) => item.rating === "helpful").slice(-3);
+    const notes = [...concerns, ...helpful]
+      .flatMap((item) => [...item.reasons, item.note].filter((value): value is string => Boolean(value)))
+      .map((value) => value.replace(/\s+/gu, " ").trim())
+      .filter(Boolean)
+      .slice(-6);
+    return notes.length ? notes.join("; ").slice(0, 600) : undefined;
+  }
+
+  getDeletedMessageArchiveSettings(): DeletedMessageArchiveSettings {
+    return structuredClone(this.persisted.deletedMessageArchive.settings);
+  }
+
+  updateDeletedMessageArchiveSettings(patch: Partial<DeletedMessageArchiveSettings>): DeletedMessageArchiveSettings {
+    this.persisted.deletedMessageArchive.settings = {
+      ...this.persisted.deletedMessageArchive.settings,
+      ...(patch.enabled === undefined ? {} : { enabled: patch.enabled === true }),
+      ...(patch.saveMedia === undefined ? {} : { saveMedia: patch.saveMedia === true }),
+    };
+    this.save();
+    return this.getDeletedMessageArchiveSettings();
+  }
+
+  shouldArchiveDeletedMessages(chatId: string): boolean {
+    // This is deliberately separate from intelligence tracking. A user may
+    // want a private deleted-message record without allowing relationship
+    // learning or suggestions for that chat.
+    return this.persisted.deletedMessageArchive.settings.enabled && Boolean(chatId);
+  }
+
+  addDeletedMessageArchiveItem(item: Omit<DeletedMessageArchiveItem, "id" | "deletedAt">): DeletedMessageArchiveItem | undefined {
+    if (!this.shouldArchiveDeletedMessages(item.chatId)) return undefined;
+    const existing = this.persisted.deletedMessageArchive.messages[item.chatId] || [];
+    const known = existing.find((entry) => entry.messageId === item.messageId);
+    if (known) return structuredClone(known);
+    const entry: DeletedMessageArchiveItem = {
+      ...item,
+      id: randomUUID(),
+      deletedAt: Date.now(),
+      body: item.body?.slice(0, 8_000) || undefined,
+      media: item.media ? { ...item.media } : undefined,
+    };
+    this.persisted.deletedMessageArchive.messages[item.chatId] = [...existing, entry].slice(-200);
+    this.save();
+    return structuredClone(entry);
+  }
+
+  updateDeletedMessageArchiveMedia(chatId: string, id: string, media: DeletedMessageArchiveItem["media"]): void {
+    const entries = this.persisted.deletedMessageArchive.messages[chatId];
+    const entry = entries?.find((item) => item.id === id);
+    if (!entry) return;
+    entry.media = media ? { ...media } : undefined;
+    this.save();
+  }
+
+  listDeletedMessageArchive(chatId: string): DeletedMessageArchiveItem[] {
+    return structuredClone(this.persisted.deletedMessageArchive.messages[chatId] || []);
+  }
+
+  getDeletedMessageArchiveItem(chatId: string, id: string): DeletedMessageArchiveItem | undefined {
+    const item = this.persisted.deletedMessageArchive.messages[chatId]?.find((entry) => entry.id === id);
+    return item ? structuredClone(item) : undefined;
+  }
+
+  clearDeletedMessageArchive(): DeletedMessageArchiveItem[] {
+    const entries = Object.values(this.persisted.deletedMessageArchive.messages).flat();
+    this.persisted.deletedMessageArchive.messages = {};
+    this.save();
+    return structuredClone(entries);
   }
 
   /**
@@ -2565,7 +2784,7 @@ export class AmirosState {
       .sort((left, right) => right.latestMessageAt - left.latestMessageAt);
   }
 
-  intelligenceSnapshot(): IntelligenceChatSnapshot[] {
+  intelligenceSnapshot(now = Date.now()): IntelligenceChatSnapshot[] {
     return Object.entries(this.persisted.memories)
       .map(([chatId, memory]) => {
         type IndexedEntry = { entry: ConversationMemoryEntry; index: number };
@@ -2595,7 +2814,6 @@ export class AmirosState {
           if (isOutgoing && isMoreRecent(candidate, lastOutgoing)) lastOutgoing = candidate;
           if (isHumanInteraction && isMoreRecent(candidate, lastInteraction)) lastInteraction = candidate;
         });
-        const now = Date.now();
         return {
           chatId,
           insights: structuredClone((memory.insights || []).map((item) => ({
@@ -2603,7 +2821,7 @@ export class AmirosState {
             freshness: assessKnowledgeFreshness(item, now).state,
             explanation: explainContactInsight(item, memory.insights || [], now),
           }))),
-          commitments: structuredClone((memory.commitments || []).map((item) => ({ ...item, status: relationshipCommitmentStatus(item) }))),
+          commitments: structuredClone((memory.commitments || []).map((item) => ({ ...item, status: relationshipCommitmentStatus(item, now) }))),
           events: structuredClone(memory.events || []),
           todos: structuredClone(memory.todos || []),
           profile: memory.profile ? structuredClone(memory.profile) : undefined,
@@ -2623,8 +2841,8 @@ export class AmirosState {
    * It intentionally derives from the canonical memory/action records above
    * instead of persisting generated relationship prose as another truth store.
    */
-  relationshipIntelligence(query: string, now = Date.now()): RelationshipIntelligenceResult {
-    const chats = this.intelligenceSnapshot();
+  relationshipIntelligence(query: string, now = Date.now(), selectedChatId?: string): RelationshipIntelligenceResult {
+    const chats = this.intelligenceSnapshot(now);
     return buildRelationshipIntelligence(query, chats.map((chat) => ({
       chatId: chat.chatId,
       contactName: this.getChatName(chat.chatId),
@@ -2635,7 +2853,7 @@ export class AmirosState {
       events: chat.events,
       needsReply: chat.needsReply,
       lastInteraction: chat.lastInteraction,
-    })), now);
+    })), now, selectedChatId);
   }
 
   relationshipRecordsForQuestion(
@@ -3058,6 +3276,105 @@ export class AmirosState {
       .filter((record) => !hasMatches || record.score >= 3)
       .sort((a, b) => b.score - a.score || b.timestamp - a.timestamp)
       .slice(0, Math.max(1, Math.min(80, limit)));
+  }
+
+  /**
+   * Resolves the canonical records carried by a proactive Ask suggestion.
+   * Suggestions must be able to prove their answer before the card is shown,
+   * so this path is deliberately stricter than broad keyword retrieval.
+   */
+  intelligenceRecordsByReferences(
+    references: Array<{ id: string; chatId: string }>,
+    excludedChatIds = new Set<string>(),
+    now = Date.now(),
+  ): IntelligenceSearchRecord[] {
+    const records: IntelligenceSearchRecord[] = [];
+    const seen = new Set<string>();
+    const toMilliseconds = (value: number) => value > 0 && value < 10_000_000_000 ? value * 1_000 : value;
+    for (const reference of references.slice(0, 8)) {
+      if (!reference.id || !reference.chatId || excludedChatIds.has(reference.chatId)) continue;
+      const key = `${reference.chatId}:${reference.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const memory = this.persisted.memories[reference.chatId];
+      if (!memory) continue;
+      const contactName = memory.chatName;
+
+      const insight = memory.insights.find((item) => item.id === reference.id);
+      if (insight && insight.status === "confirmed" && insight.validity !== "historical") {
+        const freshness = assessKnowledgeFreshness(insight, now);
+        if (freshness.state !== "stale" && freshness.state !== "historical" && !freshness.qualify) {
+          records.push({
+            id: insight.id,
+            chatId: reference.chatId,
+            contactName,
+            kind: "insight",
+            content: insight.content,
+            senderName: insight.evidence.senderName,
+            status: insight.status,
+            knowledgeValidity: insight.validity || "current",
+            knowledgeFreshness: freshness.state,
+            knowledgeNeedsQualification: freshness.qualify,
+            explanation: explainContactInsight(insight, memory.insights, now),
+            timestamp: toMilliseconds(insight.lastReinforcedAt || insight.updatedAt),
+            score: 100,
+          });
+        }
+        continue;
+      }
+
+      const event = memory.events.find((item) => item.id === reference.id);
+      if (event) {
+        const startAt = toMilliseconds(event.startAt);
+        if (event.status === "confirmed" && startAt >= now) {
+          records.push({
+            id: event.id,
+            chatId: reference.chatId,
+            contactName,
+            kind: "calendar_event",
+            content: `${event.title} — ${new Date(startAt).toLocaleString()}${event.location ? ` — ${event.location}` : ""}`,
+            senderName: event.evidence.senderName,
+            status: event.status,
+            timestamp: startAt,
+            score: 100,
+          });
+        }
+        continue;
+      }
+
+      const todo = memory.todos.find((item) => item.id === reference.id);
+      if (todo && todo.status === "open" && typeof todo.dueAt === "number") {
+        const dueAt = toMilliseconds(todo.dueAt);
+        records.push({
+          id: todo.id,
+          chatId: reference.chatId,
+          contactName,
+          kind: "todo",
+          content: `${todo.title} — due ${new Date(dueAt).toLocaleString()}${todo.note ? ` — ${todo.note}` : ""}`,
+          senderName: todo.evidence.senderName,
+          status: todo.status,
+          timestamp: dueAt,
+          score: 100,
+        });
+        continue;
+      }
+
+      const commitment = memory.commitments.find((item) => item.id === reference.id);
+      if (commitment && commitment.status === "open") {
+        records.push({
+          id: commitment.id,
+          chatId: reference.chatId,
+          contactName,
+          kind: "commitment",
+          content: `${commitment.content}${commitment.dueAt ? ` — due ${new Date(toMilliseconds(commitment.dueAt)).toLocaleString()}` : ""}`,
+          senderName: commitment.assigneeName,
+          status: commitment.status,
+          timestamp: toMilliseconds(commitment.dueAt || commitment.updatedAt),
+          score: 100,
+        });
+      }
+    }
+    return records;
   }
 
   /**
@@ -4754,6 +5071,8 @@ export class AmirosState {
     settings.memories = {};
     settings.intelligenceHistory = [];
     settings.activities = [];
+    settings.replySuggestionFeedback = {};
+    settings.deletedMessageArchive.messages = {};
     return settings;
   }
 
@@ -4763,6 +5082,7 @@ export class AmirosState {
     > & {
       assistant?: Partial<AssistantSettings>;
       ownerProfile?: Partial<OwnerProfile>;
+      deletedMessageArchive?: Partial<DeletedMessageArchiveSettings>;
     },
   ): PersistedState {
     this.persisted = {
@@ -4781,6 +5101,12 @@ export class AmirosState {
       ownerProfile: patch.ownerProfile
         ? { ...this.persisted.ownerProfile, ...patch.ownerProfile }
         : this.persisted.ownerProfile,
+      deletedMessageArchive: patch.deletedMessageArchive
+        ? {
+            ...this.persisted.deletedMessageArchive,
+            settings: { ...this.persisted.deletedMessageArchive.settings, ...patch.deletedMessageArchive },
+          }
+        : this.persisted.deletedMessageArchive,
     };
     this.save();
     return this.getSettings();

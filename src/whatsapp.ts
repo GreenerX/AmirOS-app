@@ -144,10 +144,20 @@ export type WhatsAppMessageHandler = (
   isSelfChat: boolean,
 ) => Promise<void>;
 
+export type WhatsAppMessageRevokeHandler = (message: Message, original?: Message) => Promise<void>;
+export type WhatsAppViewOnceMessageHandler = (message: Message) => Promise<void>;
+
+function isViewOnceMessage(message: Message): boolean {
+  const raw = message as unknown as { isViewOnce?: boolean; _data?: { isViewOnce?: boolean; isViewOnceV2?: boolean } };
+  return raw.isViewOnce === true || raw._data?.isViewOnce === true || raw._data?.isViewOnceV2 === true;
+}
+
 export function createWhatsAppClient(
   config: AppConfig,
   onMessage: WhatsAppMessageHandler,
   amiros?: AmirosState,
+  onMessageRevoked?: WhatsAppMessageRevokeHandler,
+  onViewOnceMessage?: WhatsAppViewOnceMessageHandler,
 ): WhatsAppClient {
   const ownIds = new Set<string>();
   let isReady = false;
@@ -444,8 +454,18 @@ export function createWhatsAppClient(
   });
   client.on("message_create", (message) => {
     const isSelfChat = isSelfChatMessage(message, ownIds);
+    if (isViewOnceMessage(message)) {
+      void onViewOnceMessage?.(message).catch((error) =>
+        console.warn("Could not archive one-time WhatsApp media:", error instanceof Error ? error.message : String(error)),
+      );
+    }
     void onMessage(message, isSelfChat).catch((error) =>
       console.error("Unhandled WhatsApp message error:", error),
+    );
+  });
+  client.on("message_revoke_everyone", (message, original) => {
+    void onMessageRevoked?.(message, original ?? undefined).catch((error) =>
+      console.warn("Could not archive a deleted WhatsApp message:", error instanceof Error ? error.message : String(error)),
     );
   });
 

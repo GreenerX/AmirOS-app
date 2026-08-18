@@ -1,4 +1,4 @@
-import { BarChart3, CalendarDays, ChevronDown, ContactRound, Download, Home, LifeBuoy, ListChecks, Mail, PanelLeftClose, PanelLeftOpen, Settings, TerminalSquare, UsersRound } from "lucide-react";
+import { CalendarDays, ChevronDown, ContactRound, Download, Home, LifeBuoy, Mail, PanelLeftClose, PanelLeftOpen, Settings, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import type { DashboardData, ViewName } from "../types";
@@ -23,9 +23,6 @@ const profileNavigation: Array<{
   tone: string;
 }> = [
   { id: "settings", label: "Settings", icon: Settings, tone: "settings" },
-  { id: "automations", label: "Automations", icon: ListChecks, tone: "tasks" },
-  { id: "terminal", label: "Terminal", icon: TerminalSquare, tone: "terminal" },
-  { id: "usage", label: "Usage", icon: BarChart3, tone: "usage" },
 ];
 
 type SidebarProps = {
@@ -69,6 +66,11 @@ export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleC
   const navigateFromProfile = (view: ViewName) => {
     setProfileMenuOpen(false);
     onNavigate(view);
+  };
+
+  const openSupportFromProfile = () => {
+    setProfileMenuOpen(false);
+    onOpenBetaSupport();
   };
 
   return (
@@ -118,6 +120,10 @@ export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleC
                 <span>{label}</span>
               </button>
             ))}
+            <button className="profile-menu-item" type="button" role="menuitem" onClick={openSupportFromProfile}>
+              <span className="profile-menu-icon"><LifeBuoy size={21} /></span>
+              <span>Help &amp; feedback</span>
+            </button>
           </div>
         ) : null}
         <button className="profile-button" type="button" onClick={() => setProfileMenuOpen((open) => !open)} aria-label="Open AmirOS tools" aria-haspopup="menu" aria-expanded={profileMenuOpen} aria-controls="profile-tools-menu">
@@ -129,7 +135,6 @@ export function Sidebar({ current, onNavigate, unreadCount, collapsed, onToggleC
           <ChevronDown className={profileMenuOpen ? "profile-button-chevron open" : "profile-button-chevron"} size={18} aria-hidden="true" />
         </button>
       </div>
-      <button className="sidebar-support" type="button" onClick={onOpenBetaSupport} aria-label="Help and feedback"><LifeBuoy size={16} /><span>Help &amp; feedback</span></button>
       {canInstallApp ? <button className="sidebar-dock-install" type="button" onClick={onInstallApp} disabled={installingApp} aria-label="Add AmirOS to your Dock"><Download size={16} /><span>{installingApp ? "Opening install…" : "Add AmirOS to your Dock"}</span></button> : null}
       <button className={updateAvailable ? "sidebar-version update-available" : "sidebar-version"} type="button" onClick={onOpenReleaseNotes} title={updateAvailable ? "An AmirOS update is ready" : "View release notes"}>v{version}<span>{updateAvailable ? "Update ready" : "What’s new"}</span></button>
       <small className="sidebar-rights">© 2026 Amir Friedman.<br />All rights reserved.</small>

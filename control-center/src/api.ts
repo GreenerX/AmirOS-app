@@ -1,4 +1,4 @@
-import type { AccountSnapshot, AdminOverview, BetaApplicationState, SupportTicket } from "./types";
+import type { AccountSnapshot, AdminOverview, BetaApplicationState, ReleaseChannel, ReleaseControlSnapshot, SupportTicket } from "./types";
 
 type ApiResult<T> = { data?: T; message?: string; status: number };
 
@@ -32,6 +32,8 @@ export function updateAdminUser(input: {
   releaseChannel?: "internal" | "beta" | "stable";
   featureId?: string;
   enabled?: boolean;
+  firstName?: string;
+  lastName?: string;
 }): Promise<ApiResult<{ ok: true }>> {
   return request<{ ok: true }>("/api/admin/users", {
     method: "PATCH",
@@ -69,12 +71,52 @@ export function updateBetaApplication(input: {
   });
 }
 
+export function createManualBetaApplication(input: { firstName: string; lastName: string; email: string; internalNote?: string }): Promise<ApiResult<{ application: unknown }>> {
+  return request<{ application: unknown }>("/api/admin/applicants", { method: "POST", body: JSON.stringify({ ...input, action: "create_manual" }) });
+}
+
+export function updateBetaApplicationProfile(input: { applicationId: string; firstName: string; lastName: string; email: string; internalNote?: string }): Promise<ApiResult<{ application: unknown }>> {
+  return request<{ application: unknown }>("/api/admin/applicants", { method: "PATCH", body: JSON.stringify({ ...input, action: "update_profile" }) });
+}
+
+export function archiveBetaApplication(input: { applicationId: string; archived: boolean }): Promise<ApiResult<{ application: unknown }>> {
+  return request<{ application: unknown }>("/api/admin/applicants", { method: "PATCH", body: JSON.stringify({ applicationId: input.applicationId, action: input.archived ? "archive" : "restore" }) });
+}
+
 export function approveAndInviteBetaApplication(input: {
   applicationId: string;
 }): Promise<ApiResult<{ ok: true; state: "invited"; invitedAt?: string; delivery: "sent" | "existing_account" }>> {
   return request<{ ok: true; state: "invited"; invitedAt?: string; delivery: "sent" | "existing_account" }>("/api/admin/applicants", {
     method: "PATCH",
     body: JSON.stringify({ ...input, action: "approve_and_invite" }),
+  });
+}
+
+export function getAdminReleases(): Promise<ApiResult<ReleaseControlSnapshot>> {
+  return request<ReleaseControlSnapshot>("/api/admin/releases");
+}
+
+export function createAdminRelease(input: {
+  channel: ReleaseChannel;
+  version: string;
+  downloadUrl: string;
+  sha256: string;
+  releaseNotesUrl?: string;
+}): Promise<ApiResult<{ release: unknown }>> {
+  return request<{ release: unknown }>("/api/admin/releases", {
+    method: "POST",
+    body: JSON.stringify({ ...input, action: "create" }),
+  });
+}
+
+export function setAdminReleaseChannel(input: {
+  channel: ReleaseChannel;
+  mode: "hold" | "available";
+  releaseId?: number;
+}): Promise<ApiResult<{ channel: unknown }>> {
+  return request<{ channel: unknown }>("/api/admin/releases", {
+    method: "PATCH",
+    body: JSON.stringify(input),
   });
 }
 

@@ -13,6 +13,16 @@ type ApplicationRecord = {
   state: "requested" | "reviewing" | "approved" | "invited" | "device_pending" | "active" | "declined";
 };
 
+type ApplicantInput = {
+  applicationId?: unknown;
+  state?: unknown;
+  action?: unknown;
+  firstName?: unknown;
+  lastName?: unknown;
+  email?: unknown;
+  internalNote?: unknown;
+};
+
 type IdentityUserList = { users?: Array<{ email?: unknown }> };
 
 function safeIdentityConfig(): { url: string; token: string } | undefined {
@@ -105,16 +115,39 @@ async function approveAndInvite(
 }
 
 export default async (request: Request, _context: Context): Promise<Response> => {
-  if (request.method !== "PATCH") return methodNotAllowed();
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  const input = await request.json().catch(() => undefined) as { applicationId?: unknown; state?: unknown; action?: unknown } | undefined;
-  if (!input || typeof input.applicationId !== "string") return json({ message: "Choose an applicant first." }, 400);
+  const input = await request.json().catch(() => undefined) as ApplicantInput | undefined;
+  if (!input) return json({ message: "Choose an applicant first." }, 400);
   const client = getSupabaseAdmin();
   if (client instanceof Response) return client;
   const operator = await ensureControlAccount(client, admin);
   if (operator instanceof Response) return operator;
+  if (request.method === "POST") {
+    if (input.action !== "create_manual" || typeof input.firstName !== "string" || typeof input.lastName !== "string" || typeof input.email !== "string" || (input.internalNote !== undefined && typeof input.internalNote !== "string")) return json({ message: "Enter a first name, last name, and email address." }, 400);
+    const { data, error } = await client.rpc("control_create_manual_beta_application", {
+      p_actor_user_id: operator.netlify_user_id, p_first_name: input.firstName, p_last_name: input.lastName, p_email: input.email, p_internal_note: input.internalNote || null,
+    });
+    if (error || !data) return json({ message: "The applicant could not be added. Check whether that email already exists." }, 409);
+    return json({ application: data }, 201);
+  }
+  if (request.method !== "PATCH" || typeof input.applicationId !== "string") return methodNotAllowed();
   if (input.action === "approve_and_invite") return approveAndInvite(input.applicationId, client, operator.netlify_user_id);
+  if (input.action === "update_profile") {
+    if (typeof input.firstName !== "string" || typeof input.lastName !== "string" || typeof input.email !== "string" || (input.internalNote !== undefined && typeof input.internalNote !== "string")) return json({ message: "Enter a first name, last name, and email address." }, 400);
+    const { data, error } = await client.rpc("control_update_beta_application_profile", {
+      p_actor_user_id: operator.netlify_user_id, p_application_id: input.applicationId, p_first_name: input.firstName, p_last_name: input.lastName, p_email: input.email, p_internal_note: input.internalNote || null,
+    });
+    if (error || !data) return json({ message: "The profile could not be updated. Invited applicants need a new invitation to change email." }, 409);
+    return json({ application: data });
+  }
+  if (input.action === "archive" || input.action === "restore") {
+    const { data, error } = await client.rpc("control_archive_beta_application", {
+      p_actor_user_id: operator.netlify_user_id, p_application_id: input.applicationId, p_archive: input.action === "archive",
+    });
+    if (error || !data) return json({ message: input.action === "archive" ? "Only declined applicants can be archived." : "The applicant could not be restored." }, 409);
+    return json({ application: data });
+  }
   if (typeof input.state !== "string" || !applicationStates.has(input.state)) return json({ message: "Choose a valid lifecycle state." }, 400);
   const { error } = await moveApplication(client, operator.netlify_user_id, input.applicationId, input.state);
   if (error) {
@@ -123,4 +156,4 @@ export default async (request: Request, _context: Context): Promise<Response> =>
   return json({ ok: true });
 };
 
-export const config: Config = { path: "/api/admin/applicants", method: ["PATCH"] };
+export const config: Config = { path: "/api/admin/applicants", method: ["POST", "PATCH"] };

@@ -473,6 +473,7 @@ export const demoDashboard: DashboardData = {
       displayName: "Alex Morgan",
       avatarUrl: "/profile-avatars/avatar-01.png",
     },
+    deletedMessageArchive: { enabled: false, saveMedia: false },
   },
 };
 
@@ -685,5 +686,39 @@ export function demoIntelligenceData(): IntelligenceData {
       createdAt: Date.now() - 25 * 60_000,
     }],
     suggestedQuestions: ["What should I remember before meeting Sana tomorrow?", "What needs my attention today?", "What does Sana prefer?"],
+    proactive: [
+      {
+        id: "demo-proactive-launch-walkthrough",
+        fingerprint: "demo-proactive-launch-walkthrough-v1",
+        kind: "upcoming_context",
+        priority: 1,
+        title: "Before Sana’s launch walkthrough",
+        detail: "Tomorrow · confirmed plan + fresh conversation context",
+        why: "A confirmed meeting is paired with Sana’s recent request about the decision sequence.",
+        chatId: "sana@demo",
+        contactName: "Sana Farooq",
+        sourceIds: [launchReview.id, sanaLaunchTopic.id],
+        action: "calendar",
+        timestamp: launchReview.startAt,
+        sourceTimestamp: sanaLaunchTopic.updatedAt,
+        aiAssessment: { confidence: 97, reason: "Specific, timely, and supported by both the plan and direct context." },
+      },
+      {
+        id: "demo-proactive-strategic-partnership",
+        fingerprint: "demo-proactive-strategic-partnership-v1",
+        kind: "meaningful_change",
+        priority: 30,
+        title: "Something changed with Sana Farooq",
+        detail: sanaPersonalTopic.content,
+        why: "This is fresh, confirmed relationship knowledge backed by a direct conversation.",
+        chatId: "sana@demo",
+        contactName: "Sana Farooq",
+        sourceIds: [sanaPersonalTopic.id],
+        action: "chat",
+        timestamp: sanaPersonalTopic.updatedAt,
+        sourceTimestamp: sanaPersonalTopic.updatedAt,
+        aiAssessment: { confidence: 94, reason: "A meaningful recent shift with clear relationship value." },
+      },
+    ],
   };
 }

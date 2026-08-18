@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AiService,
   buildNetworkAnswerInstructions,
   cleanNetworkAnswerText,
   buildContactProfilePrompt,
@@ -8,9 +9,11 @@ import {
   buildRequesterPerspectiveInstructions,
   buildResponseInput,
   inferMessageLanguage,
+  resolveAutoModeReplyConstraints,
   replyConversationKey,
   type ReplyContext,
 } from "../src/ai.js";
+import type { AiServiceOptions } from "../src/ai.js";
 
 const context: ReplyContext = {
   chatName: "Product Team",
@@ -162,6 +165,82 @@ describe("AI contact personalization", () => {
     expect(perspective).not.toContain("The current request was written by Sana");
   });
 
+  it("treats a contact's latest no-emoji request as a hard Auto Mode constraint", () => {
+    const autoModeContext: ReplyContext = {
+      ...context,
+      isGroup: false,
+      autoReplyAsOwner: true,
+      ownerName: "Amir",
+      requesterName: "Sana",
+      memory: [
+        { role: "assistant", author: "owner", content: "No more star emojis 😂", timestamp: 1 },
+        { role: "user", author: "contact", content: "Yeah right, no emojis at all.", timestamp: 2 },
+      ],
+      styleProfile: {
+        summary: "Friendly and playful.",
+        messageLength: "Short",
+        emojiUse: "One emoji at the end",
+        formality: "Casual",
+        replyGuidance: ["Keep it light."],
+        updatedAt: 3,
+        sourceMessageCount: 3,
+      },
+    };
+
+    const instructions = buildPersonalizedInstructions(autoModeContext, "Stop with the emojis, you're a bot.");
+    expect(resolveAutoModeReplyConstraints(autoModeContext, "I hate you")).toEqual({ forbidEmojis: true });
+    expect(instructions).toContain("LIVE CONTACT PREFERENCE (hard constraint)");
+    expect(instructions).toContain("Use no emoji, emoticon, or decorative symbol");
+    expect(instructions).toContain("do not repeat the same acknowledgement");
+
+    expect(resolveAutoModeReplyConstraints({
+      ...autoModeContext,
+      memory: [...autoModeContext.memory!, {
+        role: "user", author: "contact", content: "You can use emojis again.", timestamp: 4,
+      }],
+    }, "Sounds good")).toEqual({ forbidEmojis: false });
+  });
+
+  it("enforces the no-emoji Auto Mode rule after generation instead of trusting the model alone", async () => {
+    const ai = new AiService({
+      apiKey: "test-key",
+      textModel: "test-model",
+      imageModel: "test-image-model",
+      transcribeModel: "test-transcribe-model",
+      imageQuality: "low",
+      reasoningEffort: "none",
+      maxOutputTokens: 160,
+      conversationTurnLimit: 4,
+      instructions: "Use friendly emojis.",
+      webSearchEnabled: false,
+      webSearchContextSize: "low",
+      webSearchMaxSources: 0,
+    } satisfies AiServiceOptions);
+    (ai as unknown as {
+      client: { responses: { create: () => Promise<unknown> } };
+    }).client = {
+      responses: {
+        create: async () => ({
+          id: "auto-mode-no-emoji",
+          output_text: "Got it 😂 I’ll keep it normal. ✨",
+          output: [],
+        }),
+      },
+    };
+
+    await expect(ai.reply("sana@c.us", "I hate you", false, {
+      ...context,
+      isGroup: false,
+      autoReplyAsOwner: true,
+      memory: [{
+        role: "user",
+        author: "contact",
+        content: "No emojis at all.",
+        timestamp: 1,
+      }],
+    })).resolves.toBe("Got it I’ll keep it normal.");
+  });
+
   it("keeps owner-authored conversation history in the owner role", () => {
     const ownerHistory: ReplyContext = {
       ...context,
@@ -175,7 +254,7 @@ describe("AI contact personalization", () => {
     };
 
     expect(buildResponseInput("Sounds good", ownerHistory, true)).toEqual([
-      { role: "assistant", content: "[Amir] I can make it after work." },
+      { role: "assistant", content: "I can make it after work." },
       { role: "user", content: "[Sana] Sounds good" },
     ]);
   });
@@ -487,6 +566,8 @@ describe("AI contact personalization", () => {
     expect(instructions).toContain("source conversation, not necessarily the speaker");
     expect(instructions).toContain("Some memory records include an explanation object");
     expect(instructions).toContain("current versus historical truth");
+    expect(instructions).toContain("bold, specific lead phrase");
+    expect(instructions).toContain("return one matching semantic token in listIcons");
     expect(instructions).toContain("Never put record IDs");
   });
 

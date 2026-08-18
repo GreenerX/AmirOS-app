@@ -330,13 +330,112 @@ export async function askIntelligence(
   options?: {
     followUp?: { question: string; answer: string; sourceRefs?: Array<{ id: string; chatId: string; kind: "insight" }> };
     scope?: { knowledge: boolean; calendar: boolean };
+    selectedContactId?: string;
+    suggestionContext?: { chatId: string; sourceIds: string[] };
     signal?: AbortSignal;
   },
 ): Promise<IntelligenceSearchResult> {
-  if (isDemo) return { answer: "Before meeting Sana tomorrow, bring the final pricing sheet and a one-page decision summary. She values concise recommendations, and she asked to reserve the first 20 minutes to agree the launch sequence and named owners.", evidenceIds: [], sources: [] };
+  if (isDemo) {
+    if (/\bmichelle\b/iu.test(query) && !options?.selectedContactId) {
+      return {
+        answer: "Which Michelle do you mean?",
+        evidenceIds: [],
+        sources: [],
+        disambiguation: [
+          {
+            chatId: "michelle-soffen@demo",
+            contactName: "Michelle Soffen",
+            detail: "Director of Product · Vertex Solutions",
+            avatarUrl: "/demo-avatars/michelle-soffen.png",
+            lastInteractionAt: new Date(2026, 7, 16, 12).getTime(),
+          },
+          {
+            chatId: "michelle-chechi@demo",
+            contactName: "Michelle Chechi",
+            detail: "Operations Lead · Northstar",
+            avatarUrl: "/demo-avatars/michelle-chechi.png",
+            lastInteractionAt: new Date(2026, 7, 10, 12).getTime(),
+          },
+        ],
+      };
+    }
+    if (options?.selectedContactId === "michelle-soffen@demo") {
+      const timestamp = new Date(2026, 7, 16, 12).getTime();
+      return {
+        answer: "The latest I know is from Aug 16: Michelle Soffen was focused on product planning and vendor evaluation, and she preferred clear decisions with practical next steps. I don’t have a newer update on how she is today.",
+        evidenceIds: ["demo-michelle-soffen-context"],
+        resolvedContactId: "michelle-soffen@demo",
+        sources: [{
+          id: "demo-michelle-soffen-context", chatId: "michelle-soffen@demo", contactName: "Michelle Soffen",
+          kind: "insight", content: "Michelle was focused on product planning and vendor evaluation and preferred clear decisions with practical next steps.",
+          senderName: "Michelle Soffen", timestamp, score: 100,
+        }],
+      };
+    }
+    if (options?.selectedContactId === "michelle-chechi@demo") {
+      const timestamp = new Date(2026, 7, 10, 12).getTime();
+      return {
+        answer: "The latest I know is from Aug 10: Michelle Chechi was coordinating the next operational handoff and focused on ownership and timing. I don’t have a newer update on how she is today.",
+        evidenceIds: ["demo-michelle-chechi-context"],
+        resolvedContactId: "michelle-chechi@demo",
+        sources: [{
+          id: "demo-michelle-chechi-context", chatId: "michelle-chechi@demo", contactName: "Michelle Chechi",
+          kind: "insight", content: "Michelle was coordinating the next operational handoff and focused on ownership and timing.",
+          senderName: "Michelle Chechi", timestamp, score: 100,
+        }],
+      };
+    }
+    const data = demoIntelligenceData();
+    if (/icon demo|worth remembering|remember about amir/iu.test(query)) {
+      const timestamp = new Date(2026, 7, 18, 10, 30).getTime();
+      return {
+        answer: [
+          "A few things stand out as worth remembering:",
+          "- **Flexible collaboration:** Dan is flexible about where you meet and wants to share customer and sales insights relevant to your progress together.",
+          "- **Reliable connection:** You need reliable internet when working with Dan, and these are among your most productive hours.",
+          "- **A warm invitation:** Maya misses having you around, wants to try your app, and invited you and Dani to a Sweetspot party.",
+          "- **Affection matters:** You and Dani use affectionate terms like ‘Babe’ and ‘Love you.’",
+          "- **Your Tel Aviv context:** You returned to high-tech after nearly pursuing music and aren’t a professional DJ or musician.",
+          "- **Music is part of your story:** Rotem contacted you about possibly playing at her partner’s release party.",
+          "- **A useful industry connection:** Payton has a WME connection and wants to help present films to Hollywood.",
+        ].join("\n"),
+        evidenceIds: ["demo-sana-launch-topic"],
+        listIcons: ["collaboration", "connection", "event", "people", "location", "music", "work"],
+        resolvedContactId: "sana@demo",
+        sources: [{
+          id: "demo-sana-launch-topic", chatId: "sana@demo", contactName: "Sana Farooq", kind: "insight",
+          content: "A compact set of remembered relationship details.", senderName: "Sana Farooq", timestamp, score: 100,
+        }],
+      };
+    }
+    if (options?.suggestionContext?.sourceIds.includes("demo-sana-personal-topic")) {
+      const relationship = data.changes.find((item) => item.id === "demo-sana-personal-topic")!;
+      return {
+        answer: "Sana’s role in your work has shifted from a project contact toward a strategic partner. The recent signal is that she values a short personal check-in before moving into project details—useful context for how you open the next conversation.",
+        evidenceIds: [relationship.id],
+        resolvedContactId: "sana@demo",
+        sources: [{
+          id: relationship.id, chatId: relationship.chatId, contactName: relationship.contactName,
+          kind: "insight", content: relationship.content, senderName: relationship.evidence.senderName,
+          timestamp: relationship.updatedAt, score: 100,
+        }],
+      };
+    }
+    const event = data.events.find((item) => item.id === "demo-next-event")!;
+    const insight = data.changes.find((item) => item.id === "demo-sana-launch-topic")!;
+    return {
+      answer: "Before meeting Sana tomorrow, bring the final pricing sheet and a one-page decision summary. She values concise recommendations, and she asked to reserve the first 20 minutes to agree the launch sequence and named owners.",
+      evidenceIds: [event.id, insight.id],
+      resolvedContactId: "sana@demo",
+      sources: [
+        { id: event.id, chatId: event.chatId, contactName: event.contactName, kind: "calendar_event", content: `${event.title} · ${event.location}`, senderName: event.evidence.senderName, timestamp: event.startAt, score: 100 },
+        { id: insight.id, chatId: insight.chatId, contactName: insight.contactName, kind: "insight", content: insight.content, senderName: insight.evidence.senderName, timestamp: insight.updatedAt, score: 100 },
+      ],
+    };
+  }
   return request("/api/intelligence/search", {
     method: "POST",
-    body: JSON.stringify({ query, followUp: options?.followUp, scope: options?.scope }),
+    body: JSON.stringify({ query, followUp: options?.followUp, scope: options?.scope, selectedContactId: options?.selectedContactId, suggestionContext: options?.suggestionContext }),
     signal: options?.signal,
   });
 }
@@ -653,6 +752,34 @@ export async function suggestReplyForMessage(chatId: string, messageId: string):
   });
 }
 
+export async function submitReplySuggestionFeedback(
+  chatId: string,
+  messageId: string,
+  input: { rating: "helpful" | "needs_work"; reasons?: string[]; note?: string },
+): Promise<void> {
+  if (isDemo) return;
+  await request(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/reply-suggestion/feedback`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export type SavedDeletedMessage = {
+  body: string;
+  media?: { status: "saved" | "unavailable" | "not_saved"; mimetype?: string; filename?: string; bytes?: number };
+  mediaUrl?: string;
+};
+
+export async function getSavedDeletedMessage(chatId: string, archiveId: string): Promise<SavedDeletedMessage> {
+  if (isDemo) return { body: "This is a locally saved deleted message." };
+  return request(`/api/chats/${encodeURIComponent(chatId)}/deleted-messages/${encodeURIComponent(archiveId)}`);
+}
+
+export async function clearSavedDeletedMessages(): Promise<{ removed: number }> {
+  if (isDemo) return { removed: 0 };
+  return request("/api/privacy/deleted-message-archive/clear", { method: "POST", body: "{}" });
+}
+
 export async function forwardMessage(chatId: string, messageId: string, targetChatId: string): Promise<void> {
   if (isDemo) return;
   await request(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/forward`, {
@@ -709,6 +836,7 @@ export async function updateSettings(settings: {
   models?: DashboardData["models"];
   ownerProfile?: Partial<DashboardData["settings"]["ownerProfile"]>;
   knowledgeTrackingDefault?: KnowledgeTrackingDefault;
+  deletedMessageArchive?: Partial<DashboardData["settings"]["deletedMessageArchive"]>;
 }): Promise<DashboardData["settings"]> {
   if (isDemo) {
     const current = structuredClone(demoDashboard.settings);
@@ -721,6 +849,9 @@ export async function updateSettings(settings: {
       ownerProfile: settings.ownerProfile
         ? { ...current.ownerProfile, ...settings.ownerProfile }
         : current.ownerProfile,
+      deletedMessageArchive: settings.deletedMessageArchive
+        ? { ...current.deletedMessageArchive, ...settings.deletedMessageArchive }
+        : current.deletedMessageArchive,
       models: settings.models || current.models,
     };
   }

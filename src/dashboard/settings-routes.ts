@@ -294,6 +294,7 @@ export async function handleSettingsApiRoute(options: SettingsRouteOptions): Pro
       models?: { text?: string; image?: string; voice?: string };
       ownerProfile?: { displayName?: string; avatarUrl?: string };
       knowledgeTrackingDefault?: KnowledgeTrackingDefault;
+      deletedMessageArchive?: { enabled?: unknown; saveMedia?: unknown };
     }>(request);
     if (patch.theme !== undefined && !isThemeName(patch.theme)) {
       sendJson(response, 400, { error: "Unknown color theme" });
@@ -311,6 +312,18 @@ export async function handleSettingsApiRoute(options: SettingsRouteOptions): Pro
       sendJson(response, 400, { error: "Choose how AmirOS should handle knowledge tracking" });
       return true;
     }
+    if (patch.deletedMessageArchive &&
+        ((patch.deletedMessageArchive.enabled !== undefined && typeof patch.deletedMessageArchive.enabled !== "boolean") ||
+         (patch.deletedMessageArchive.saveMedia !== undefined && typeof patch.deletedMessageArchive.saveMedia !== "boolean"))) {
+      sendJson(response, 400, { error: "Choose valid deleted-message archive settings" });
+      return true;
+    }
+    const deletedMessageArchive = patch.deletedMessageArchive
+      ? {
+          enabled: patch.deletedMessageArchive.enabled as boolean | undefined,
+          saveMedia: patch.deletedMessageArchive.saveMedia as boolean | undefined,
+        }
+      : undefined;
     if (patch.assistant) {
       if (patch.assistant.timeFormat !== undefined &&
           patch.assistant.timeFormat !== "12-hour" && patch.assistant.timeFormat !== "24-hour") {
@@ -372,6 +385,7 @@ export async function handleSettingsApiRoute(options: SettingsRouteOptions): Pro
       settings: {
         ...state.updateSettings({
           ...patch,
+          deletedMessageArchive,
           theme: patch.theme as ThemeName | undefined,
           models: patch.models
             ? {

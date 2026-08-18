@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { AmirosState } from "../src/amiros-state.js";
 import {
   SUGGESTED_ACTION_MESSAGE_WINDOW_MS,
+  canSurfaceRelationshipSuggestedAction,
   hasFreshSuggestedActionEvidence,
   rememberDashboardMessages,
 } from "../src/dashboard.js";
@@ -19,6 +20,42 @@ describe("suggested-action freshness", () => {
     expect(hasFreshSuggestedActionEvidence(item(now - SUGGESTED_ACTION_MESSAGE_WINDOW_MS + 1), now)).toBe(true);
     expect(hasFreshSuggestedActionEvidence(item(now - SUGGESTED_ACTION_MESSAGE_WINDOW_MS - 1), now)).toBe(false);
     expect(hasFreshSuggestedActionEvidence(item(now + 10 * 60_000), now)).toBe(false);
+  });
+
+  it("surfaces relationship review only for a fresh, direct contact message", () => {
+    const now = Date.UTC(2026, 7, 18, 12, 0, 0);
+    const insight = {
+      status: "inferred" as const,
+      validity: "current" as const,
+      subjectNames: ["Dani Faitelson"],
+      evidence: { messageId: "contact-detail", excerpt: "I started a new role", timestamp: now },
+    };
+    const input = {
+      chatId: "dani@c.us",
+      contactName: "Dani Faitelson",
+      ownerName: "Amir Friedman",
+      knowledgeTracking: "enabled" as const,
+      source: {
+        messageId: "contact-detail",
+        author: "contact" as const,
+        eligibleForActionSuggestions: true,
+      },
+      now,
+    };
+
+    expect(canSurfaceRelationshipSuggestedAction(insight, input)).toBe(true);
+    expect(canSurfaceRelationshipSuggestedAction(insight, {
+      ...input,
+      source: { ...input.source, author: "owner" },
+    })).toBe(false);
+    expect(canSurfaceRelationshipSuggestedAction(insight, {
+      ...input,
+      contactName: "Amir Friedman",
+    })).toBe(false);
+    expect(canSurfaceRelationshipSuggestedAction(insight, {
+      ...input,
+      chatId: "family@g.us",
+    })).toBe(false);
   });
 
   it("uses dashboard history as relationship context without creating action suggestions", () => {

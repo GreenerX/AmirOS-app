@@ -35,9 +35,13 @@ export type RelationshipBrief = {
 export type RelationshipIntelligenceResult = {
   requested: boolean;
   briefs: RelationshipBrief[];
+  /** A full name or explicit UI choice resolved to one stable direct chat. */
+  resolvedChatId?: string;
   temporalFocus?: "current" | "historical";
   /** More than one exact person shares the requested first name. */
   disambiguation?: string[];
+  /** Stable identities for a UI clarification step. */
+  disambiguationCandidates?: Array<{ chatId: string; contactName: string }>;
 };
 
 export type RelationshipQuestionIntent = {
@@ -110,7 +114,7 @@ function formatDate(value: number): string {
 
 export function relationshipQuestionIntent(query: string): RelationshipQuestionIntent | undefined {
   const adviceRequested = /\b(?:what should i do about|how should i handle|should i|how do i approach)\b|(?:מה לעשות|איך להתמודד)/iu.test(query);
-  const relationshipQuestion = adviceRequested || /\b(?:what(?:['’]s| is) (?:been going on|important|changed)|what(?:['’]s| is) coming up|has anything changed|how has|what should i remember|before (?:seeing|meeting|talking)|anything (?:unresolved|to follow up)|what topics|keep coming up|what happened with|relationship|lately|recently|past (?:year|month|months)|not spoken|haven(?:['’])?t spoken|reconnect|follow[- ]?up)\b|(?:מה קורה|מה חשוב|מה השתנה|לפני שאני נפגש|לא דיברתי|ליצור קשר|לעקוב)/iu.test(query)
+  const relationshipQuestion = adviceRequested || /\b(?:how(?:['’]s| is)\b|tell me about|what should i know about|what(?:['’]s| is) (?:been going on|important|changed)|what(?:['’]s| is) coming up|has anything changed|how has|what should i remember|before (?:seeing|meeting|talking)|anything (?:unresolved|to follow up)|what topics|keep coming up|what happened with|relationship|lately|recently|past (?:year|month|months)|not spoken|haven(?:['’])?t spoken|reconnect|follow[- ]?up)\b|(?:מה שלומ|ספר לי על|מה קורה|מה חשוב|מה השתנה|לפני שאני נפגש|לא דיברתי|ליצור קשר|לעקוב)/iu.test(query)
     || /\bwhat(?:['’]s| is) coming up\b/iu.test(query);
   if (!relationshipQuestion) return undefined;
   const historical = /\b(?:what happened|what did we|when did|last (?:time|meeting|saw)|previous(?:ly)?|formerly|history|historical|used to)\b|(?:מה קרה|מתי נפגש|בפעם האחרונה|היסטורי)/iu.test(query);
@@ -160,11 +164,25 @@ export function buildRelationshipIntelligence(
   query: string,
   sources: RelationshipSource[],
   now = Date.now(),
+  selectedChatId?: string,
 ): RelationshipIntelligenceResult {
-  const intent = relationshipQuestionIntent(query);
-  if (!intent) return { requested: false, briefs: [] };
   const directSources = sources.filter((source) => !source.isGroup && Boolean(source.contactName));
-  const matched = directSources.filter((source) => queryMentions(query, source.contactName!));
+  const normalizedQuery = ` ${normalized(query)} `;
+  const exactNameMatches = directSources.filter((source) => {
+    const fullName = normalized(source.contactName!);
+    return fullName.includes(" ") && normalizedQuery.includes(` ${fullName} `);
+  });
+  const selectedSource = selectedChatId
+    ? directSources.find((source) => source.chatId === selectedChatId)
+    : undefined;
+  // A full name is a stronger identity signal than a shared first-name alias.
+  // A UI selection is stronger still because it carries the stable chat ID.
+  const matched = selectedSource
+    ? [selectedSource]
+    : exactNameMatches.length
+      ? exactNameMatches
+      : directSources.filter((source) => queryMentions(query, source.contactName!));
+  const intent = relationshipQuestionIntent(query);
   const names = new Map<string, RelationshipSource[]>();
   for (const source of matched) {
     const first = aliases(source.contactName!)[1] || aliases(source.contactName!)[0]!;
@@ -174,11 +192,20 @@ export function buildRelationshipIntelligence(
   }
   const ambiguous = [...names.values()].find((items) => items.length > 1);
   if (ambiguous) return {
-    requested: true,
+    requested: Boolean(intent),
     briefs: [],
-    temporalFocus: intent.temporalFocus,
+    temporalFocus: intent?.temporalFocus,
     disambiguation: ambiguous.map((item) => item.contactName!).sort((left, right) => left.localeCompare(right)),
+    disambiguationCandidates: ambiguous
+      .map((item) => ({ chatId: item.chatId, contactName: item.contactName! }))
+      .sort((left, right) => left.contactName.localeCompare(right.contactName)),
   };
+
+  // Identity resolution is intentionally broader than relationship synthesis.
+  // Even an ordinary factual lookup must stop before retrieval when a first
+  // name maps to more than one direct contact; otherwise group messages can
+  // silently mix different people who share that name.
+  if (!intent) return { requested: false, briefs: [], resolvedChatId: matched.length === 1 ? matched[0]?.chatId : undefined };
 
   const noNamedContact = matched.length === 0;
   const selected = noNamedContact && /(?:not spoken|haven'?t spoken|reconnect|לא דיברתי|ליצור קשר)/iu.test(query)
@@ -193,6 +220,7 @@ export function buildRelationshipIntelligence(
     requested: true,
     temporalFocus: intent.temporalFocus,
     briefs,
+    resolvedChatId: selected.length === 1 ? selected[0]?.chatId : undefined,
   };
 }
 

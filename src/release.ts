@@ -29,16 +29,24 @@ export const AMIROS_VERSION = packageVersion();
 
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
-  releasedAt: "2026-08-18",
-  headline: "More natural Auto Mode replies",
+  releasedAt: "2026-08-19",
+  headline: "Clearer answers, safer replies, and a more useful daily view",
   notes: [
     {
-      title: "Replies stay naturally in your voice",
-      detail: "Auto Mode no longer includes an internal name label in its messages. It responds as you, naturally and without extra system-style formatting.",
+      title: "Ask AmirOS stays grounded",
+      detail: "Ask AmirOS now clarifies which person you mean when names overlap, keeps answers tied to current evidence, and makes its sources and context easier to understand.",
     },
     {
-      title: "A safer conversational backstop",
-      detail: "If Auto Mode ever produces a message with a speaker label, AmirOS holds it for review instead of sending it.",
+      title: "Replies learn without getting in the way",
+      detail: "Suggested replies can be edited, cleared, regenerated from your feedback, and sent directly. Auto Mode also better respects explicit writing preferences such as using fewer emojis.",
+    },
+    {
+      title: "Deleted messages remain private and recoverable",
+      detail: "When you opt in, AmirOS can keep a local copy of deleted WhatsApp text and media and clearly mark it in Inbox so you can choose whether to reveal it.",
+    },
+    {
+      title: "A cleaner daily workspace",
+      detail: "Overview cards adapt more naturally to the available space, empty states are aligned and easier to scan, and secondary tools have been removed from the main navigation.",
     },
   ],
 };
@@ -49,6 +57,21 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.10.12",
+    releasedAt: "2026-08-18",
+    headline: "More natural Auto Mode replies",
+    notes: [
+      {
+        title: "Replies stay naturally in your voice",
+        detail: "Auto Mode no longer includes an internal name label in its messages. It responds as you, naturally and without extra system-style formatting.",
+      },
+      {
+        title: "A safer conversational backstop",
+        detail: "If Auto Mode ever produces a message with a speaker label, AmirOS holds it for review instead of sending it.",
+      },
+    ],
+  },
   {
     version: "0.10.7",
     releasedAt: "2026-08-16",

@@ -216,6 +216,12 @@ function assertPublishedReleaseUpdater(): void {
     "The updater must delimit the release tag before the Git ref separator.");
   assert.doesNotMatch(updater, /archive\/refs\/heads\/main/,
     "The updater must not install an ordinary main-branch snapshot.");
+  assert.match(updater, /approved-update\.json/,
+    "A managed update must use the dashboard's short-lived approved release plan.");
+  assert.match(updater, /CONTROLLED_UPDATE_SHA256/,
+    "A managed update archive must be checked against the approved SHA-256.");
+  assert.match(updater, /managed_release_rollout_enabled/,
+    "A managed installation must not silently fall back to the public GitHub updater.");
 }
 
 let installedProjects: string[] = [];

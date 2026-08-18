@@ -109,6 +109,7 @@ type InboxViewProps = {
   onReply: (chatId: string, messageId: string, body: string) => Promise<void>;
   onForward: (chatId: string, messageId: string, targetChatId: string) => Promise<void>;
   onScanHistory: (chatId: string, limit?: number) => Promise<{ scanned: number; added: number }>;
+  onRevealDeletedMessage: (chatId: string, archiveId: string) => Promise<void>;
 };
 
 type Filter = "all" | "unread" | "review" | "auto";
@@ -271,6 +272,7 @@ export function InboxView({
   onReply,
   onForward,
   onScanHistory,
+  onRevealDeletedMessage,
 }: InboxViewProps) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Filter>(initialFilter);
@@ -279,6 +281,7 @@ export function InboxView({
   const [replyingTo, setReplyingTo] = useState<ChatMessage>();
   const [forwarding, setForwarding] = useState<ChatMessage>();
   const [reactionFor, setReactionFor] = useState<string>();
+  const [revealingDeletedMessageIds, setRevealingDeletedMessageIds] = useState<Set<string>>(() => new Set());
   const [composerEmojiOpen, setComposerEmojiOpen] = useState(false);
   const [composerMode, setComposerMode] = useState<"message" | "image">("message");
   const [recording, setRecording] = useState(false);
@@ -821,6 +824,9 @@ export function InboxView({
             const dateLabel = messageDateLabel(message.timestamp);
             const previousDateLabel = index > 0 ? messageDateLabel(chronologicalMessages[index - 1]!.timestamp) : undefined;
             const reactions = mergedMessageReactions(message);
+            const deletedArchive = message.deletedArchive;
+            const deletedMessage = deletedArchive || message.deleted;
+            const revealedDeletedArchive = Boolean(deletedArchive?.revealed);
             const callPresentation = message.call ? callEventPresentation(message.call) : undefined;
             const CallIcon = message.call?.missed ? PhoneMissed : message.call?.kind === "video" ? Video : Phone;
             return <Fragment key={message.id}>{dateLabel !== previousDateLabel ? <div className="day-divider sticky-day-divider"><span>{dateLabel}</span></div> : null}<div
@@ -830,14 +836,42 @@ export function InboxView({
               style={{ "--participant-color": color } as CSSProperties}
             >
               {groupIncoming ? <ContactAvatar name={message.senderName || "Group participant"} src={message.senderId ? `/api/chats/${encodeURIComponent(message.senderId)}/avatar` : undefined} tone={Math.abs(color.length)} /> : null}
-              <div className={`message-bubble ${message.fromMe ? "sent" : "received"}${message.hasMedia && !message.call ? " media-bubble" : ""}${reactions.length > 0 ? " has-reactions" : ""}`}>
+              <div className={`message-bubble ${message.fromMe ? "sent" : "received"}${message.hasMedia && !message.call && !deletedMessage ? " media-bubble" : ""}${reactions.length > 0 ? " has-reactions" : ""}`}>
                 {groupIncoming && message.senderName ? <strong className="group-sender-name" dir="auto">{message.senderName}</strong> : null}
-                {message.quotedMessage ? <button className="quoted-message" type="button" onClick={() => scrollToQuotedMessage(message.quotedMessage!.id)}><strong>{message.quotedMessage.fromMe ? "You" : message.quotedMessage.senderName || selectedChat.name}</strong><span dir={textDirection(message.quotedMessage.body)}>{message.quotedMessage.body}</span></button> : null}
+                {deletedMessage ? <div className="deleted-message-notice">
+                  <strong>{deletedArchive?.kind === "view_once" ? "Deleted one-time media" : "Deleted message"}</strong>
+                  <span>{deletedArchive
+                    ? deletedArchive.kind === "view_once"
+                      ? "A private local copy was saved when it arrived."
+                      : deletedArchive.hasMedia ? "A private local copy may include the original media." : "A private local copy was saved before it was deleted."
+                    : "This message was deleted in WhatsApp. It was not saved on this Mac."}</span>
+                  <small>Deleted {formatDateTime(deletedArchive?.deletedAt || message.deleted?.deletedAt || message.timestamp, { dateStyle: "medium", timeStyle: "short" })}</small>
+                  {deletedArchive && !revealedDeletedArchive ? <button
+                    type="button"
+                    disabled={revealingDeletedMessageIds.has(deletedArchive.id)}
+                    onClick={() => {
+                      setRevealingDeletedMessageIds((current) => new Set(current).add(deletedArchive.id));
+                      void onRevealDeletedMessage(selectedChat.id, deletedArchive.id).finally(() => {
+                        setRevealingDeletedMessageIds((current) => {
+                          const next = new Set(current);
+                          next.delete(deletedArchive.id);
+                          return next;
+                        });
+                      });
+                    }}
+                  >{revealingDeletedMessageIds.has(deletedArchive.id) ? "Revealing…" : "Reveal saved content"}</button> : null}
+                  {deletedArchive && revealedDeletedArchive ? <div className="deleted-message-revealed-content">
+                    {deletedArchive.revealedText ? <p className="deleted-message-revealed-text" dir={textDirection(deletedArchive.revealedText)}>{deletedArchive.revealedText}</p> : null}
+                    {deletedArchive.revealedMediaUrl ? <a className="deleted-message-media-link" href={deletedArchive.revealedMediaUrl} target="_blank" rel="noreferrer">Open saved {deletedArchive.kind === "view_once" ? "one-time media" : "media"}</a> : null}
+                    {!deletedArchive.revealedText && !deletedArchive.revealedMediaUrl ? <small>Saved content is no longer available.</small> : null}
+                  </div> : null}
+                </div> : null}
+                {!deletedMessage && message.quotedMessage ? <button className="quoted-message" type="button" onClick={() => scrollToQuotedMessage(message.quotedMessage!.id)}><strong>{message.quotedMessage.fromMe ? "You" : message.quotedMessage.senderName || selectedChat.name}</strong><span dir={textDirection(message.quotedMessage.body)}>{message.quotedMessage.body}</span></button> : null}
                 {message.call && callPresentation ? <div className={`chat-call-event${message.call.missed ? " missed" : ""}`}><CallIcon size={17} /><span><strong>{callPresentation.title}</strong><small>{callPresentation.detail}</small></span></div> : null}
-                {message.hasMedia && !message.call ? <ChatMedia message={message} /> : null}
-                {!message.call && (message.fullBody || (message.body && message.body !== "Media message")) ? <p dir={textDirection(message.fullBody || message.body)}>{message.fullBody || message.body}</p> : null}
-                <time>{formatTime(message.timestamp)} {message.fromMe ? <Check size={13} /> : null}</time>
-                {reactions.length > 0 ? <div className="message-reactions" aria-label="Message reactions">{reactions.map((reaction) => {
+                {message.hasMedia && !message.call && !deletedMessage ? <ChatMedia message={message} /> : null}
+                {!message.call && !deletedMessage && (message.fullBody || (message.body && message.body !== "Media message")) ? <p dir={textDirection(message.fullBody || message.body)}>{message.fullBody || message.body}</p> : null}
+                {!deletedMessage ? <time>{formatTime(message.timestamp)} {message.fromMe ? <Check size={13} /> : null}</time> : null}
+                {!deletedMessage && reactions.length > 0 ? <div className="message-reactions" aria-label="Message reactions">{reactions.map((reaction) => {
                   const names = [...new Set(reaction.senders.map((sender) => sender.name).filter((name): name is string => Boolean(name)))];
                   const label = names.length > 0
                     ? `${reaction.emoji} by ${names.join(", ")}`
@@ -846,13 +880,13 @@ export function InboxView({
                       : reaction.emoji;
                   return <span className="message-reaction" key={`${reaction.emoji}:${reaction.senders.map((sender) => sender.id).join(",")}`} title={label} aria-label={label}><span>{reaction.emoji}</span>{reaction.senders.length > 1 ? <b>{reaction.senders.length}</b> : null}{names.length > 0 ? <small>{names.join(", ")}</small> : null}</span>;
                 })}</div> : null}
-                <div className="message-actions" aria-label="Message actions">
+                {!deletedMessage ? <div className="message-actions" aria-label="Message actions">
                   <button aria-label="React" onClick={() => setReactionFor((current) => current === message.id ? undefined : message.id)}><Smile size={15} /></button>
                   <button aria-label="Reply" onClick={() => { setReplyingTo(message); setForwarding(undefined); }}><Reply size={15} /></button>
                   <button aria-label="Forward" onClick={() => setForwarding(message)}><Forward size={15} /></button>
                   <button aria-label="Copy message" onClick={() => void navigator.clipboard.writeText(message.fullBody || message.body)}><Copy size={15} /></button>
-                </div>
-                {reactionFor === message.id ? <div className="reaction-picker">{REACTIONS.map((emoji) => <button key={emoji} onClick={() => { setReactionFor(undefined); void onReact(selectedChat.id, message.id, emoji).catch(() => undefined); }}>{emoji}</button>)}</div> : null}
+                </div> : null}
+                {!deletedMessage && reactionFor === message.id ? <div className="reaction-picker">{REACTIONS.map((emoji) => <button key={emoji} onClick={() => { setReactionFor(undefined); void onReact(selectedChat.id, message.id, emoji).catch(() => undefined); }}>{emoji}</button>)}</div> : null}
               </div>
             </div></Fragment>;
           })}

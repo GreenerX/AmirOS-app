@@ -28,11 +28,11 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { approveAndInviteBetaApplication, approveDeviceActivation, createSupportTicket, getAccountSnapshot, getAdminOverview, updateAdminDevice, updateAdminSupportTicket, updateAdminUser, updateBetaApplication } from "./api";
+import { approveAndInviteBetaApplication, approveDeviceActivation, archiveBetaApplication, createAdminRelease, createManualBetaApplication, createSupportTicket, getAccountSnapshot, getAdminOverview, getAdminReleases, setAdminReleaseChannel, updateAdminDevice, updateAdminSupportTicket, updateAdminUser, updateBetaApplication, updateBetaApplicationProfile } from "./api";
 import { renderCommunicationTemplate, type CommunicationTemplateKey } from "./communication-templates";
 import { demoAccount, demoTickets, demoUsers } from "./demo-data";
 import { acceptInvitation, createAccount, identityAllowsSignup, initialiseIdentity, isIdentityAvailable, observeIdentity, resetPassword, signIn, signOut, type ControlCenterUser } from "./identity";
-import type { AccessStatus, AccountSnapshot, ActivationChecklist, AdminUser, BetaApplication, BetaApplicationState, FeatureAssignment, ReleaseChannel, SetupState, SupportTicket } from "./types";
+import type { AccessStatus, AccountSnapshot, ActivationChecklist, AdminUser, BetaApplication, BetaApplicationState, FeatureAssignment, ReleaseChannel, ReleaseControlSnapshot, SetupState, SupportTicket } from "./types";
 
 const amirosMark = "/amiros-mark-v2-cropped.png";
 
@@ -287,7 +287,6 @@ function AuthScreen({ identityAvailable, invitationToken, passwordRecovery = fal
 function AccountPortal({ user, onNavigate, onSignOut }: { user?: ControlCenterUser; onNavigate: (page: Page) => void; onSignOut: () => void }) {
   const [snapshot, setSnapshot] = useState<AccountSnapshot | undefined>(demoEnabled ? demoAccount : undefined);
   const [apiMessage, setApiMessage] = useState<string | undefined>();
-  const [channel, setChannel] = useState<ReleaseChannel>(demoAccount.releaseChannel);
   const [supportOpen, setSupportOpen] = useState(() => new URLSearchParams(window.location.search).get("support") === "1");
   const [ticketType, setTicketType] = useState<SupportTicket["type"]>("Bug");
   const [subject, setSubject] = useState("");
@@ -332,8 +331,8 @@ function AccountPortal({ user, onNavigate, onSignOut }: { user?: ControlCenterUs
       <article className="detail-card"><CardHeading icon={Laptop} title="Authorized devices" description="Only signed-in Macs can use your access." />
         {account?.devices.length ? account.devices.map((device) => <div className="device-row" key={device.id}><div className="device-icon"><Laptop size={19} /></div><div><strong>{device.label}</strong><span>{device.platform} · {device.appVersion} · {device.lastSeenAt}</span></div>{device.isCurrent && <span className="soft-tag">This Mac</span>}<button className="icon-button" aria-label={`More options for ${device.label}`}><MoreHorizontal size={19} /></button></div>) : <EmptyCopy text="Your signed-in Mac will appear here after device authorization." />}
       </article>
-      <article className="detail-card"><CardHeading icon={CalendarClock} title="Update channel" description="Choose when you receive new AmirOS releases." />
-        <div className="channel-control"><div><strong>{channelLabel(channel)}</strong><span>{channel === "stable" ? "Validated releases only." : channel === "beta" ? "Early improvements with support coverage." : "Internal testing builds."}</span></div><label className="select-wrap"><span className="sr-only">Update channel</span><select value={channel} onChange={(event) => setChannel(event.target.value as ReleaseChannel)}><option value="stable">Stable</option><option value="beta">Beta</option><option value="internal">Internal</option></select><ChevronDown size={17} /></label></div>
+      <article className="detail-card"><CardHeading icon={CalendarClock} title="Updates" description="The private beta team manages update availability for your AmirOS install." />
+        <div className="channel-control"><div><strong>Managed private beta</strong><span>When a tested update is ready for your Mac, AmirOS will let you know.</span></div></div>
       </article>
       </> : null}
       <article className="detail-card support-card" id="support"><CardHeading icon={LifeBuoy} title="Help and feedback" description="Send a focused report to the team when you choose." />
@@ -368,6 +367,7 @@ function AdminDashboard({ user, onNavigate, onSignOut }: { user?: ControlCenterU
   const [users, setUsers] = useState<AdminUser[]>(demoEnabled ? demoUsers : []);
   const [applications, setApplications] = useState<BetaApplication[]>([]);
   const [tickets, setTickets] = useState<SupportTicket[]>(demoEnabled ? demoTickets : []);
+  const [releaseControl, setReleaseControl] = useState<ReleaseControlSnapshot>({ channels: [], releases: [] });
   const [invitingApplicationId, setInvitingApplicationId] = useState<string>();
   const [selectedTicketId, setSelectedTicketId] = useState<number | undefined>(demoEnabled ? demoTickets[0]?.ticketId : undefined);
   const [apiMessage, setApiMessage] = useState<string | undefined>();
@@ -394,6 +394,17 @@ function AdminDashboard({ user, onNavigate, onSignOut }: { user?: ControlCenterU
     }
     void updateAdminUser({ userId: selected.id, releaseChannel }).then((result) => {
       if (result.data) setUsers((items) => items.map((item) => item.id === selected.id ? { ...item, releaseChannel } : item));
+      else setApiMessage(result.message);
+    });
+  };
+  const setUserProfile = (firstName: string, lastName: string) => {
+    if (!selected) return;
+    if (demoEnabled) {
+      setUsers((items) => items.map((item) => item.id === selected.id ? { ...item, firstName, lastName, displayName: `${firstName} ${lastName}` } : item));
+      return;
+    }
+    void updateAdminUser({ userId: selected.id, firstName, lastName }).then((result) => {
+      if (result.data) setUsers((items) => items.map((item) => item.id === selected.id ? { ...item, firstName, lastName, displayName: `${firstName} ${lastName}` } : item));
       else setApiMessage(result.message);
     });
   };
@@ -446,6 +457,26 @@ function AdminDashboard({ user, onNavigate, onSignOut }: { user?: ControlCenterU
       else setApiMessage(result.message);
     });
   };
+  const refreshOverview = () => {
+    if (demoEnabled) return;
+    void getAdminOverview().then((result) => {
+      if (result.data) {
+        setUsers(result.data.users); setTickets(result.data.tickets); setApplications(result.data.applications);
+      } else setApiMessage(result.message);
+    });
+  };
+  const addManualApplicant = (input: { firstName: string; lastName: string; email: string; internalNote?: string }) => {
+    if (demoEnabled) return Promise.resolve(undefined);
+    return createManualBetaApplication(input).then((result) => { if (result.data) { setApiMessage(`${input.firstName} was added as a manual applicant.`); refreshOverview(); } else setApiMessage(result.message); return result; });
+  };
+  const editApplicant = (input: { applicationId: string; firstName: string; lastName: string; email: string; internalNote?: string }) => {
+    if (demoEnabled) return Promise.resolve(undefined);
+    return updateBetaApplicationProfile(input).then((result) => { if (result.data) { setApiMessage("Applicant profile updated."); refreshOverview(); } else setApiMessage(result.message); return result; });
+  };
+  const archiveApplicant = (applicationId: string, archived: boolean) => {
+    if (demoEnabled) return Promise.resolve(undefined);
+    return archiveBetaApplication({ applicationId, archived }).then((result) => { if (result.data) { setApiMessage(archived ? "Declined applicant archived." : "Applicant restored to the declined list."); refreshOverview(); } else setApiMessage(result.message); return result; });
+  };
   const approveAndInvite = (application: BetaApplication) => {
     if (!window.confirm(`Approve ${application.fullName} and send Netlify's secure invitation to ${application.email}?`)) return;
     if (demoEnabled) {
@@ -460,6 +491,33 @@ function AdminDashboard({ user, onNavigate, onSignOut }: { user?: ControlCenterU
       } else setApiMessage(result.message);
     }).finally(() => setInvitingApplicationId(undefined));
   };
+  const refreshReleases = () => {
+    if (demoEnabled) return;
+    void getAdminReleases().then((result) => {
+      if (result.data) setReleaseControl(result.data);
+      else setApiMessage(result.message);
+    });
+  };
+  const createRelease = (input: { channel: ReleaseChannel; version: string; downloadUrl: string; sha256: string; releaseNotesUrl?: string }) => {
+    if (demoEnabled) return Promise.resolve(undefined);
+    return createAdminRelease(input).then((result) => {
+      if (result.data) {
+        setApiMessage(`Release ${input.version} was saved. It will not prompt testers until its channel is made available.`);
+        refreshReleases();
+      } else setApiMessage(result.message);
+      return result;
+    });
+  };
+  const setReleaseAvailability = (channel: ReleaseChannel, mode: "hold" | "available", releaseId?: number) => {
+    if (demoEnabled) return Promise.resolve(undefined);
+    return setAdminReleaseChannel({ channel, mode, releaseId }).then((result) => {
+      if (result.data) {
+        setApiMessage(mode === "hold" ? `${channelLabel(channel)} updates are now on hold.` : `${channelLabel(channel)} now offers its approved release.`);
+        refreshReleases();
+      } else setApiMessage(result.message);
+      return result;
+    });
+  };
 
   useEffect(() => {
     if (!user || demoEnabled) return;
@@ -472,6 +530,7 @@ function AdminDashboard({ user, onNavigate, onSignOut }: { user?: ControlCenterU
         setSelectedTicketId((current) => current && result.data?.tickets.some((ticket) => ticket.ticketId === current) ? current : result.data?.tickets[0]?.ticketId);
       } else setApiMessage(result.message);
     });
+    refreshReleases();
   }, [user]);
 
   useEffect(() => {
@@ -497,15 +556,15 @@ function AdminDashboard({ user, onNavigate, onSignOut }: { user?: ControlCenterU
   const content = section === "overview"
     ? <AdminOverviewPage activeCount={activeCount} applications={applications} users={users} tickets={tickets} attention={attention} currentVersion={currentVersion} onOpenSection={navigateSection} onOpenUser={openUser} />
     : section === "applicants"
-      ? <AdminApplicantsPage applications={applications} onState={setApplicationState} onInvite={approveAndInvite} invitingApplicationId={invitingApplicationId} />
+      ? <AdminApplicantsPage applications={applications} onState={setApplicationState} onInvite={approveAndInvite} onCreate={addManualApplicant} onEdit={editApplicant} onArchive={archiveApplicant} invitingApplicationId={invitingApplicationId} />
       : section === "testers"
-        ? <AdminTestersPage users={users} selected={selected} onSelect={setSelectedId} onStatus={setStatus} onReleaseChannel={setReleaseChannel} onToggleFeature={toggleFeature} onDeviceStatus={setDeviceStatus} />
+        ? <AdminTestersPage users={users} selected={selected} onSelect={setSelectedId} onStatus={setStatus} onProfile={setUserProfile} onReleaseChannel={setReleaseChannel} onToggleFeature={toggleFeature} onDeviceStatus={setDeviceStatus} />
         : section === "devices"
           ? <AdminDevicesPage users={users} onOpenUser={openUser} />
           : section === "rollouts"
             ? <AdminRolloutsPage users={users} currentVersion={currentVersion} onOpenUser={openUser} />
             : section === "releases"
-              ? <AdminReleasesPage users={users} currentVersion={currentVersion} />
+              ? <AdminReleasesPage users={users} currentVersion={currentVersion} releaseControl={releaseControl} onCreate={createRelease} onSetAvailability={setReleaseAvailability} />
               : section === "flags"
                 ? <AdminFeatureFlagsPage users={users} selected={selected} onSelect={setSelectedId} onToggleFeature={toggleFeature} />
                 : section === "support"
@@ -598,17 +657,28 @@ function AdminOverviewPage({ activeCount, applications, users, tickets, attentio
   </>;
 }
 
-function AdminApplicantsPage({ applications, onState, onInvite, invitingApplicationId }: { applications: BetaApplication[]; onState: (applicationId: string, state: BetaApplicationState) => void; onInvite: (application: BetaApplication) => void; invitingApplicationId?: string }) { return <ApplicantPanel applications={applications} onState={onState} onInvite={onInvite} invitingApplicationId={invitingApplicationId} />; }
+function AdminApplicantsPage({ applications, onState, onInvite, onCreate, onEdit, onArchive, invitingApplicationId }: {
+  applications: BetaApplication[];
+  onState: (applicationId: string, state: BetaApplicationState) => void;
+  onInvite: (application: BetaApplication) => void;
+  onCreate: (input: { firstName: string; lastName: string; email: string; internalNote?: string }) => Promise<unknown>;
+  onEdit: (input: { applicationId: string; firstName: string; lastName: string; email: string; internalNote?: string }) => Promise<unknown>;
+  onArchive: (applicationId: string, archived: boolean) => Promise<unknown>;
+  invitingApplicationId?: string;
+}) { return <ApplicantPanel applications={applications} onState={onState} onInvite={onInvite} onCreate={onCreate} onEdit={onEdit} onArchive={onArchive} invitingApplicationId={invitingApplicationId} />; }
 
-function AdminTestersPage({ users, selected, onSelect, onStatus, onReleaseChannel, onToggleFeature, onDeviceStatus }: { users: AdminUser[]; selected?: AdminUser; onSelect: (id: string) => void; onStatus: (status: AccessStatus) => void; onReleaseChannel: (channel: ReleaseChannel) => void; onToggleFeature: (featureId: string) => void; onDeviceStatus: (deviceId: string, status: AccessStatus) => void }) {
+function AdminTestersPage({ users, selected, onSelect, onStatus, onProfile, onReleaseChannel, onToggleFeature, onDeviceStatus }: { users: AdminUser[]; selected?: AdminUser; onSelect: (id: string) => void; onStatus: (status: AccessStatus) => void; onProfile: (firstName: string, lastName: string) => void; onReleaseChannel: (channel: ReleaseChannel) => void; onToggleFeature: (featureId: string) => void; onDeviceStatus: (deviceId: string, status: AccessStatus) => void }) {
   const [query, setQuery] = useState("");
-  const matchingUsers = useMemo(() => users.filter((user) => `${user.displayName} ${user.email}`.toLowerCase().includes(query.toLowerCase())), [query, users]);
-  return <section className="admin-columns"><div className="user-panel"><div className="panel-heading"><div><h2>Testers</h2><p>Accounts, setup state, and release access—never personal AmirOS content.</p></div><div className="table-actions"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search testers" /></label></div></div><UserTable users={matchingUsers} selectedId={selected?.id} onSelect={onSelect} /><div className="table-footer"><span>Showing {matchingUsers.length} Control Center accounts</span><span>Operational metadata only.</span></div></div><aside className="user-detail">{selected ? <SelectedUser selected={selected} onStatus={onStatus} onReleaseChannel={onReleaseChannel} onToggleFeature={onToggleFeature} onDeviceStatus={onDeviceStatus} /> : <EmptyCopy text="Select a tester to review setup, device access, and feature assignments." />}</aside></section>;
+  const [statusFilter, setStatusFilter] = useState<"all" | AccessStatus>("all");
+  const matchingUsers = useMemo(() => users.filter((user) => `${user.displayName} ${user.email}`.toLowerCase().includes(query.toLowerCase()) && (statusFilter === "all" || user.status === statusFilter)), [query, statusFilter, users]);
+  return <section className="admin-columns"><div className="user-panel"><div className="panel-heading"><div><h2>Testers</h2><p>Accounts, setup state, and release access—never personal AmirOS content.</p></div><div className="table-actions"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search testers" /></label><select className="compact-select" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "all" | AccessStatus)}><option value="all">All access</option><option value="active">Active</option><option value="paused">Paused</option><option value="revoked">Revoked</option></select></div></div><UserTable users={matchingUsers} selectedId={selected?.id} onSelect={onSelect} /><div className="table-footer"><span>Showing {matchingUsers.length} Control Center accounts</span><span>Operational metadata only.</span></div></div><aside className="user-detail">{selected ? <SelectedUser selected={selected} onStatus={onStatus} onProfile={onProfile} onReleaseChannel={onReleaseChannel} onToggleFeature={onToggleFeature} onDeviceStatus={onDeviceStatus} /> : <EmptyCopy text="Select a tester to review setup, device access, and feature assignments." />}</aside></section>;
 }
 
 function AdminDevicesPage({ users, onOpenUser }: { users: AdminUser[]; onOpenUser: (id: string, section?: AdminSection) => void }) {
+  const [query, setQuery] = useState("");
   const devices = users.flatMap((user) => user.devices.map((device) => ({ user, device })));
-  return <section className="admin-data-panel"><div className="panel-heading"><div><h2>Devices & access</h2><p>Each Mac must be paired by its signed-in tester. Access and setup remain separate.</p></div></div>{devices.length ? <div className="operational-table"><div className="operational-table-head"><span>Tester</span><span>Mac</span><span>Version</span><span>Last check-in</span><span>Access</span></div>{devices.map(({ user, device }) => <button type="button" className="operational-table-row" key={device.id} onClick={() => onOpenUser(user.id)}><span><strong>{user.displayName}</strong><small>{user.email}</small></span><span>{device.label}<small>{device.platform}</small></span><span>{device.appVersion}</span><span>{device.lastSeenAt}</span><span><StatusPill status={device.status} /></span></button>)}</div> : <EmptyCopy text="Paired Macs will appear here after their testers approve the connection." />}</section>;
+  const matching = devices.filter(({ user, device }) => `${user.displayName} ${user.email} ${device.label} ${device.appVersion}`.toLowerCase().includes(query.toLowerCase()));
+  return <section className="admin-data-panel"><div className="panel-heading"><div><h2>Devices & access</h2><p>Each Mac must be paired by its signed-in tester. Access and setup remain separate.</p></div><div className="table-actions"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search devices" /></label></div></div>{matching.length ? <div className="operational-table"><div className="operational-table-head"><span>Tester</span><span>Mac</span><span>Version</span><span>Last check-in</span><span>Access</span></div>{matching.map(({ user, device }) => <button type="button" className="operational-table-row" key={device.id} onClick={() => onOpenUser(user.id)}><span><strong>{user.displayName}</strong><small>{user.email}</small></span><span>{device.label}<small>{device.platform}</small></span><span>{device.appVersion}</span><span>{device.lastSeenAt}</span><span><StatusPill status={device.status} /></span></button>)}</div> : <EmptyCopy text={devices.length ? "No devices match this search." : "Paired Macs will appear here after their testers approve the connection."} />}</section>;
 }
 
 function AdminRolloutsPage({ users, currentVersion, onOpenUser }: { users: AdminUser[]; currentVersion: string; onOpenUser: (id: string, section?: AdminSection) => void }) {
@@ -617,17 +687,50 @@ function AdminRolloutsPage({ users, currentVersion, onOpenUser }: { users: Admin
   return <div className="admin-page-stack"><section className="admin-data-panel" id="emergency-pause"><div className="panel-heading"><div><h2>Rollout controls</h2><p>Channels are assigned per account. A global release hold is intentionally not configured yet.</p></div></div><div className="rollout-summary">{channelRows.map((channel) => <article key={channel}><strong>{channelLabel(channel)}</strong><span>{users.filter((user) => user.releaseChannel === channel).length} testers</span><small>{channel === "stable" ? "Validated public release channel" : channel === "beta" ? "Early improvements with support coverage" : "Internal testing only"}</small></article>)}</div></section><section className="admin-data-panel"><div className="panel-heading"><div><h2>Needs a release check</h2><p>{currentVersion === "—" ? "No paired device has reported an app version yet." : `These testers are not yet reporting ${currentVersion}.`}</p></div></div>{outOfDate.length ? <div className="attention-list">{outOfDate.map((user) => <button type="button" key={user.id} onClick={() => onOpenUser(user.id)}><span><strong>{user.displayName}</strong><small>{user.appVersion} reported · {channelLabel(user.releaseChannel)} channel</small></span><ArrowUpRight size={16} /></button>)}</div> : <EmptyCopy text="All reporting Macs are on the latest version known to the Control Center." />}</section></div>;
 }
 
-function AdminReleasesPage({ users, currentVersion }: { users: AdminUser[]; currentVersion: string }) {
+function AdminReleasesPage({ users, currentVersion, releaseControl, onCreate, onSetAvailability }: {
+  users: AdminUser[];
+  currentVersion: string;
+  releaseControl: ReleaseControlSnapshot;
+  onCreate: (input: { channel: ReleaseChannel; version: string; downloadUrl: string; sha256: string; releaseNotesUrl?: string }) => Promise<unknown>;
+  onSetAvailability: (channel: ReleaseChannel, mode: "hold" | "available", releaseId?: number) => Promise<unknown>;
+}) {
   const versions = [...new Set(users.map((user) => user.appVersion).filter((version) => version !== "—"))].sort((left, right) => right.localeCompare(left, undefined, { numeric: true }));
-  return <section className="admin-data-panel"><div className="panel-heading"><div><h2>Release health</h2><p>Version adoption is derived from active Control Center device check-ins.</p></div></div>{versions.length ? <div className="operational-table"><div className="operational-table-head"><span>Version</span><span>Devices reporting</span><span>Share</span><span>Current status</span></div>{versions.map((version) => { const count = users.filter((user) => user.appVersion === version).length; return <div className="operational-table-row release-row" key={version}><span><strong>{version}</strong></span><span>{count}</span><span>{Math.round((count / users.length) * 100)}%</span><span>{version === currentVersion ? <span className="soft-tag">Latest reported</span> : "Earlier version"}</span></div>; })}</div> : <EmptyCopy text="Release health will appear after a paired Mac checks in with its app version." />}<p className="admin-page-note">The Control Center does not create or upload installers here. Published-release and stable-download controls remain governed by the release workflow.</p></section>;
+  const [channel, setChannel] = useState<ReleaseChannel>("beta");
+  const [version, setVersion] = useState("");
+  const [downloadUrl, setDownloadUrl] = useState("");
+  const [sha256, setSha256] = useState("");
+  const [releaseNotesUrl, setReleaseNotesUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setSaving(true);
+    try {
+      await onCreate({ channel, version, downloadUrl, sha256, releaseNotesUrl: releaseNotesUrl || undefined });
+      setVersion(""); setDownloadUrl(""); setSha256(""); setReleaseNotesUrl("");
+    } finally { setSaving(false); }
+  };
+  return <div className="admin-page-stack">
+    <section className="admin-data-panel"><div className="panel-heading"><div><h2>Managed update rollout</h2><p>Paired Macs receive a manual update prompt only when their assigned channel is explicitly available.</p></div></div><div className="release-channel-grid">{(["internal", "beta", "stable"] as ReleaseChannel[]).map((item) => {
+      const control = releaseControl.channels.find((candidate) => candidate.channel === item);
+      const activeRelease = releaseControl.releases.find((candidate) => candidate.id === control?.approvedReleaseId);
+      const options = releaseControl.releases.filter((candidate) => candidate.channel === item);
+      return <article className="release-channel-card" key={item}><div><span className={`soft-tag ${control?.mode === "available" ? "is-active" : ""}`}>{control?.mode === "available" ? "Available" : "Hold"}</span><h3>{channelLabel(item)}</h3><p>{control?.mode === "available" && activeRelease ? `${activeRelease.version} is approved for a manual prompt.` : "No managed update prompt is shown."}</p></div><label>Approved release<select value={control?.approvedReleaseId || ""} disabled={!options.length || saving} onChange={(event) => { const id = Number(event.target.value); const selected = options.find((candidate) => candidate.id === id); if (selected && window.confirm(`Make ${selected.version} available to ${channelLabel(item)} testers?`)) void onSetAvailability(item, "available", id); }}><option value="">{options.length ? "Choose a tested release" : "No release entered"}</option>{options.map((release) => <option key={release.id} value={release.id}>{release.version}</option>)}</select></label><div className="release-card-actions"><button className="button button-secondary" type="button" disabled={!control?.approvedReleaseId || saving} onClick={() => { if (window.confirm(`Hold future ${channelLabel(item)} update prompts? Local access remains unchanged.`)) void onSetAvailability(item, "hold"); }}>Hold updates</button>{activeRelease?.releaseNotesUrl ? <a className="text-link" href={activeRelease.releaseNotesUrl} target="_blank" rel="noreferrer">Release notes <ArrowUpRight size={14} /></a> : null}</div></article>;
+    })}</div><p className="admin-page-note">Hold stops future prompts. It does not pause access, revoke a Mac, or uninstall anything.</p></section>
+    <section className="admin-data-panel"><div className="panel-heading"><div><h2>Enter tested release</h2><p>Control Center records a verified artifact; it never uploads installers or publishes GitHub releases.</p></div></div><form className="release-form" onSubmit={submit}><label>Channel<select value={channel} onChange={(event) => setChannel(event.target.value as ReleaseChannel)}><option value="beta">Beta</option><option value="stable">Stable</option><option value="internal">Internal</option></select></label><label>Version<input value={version} onChange={(event) => setVersion(event.target.value)} placeholder="0.10.12" required maxLength={80} /></label><label>Download URL<input value={downloadUrl} onChange={(event) => setDownloadUrl(event.target.value)} type="url" placeholder="https://…" required /></label><label>SHA-256<input value={sha256} onChange={(event) => setSha256(event.target.value.toLowerCase())} placeholder="64-character lowercase hash" required pattern="[a-f0-9]{64}" /></label><label>Release notes URL <span>(optional)</span><input value={releaseNotesUrl} onChange={(event) => setReleaseNotesUrl(event.target.value)} type="url" placeholder="https://…" /></label><button className="button button-primary" disabled={saving} type="submit">{saving ? "Saving…" : "Save tested release"}</button></form></section>
+    <section className="admin-data-panel"><div className="panel-heading"><div><h2>Reported version health</h2><p>Derived from active Control Center device check-ins.</p></div></div>{versions.length ? <div className="operational-table"><div className="operational-table-head"><span>Version</span><span>Devices reporting</span><span>Share</span><span>Current status</span></div>{versions.map((item) => { const count = users.filter((user) => user.appVersion === item).length; return <div className="operational-table-row release-row" key={item}><span><strong>{item}</strong></span><span>{count}</span><span>{Math.round((count / users.length) * 100)}%</span><span>{item === currentVersion ? <span className="soft-tag">Latest reported</span> : "Earlier version"}</span></div>; })}</div> : <EmptyCopy text="Release health will appear after a paired Mac checks in with its app version." />}</section>
+  </div>;
 }
 
 function AdminFeatureFlagsPage({ users, selected, onSelect, onToggleFeature }: { users: AdminUser[]; selected?: AdminUser; onSelect: (id: string) => void; onToggleFeature: (featureId: string) => void }) {
-  return <section className="admin-columns"><div className="user-panel"><div className="panel-heading"><div><h2>Feature assignments</h2><p>Choose a tester to review their assigned product capabilities.</p></div></div><UserTable users={users} selectedId={selected?.id} onSelect={onSelect} /><div className="table-footer"><span>Feature changes are server-authorized and audit logged.</span></div></div><aside className="user-detail">{selected ? <div className="selected-user"><div className="selected-header"><span className="selected-avatar">{selected.initials}</span><div><h2>{selected.displayName}</h2><p>{selected.email}</p><p>Account feature assignments</p></div></div><section><h3>Feature access</h3><div className="feature-list">{selected.features.map((feature) => <label key={feature.id}><div><strong>{feature.name}</strong><span>{feature.description}</span></div><button className={`toggle ${feature.enabled ? "is-on" : ""}`} role="switch" aria-checked={feature.enabled} aria-label={`Toggle ${feature.name}`} onClick={() => onToggleFeature(feature.id)}><i /></button></label>)}</div></section><p className="detail-footnote">The interface requests a change; server-side entitlement enforcement remains the authority.</p></div> : <EmptyCopy text="Select a tester to manage feature assignments." />}</aside></section>;
+  const [query, setQuery] = useState("");
+  const matching = users.filter((user) => `${user.displayName} ${user.email}`.toLowerCase().includes(query.toLowerCase()));
+  return <section className="admin-columns"><div className="user-panel"><div className="panel-heading"><div><h2>Feature assignments</h2><p>Choose a tester to review their assigned product capabilities.</p></div><div className="table-actions"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search testers" /></label></div></div><UserTable users={matching} selectedId={selected?.id} onSelect={onSelect} /><div className="table-footer"><span>Showing {matching.length} accounts · feature changes are server-authorized and audit logged.</span></div></div><aside className="user-detail">{selected ? <div className="selected-user"><div className="selected-header"><span className="selected-avatar">{selected.initials}</span><div><h2>{selected.displayName}</h2><p>{selected.email}</p><p>Account feature assignments</p></div></div><section><h3>Feature access</h3><div className="feature-list">{selected.features.map((feature) => <label key={feature.id}><div><strong>{feature.name}</strong><span>{feature.description}</span></div><button className={`toggle ${feature.enabled ? "is-on" : ""}`} role="switch" aria-checked={feature.enabled} aria-label={`Toggle ${feature.name}`} onClick={() => onToggleFeature(feature.id)}><i /></button></label>)}</div></section><p className="detail-footnote">The interface requests a change; server-side entitlement enforcement remains the authority.</p></div> : <EmptyCopy text="Select a tester to manage feature assignments." />}</aside></section>;
 }
 
 function AdminSupportPage({ tickets, selectedTicket, onSelect, onState }: { tickets: SupportTicket[]; selectedTicket?: SupportTicket; onSelect: (id: number) => void; onState: (state: SupportTicket["state"]) => void }) {
-  return <section className="support-panel"><div className="panel-heading"><div><h2>Support queue</h2><p>Only tester-submitted reports appear here.</p></div><span className="panel-note">Ticket state changes are recorded in the audit log.</span></div><div className="support-queue">{tickets.length ? <><div className="ticket-list">{tickets.map((ticket) => <TicketRow ticket={ticket} key={ticket.id} selected={ticket.ticketId === selectedTicket?.ticketId} onSelect={() => onSelect(ticket.ticketId)} />)}</div><aside className="ticket-detail">{selectedTicket ? <SelectedTicket ticket={selectedTicket} onState={onState} /> : <EmptyCopy text="Choose a support request to view it." />}</aside></> : <EmptyCopy text="New support requests will appear here." />}</div></section>;
+  const [query, setQuery] = useState("");
+  const [stateFilter, setStateFilter] = useState<"all" | SupportTicket["state"]>("all");
+  const matching = tickets.filter((ticket) => `${ticket.subject} ${ticket.reporter || ""} ${ticket.reporterEmail || ""}`.toLowerCase().includes(query.toLowerCase()) && (stateFilter === "all" || ticket.state === stateFilter));
+  return <section className="support-panel"><div className="panel-heading"><div><h2>Support queue</h2><p>Only tester-submitted reports appear here.</p></div><div className="table-actions"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search support" /></label><select className="compact-select" value={stateFilter} onChange={(event) => setStateFilter(event.target.value as "all" | SupportTicket["state"])}><option value="all">All tickets</option><option value="New">New</option><option value="Investigating">Investigating</option><option value="Resolved">Resolved</option></select></div></div><div className="support-queue">{matching.length ? <><div className="ticket-list">{matching.map((ticket) => <TicketRow ticket={ticket} key={ticket.id} selected={ticket.ticketId === selectedTicket?.ticketId} onSelect={() => onSelect(ticket.ticketId)} />)}</div><aside className="ticket-detail">{selectedTicket ? <SelectedTicket ticket={selectedTicket} onState={onState} /> : <EmptyCopy text="Choose a support request to view it." />}</aside></> : <EmptyCopy text={tickets.length ? "No tickets match these filters." : "New support requests will appear here."} />}</div></section>;
 }
 
 function AdminAuditPage() { return <section className="admin-data-panel"><div className="panel-heading"><div><h2>Audit log</h2><p>Every current access, device, feature, invitation, and support-state change is recorded server-side.</p></div></div><div className="audit-empty"><FileClock size={24} /><div><strong>Read-only audit viewing is the next control-plane addition.</strong><p>The underlying actions are already audited, but this client does not yet expose an event-feed endpoint. Until it does, this page deliberately does not invent or cache audit history in the browser.</p></div></div></section>; }
@@ -663,8 +766,33 @@ function AdminCommunicationsPage({ users, applications }: { users: AdminUser[]; 
 
 function Metric({ label, value, detail, icon: Icon }: { label: string; value: string; detail: string; icon: typeof Users }) { return <article className="metric"><span className="metric-icon"><Icon size={20} /></span><p>{label}</p><strong>{value}</strong><small>{detail}</small></article>; }
 
-function ApplicantPanel({ applications, onState, onInvite, invitingApplicationId }: { applications: BetaApplication[]; onState: (applicationId: string, state: BetaApplicationState) => void; onInvite: (application: BetaApplication) => void; invitingApplicationId?: string }) {
-  return <section className="applicant-panel" id="applicants"><div className="panel-heading"><div><h2>Beta applicants</h2><p>Approve a request to send Netlify’s secure account invitation.</p></div><span className="panel-note">Invitation links stay with Netlify and are never shown here.</span></div>{applications.length ? <div className="applicant-list">{applications.map((application) => <article className="applicant-row" key={application.id}><div><strong>{application.fullName}</strong><span>{application.email} · {applicationStateLabel(application.state)}</span>{application.interest ? <p>{application.interest}</p> : null}</div><ApplicantActions application={application} onState={onState} onInvite={onInvite} inviting={invitingApplicationId === application.id} /></article>)}</div> : <EmptyCopy text="New landing-page requests will appear here after the verified application intake is connected." />}</section>;
+function ApplicantPanel({ applications, onState, onInvite, onCreate, onEdit, onArchive, invitingApplicationId }: {
+  applications: BetaApplication[];
+  onState: (applicationId: string, state: BetaApplicationState) => void;
+  onInvite: (application: BetaApplication) => void;
+  onCreate: (input: { firstName: string; lastName: string; email: string; internalNote?: string }) => Promise<unknown>;
+  onEdit: (input: { applicationId: string; firstName: string; lastName: string; email: string; internalNote?: string }) => Promise<unknown>;
+  onArchive: (applicationId: string, archived: boolean) => Promise<unknown>;
+  invitingApplicationId?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const [stateFilter, setStateFilter] = useState<"active" | "all" | BetaApplicationState>("active");
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string>();
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [internalNote, setInternalNote] = useState("");
+  const resetForm = () => { setAdding(false); setEditingId(undefined); setFirstName(""); setLastName(""); setEmail(""); setInternalNote(""); };
+  const beginEdit = (application: BetaApplication) => { setAdding(false); setEditingId(application.id); const parts = application.fullName.trim().split(/\s+/); setFirstName(application.firstName || parts[0] || ""); setLastName(application.lastName || parts.slice(1).join(" ")); setEmail(application.email); setInternalNote(application.internalNote || ""); };
+  const submit = async (event: React.FormEvent) => { event.preventDefault(); if (editingId) await onEdit({ applicationId: editingId, firstName, lastName, email, internalNote: internalNote || undefined }); else await onCreate({ firstName, lastName, email, internalNote: internalNote || undefined }); resetForm(); };
+  const normalized = query.trim().toLowerCase();
+  const visible = applications.filter((application) => {
+    const stateMatches = stateFilter === "all" ? true : stateFilter === "active" ? !application.archivedAt && application.state !== "declined" : application.state === stateFilter;
+    const textMatches = !normalized || `${application.fullName} ${application.email}`.toLowerCase().includes(normalized);
+    return stateMatches && textMatches;
+  });
+  return <section className="applicant-panel" id="applicants"><div className="panel-heading"><div><h2>Beta applicants</h2><p>Approve a request to send Netlify’s secure account invitation.</p></div><div className="table-actions"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search applicants" /></label><select className="compact-select" value={stateFilter} onChange={(event) => setStateFilter(event.target.value as typeof stateFilter)}><option value="active">Active queue</option><option value="all">All applicants</option><option value="requested">Requested</option><option value="reviewing">Reviewing</option><option value="approved">Approved</option><option value="invited">Invite sent</option><option value="declined">Declined</option></select><button className="button button-primary" type="button" onClick={() => { resetForm(); setAdding(true); }}>Add applicant</button></div></div>{(adding || editingId) ? <form className="applicant-form" onSubmit={submit}><label>First name<input value={firstName} onChange={(event) => setFirstName(event.target.value)} required maxLength={80} /></label><label>Last name<input value={lastName} onChange={(event) => setLastName(event.target.value)} required maxLength={80} /></label><label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required /></label><label>Internal note <span>(optional)</span><input value={internalNote} onChange={(event) => setInternalNote(event.target.value)} maxLength={1000} placeholder="Operational context only" /></label><div><button className="button button-primary" type="submit">{editingId ? "Save profile" : "Add applicant"}</button><button className="text-button" type="button" onClick={resetForm}>Cancel</button></div><p>Manual entries are labelled separately from landing requests. They do not create an account or send an invitation until you approve them.</p></form> : null}{visible.length ? <div className="applicant-list">{visible.map((application) => <article className="applicant-row" key={application.id}><div><span className="source-chip">{application.source === "manual" ? "Added manually" : "Landing request"}</span><strong>{application.fullName}</strong><span>{application.email} · {application.archivedAt ? "Archived" : applicationStateLabel(application.state)}</span>{application.interest ? <p>{application.interest}</p> : null}{application.internalNote ? <small>Internal note: {application.internalNote}</small> : null}</div><div className="applicant-actions"><button className="button button-secondary" type="button" onClick={() => beginEdit(application)} disabled={application.state === "invited" || application.state === "active" || application.state === "device_pending"}>Edit</button><ApplicantActions application={application} onState={onState} onInvite={onInvite} inviting={invitingApplicationId === application.id} />{application.state === "declined" ? <button className="button button-secondary" type="button" onClick={() => { if (application.archivedAt || window.confirm(`Archive ${application.fullName}? You can restore the record later.`)) void onArchive(application.id, !application.archivedAt); }}>{application.archivedAt ? "Restore" : "Archive"}</button> : null}</div></article>)}</div> : <EmptyCopy text={applications.length ? "No applicants match these filters." : "New landing-page requests will appear here after the verified application intake is connected."} />}</section>;
 }
 
 function ApplicantActions({ application, onState, onInvite, inviting }: { application: BetaApplication; onState: (applicationId: string, state: BetaApplicationState) => void; onInvite: (application: BetaApplication) => void; inviting: boolean }) {
@@ -694,7 +822,14 @@ function UserTable({ users, selectedId, onSelect }: { users: AdminUser[]; select
 
 function StatusPill({ status }: { status: AccessStatus }) { return <span className={`status-pill ${status}`}><i />{accessLabel(status)}</span>; }
 
-function SelectedUser({ selected, onStatus, onReleaseChannel, onToggleFeature, onDeviceStatus }: { selected: AdminUser; onStatus: (status: AccessStatus) => void; onReleaseChannel: (channel: ReleaseChannel) => void; onToggleFeature: (featureId: string) => void; onDeviceStatus: (deviceId: string, status: AccessStatus) => void }) { return <div className="selected-user"><div className="selected-header"><span className="selected-avatar">{selected.initials}</span><div><h2>{selected.displayName}</h2><p>{selected.email}</p><p>Setup · {setupLabel(selected.setupState)} · {selected.activation.completedCount}/{selected.activation.totalCount} complete</p></div><button className="icon-button" aria-label={`Close ${selected.displayName} details`}><X size={18} /></button></div><section className="admin-activation-progress"><h3>Activation progress</h3><p>{selected.activation.nextAction.id === "complete" ? "Beta setup complete." : `Next: ${selected.activation.nextAction.label}`}</p><ol>{selected.activation.steps.map((step) => <li className={`is-${step.state}`} key={step.id}><span>{step.state === "complete" ? <BadgeCheck size={15} /> : ""}</span><strong>{step.title}</strong><em>{step.state === "complete" ? "Done" : step.state === "current" ? "Next" : "Later"}</em></li>)}</ol></section><section><h3>Access status</h3><div className="status-options">{(["active", "paused", "revoked"] as AccessStatus[]).map((status) => <button className={selected.status === status ? "is-active" : ""} key={status} onClick={() => onStatus(status)}><StatusPill status={status} /><span>{status === "active" ? "Can use assigned features." : status === "paused" ? "Keeps data local; blocks new entitlement checks." : "Access cannot renew."}</span></button>)}</div></section><section><h3>Release channel</h3><label className="select-wrap wide"><select value={selected.releaseChannel} onChange={(event) => onReleaseChannel(event.target.value as ReleaseChannel)}><option value="stable">Stable</option><option value="beta">Beta</option><option value="internal">Internal</option></select><ChevronDown size={17} /></label></section><section><h3>Authorized devices</h3><div className="device-control-list">{selected.devices.length ? selected.devices.map((device) => <article className="device-control" key={device.id}><div className="detail-device"><Laptop size={18} /><div><strong>{device.label} · {device.appVersion}</strong><span>{device.platform} · Last seen {device.lastSeenAt}</span></div></div><StatusPill status={device.status} />{device.status === "revoked" ? <p>This Mac must reconnect from AmirOS before it can be used again.</p> : <div className="device-actions"><button className="text-button" onClick={() => onDeviceStatus(device.id, device.status === "paused" ? "active" : "paused")}>{device.status === "paused" ? "Resume device" : "Pause device"}</button><button className="text-button device-revoke" onClick={() => onDeviceStatus(device.id, "revoked")}>Revoke device</button></div>}</article>) : <EmptyCopy text="This account has not connected a Mac yet." />}</div></section><section><h3>Feature access</h3><div className="feature-list">{selected.features.map((feature) => <label key={feature.id}><div><strong>{feature.name}</strong><span>{feature.description}</span></div><button className={`toggle ${feature.enabled ? "is-on" : ""}`} role="switch" aria-checked={feature.enabled} aria-label={`Toggle ${feature.name}`} onClick={() => onToggleFeature(feature.id)}><i /></button></label>)}</div></section><button className="danger-button" onClick={() => onStatus("paused")}><CirclePause size={17} />Pause account now</button><p className="detail-footnote">Every account and device change is written to the audit log.</p></div>; }
+function SelectedUser({ selected, onStatus, onProfile, onReleaseChannel, onToggleFeature, onDeviceStatus }: { selected: AdminUser; onStatus: (status: AccessStatus) => void; onProfile: (firstName: string, lastName: string) => void; onReleaseChannel: (channel: ReleaseChannel) => void; onToggleFeature: (featureId: string) => void; onDeviceStatus: (deviceId: string, status: AccessStatus) => void }) {
+  const parts = selected.displayName.trim().split(/\s+/);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [firstName, setFirstName] = useState(selected.firstName || parts[0] || "");
+  const [lastName, setLastName] = useState(selected.lastName || parts.slice(1).join(" "));
+  useEffect(() => { const next = selected.displayName.trim().split(/\s+/); setFirstName(selected.firstName || next[0] || ""); setLastName(selected.lastName || next.slice(1).join(" ")); setEditingProfile(false); }, [selected.id, selected.displayName, selected.firstName, selected.lastName]);
+  return <div className="selected-user"><div className="selected-header"><span className="selected-avatar">{selected.initials}</span><div><h2>{selected.displayName}</h2><p>{selected.email}</p><p>Setup · {setupLabel(selected.setupState)} · {selected.activation.completedCount}/{selected.activation.totalCount} complete</p></div><button className="icon-button" aria-label={`Close ${selected.displayName} details`}><X size={18} /></button></div><section>{editingProfile ? <form className="profile-form" onSubmit={(event) => { event.preventDefault(); onProfile(firstName, lastName); setEditingProfile(false); }}><h3>Profile</h3><label>First name<input value={firstName} onChange={(event) => setFirstName(event.target.value)} required /></label><label>Last name<input value={lastName} onChange={(event) => setLastName(event.target.value)} required /></label><div><button className="button button-secondary" type="submit">Save profile</button><button className="text-button" type="button" onClick={() => setEditingProfile(false)}>Cancel</button></div></form> : <><h3>Profile</h3><p className="detail-footnote">Name and operational status are stored here. Email changes are handled through Identity recovery, not silently in the admin panel.</p><button className="text-button" onClick={() => setEditingProfile(true)}>Edit name</button></>}</section><section className="admin-activation-progress"><h3>Activation progress</h3><p>{selected.activation.nextAction.id === "complete" ? "Beta setup complete." : `Next: ${selected.activation.nextAction.label}`}</p><ol>{selected.activation.steps.map((step) => <li className={`is-${step.state}`} key={step.id}><span>{step.state === "complete" ? <BadgeCheck size={15} /> : ""}</span><strong>{step.title}</strong><em>{step.state === "complete" ? "Done" : step.state === "current" ? "Next" : "Later"}</em></li>)}</ol><p className="detail-footnote">If this tester is stuck, use Communications to prepare the matching one-to-one guidance. “Connect this Mac” recovery is available from AmirOS Settings.</p></section><section><h3>Access status</h3><div className="status-options">{(["active", "paused", "revoked"] as AccessStatus[]).map((status) => <button className={selected.status === status ? "is-active" : ""} key={status} onClick={() => onStatus(status)}><StatusPill status={status} /><span>{status === "active" ? "Can use assigned features." : status === "paused" ? "Keeps data local; blocks new entitlement checks." : "Access cannot renew."}</span></button>)}</div></section><section><h3>Release channel</h3><label className="select-wrap wide"><select value={selected.releaseChannel} onChange={(event) => onReleaseChannel(event.target.value as ReleaseChannel)}><option value="stable">Stable</option><option value="beta">Beta</option><option value="internal">Internal</option></select><ChevronDown size={17} /></label></section><section><h3>Authorized devices</h3><div className="device-control-list">{selected.devices.length ? selected.devices.map((device) => <article className="device-control" key={device.id}><div className="detail-device"><Laptop size={18} /><div><strong>{device.label} · {device.appVersion}</strong><span>{device.platform} · Last seen {device.lastSeenAt}</span></div></div><StatusPill status={device.status} />{device.status === "revoked" ? <p>This Mac must reconnect from AmirOS before it can be used again.</p> : <div className="device-actions"><button className="text-button" onClick={() => onDeviceStatus(device.id, device.status === "paused" ? "active" : "paused")}>{device.status === "paused" ? "Resume device" : "Pause device"}</button><button className="text-button device-revoke" onClick={() => onDeviceStatus(device.id, "revoked")}>Revoke device</button></div>}</article>) : <EmptyCopy text="This account has not connected a Mac yet." />}</div></section><section><h3>Feature access</h3><div className="feature-list">{selected.features.map((feature) => <label key={feature.id}><div><strong>{feature.name}</strong><span>{feature.description}</span></div><button className={`toggle ${feature.enabled ? "is-on" : ""}`} role="switch" aria-checked={feature.enabled} aria-label={`Toggle ${feature.name}`} onClick={() => onToggleFeature(feature.id)}><i /></button></label>)}</div></section><button className="danger-button" onClick={() => onStatus("paused")}><CirclePause size={17} />Pause account now</button><p className="detail-footnote">Every account and device change is written to the audit log.</p></div>;
+}
 
 function TicketRow({ ticket, selected, onSelect }: { ticket: SupportTicket; selected: boolean; onSelect: () => void }) { return <button className={`ticket-row ${selected ? "is-selected" : ""}`} type="button" aria-pressed={selected} onClick={onSelect}><span className="ticket-icon"><LifeBuoy size={17} /></span><span className="ticket-summary"><strong>{ticket.subject}</strong><span>{ticket.id} · {ticket.type} · {ticket.createdAt}</span></span><span className={`ticket-state ${ticket.state.toLowerCase().replace(" ", "-")}`}>{ticket.state}</span><ArrowUpRight size={17} aria-hidden="true" /></button>; }
 

@@ -7,6 +7,7 @@ import { IntelligenceLearner } from "./intelligence-learner.js";
 import { WritingStyleLearner } from "./writing-style.js";
 import { MessageProcessor } from "./processor.js";
 import { createWhatsAppClient } from "./whatsapp.js";
+import { DeletedMessageArchive } from "./deleted-message-archive.js";
 import { todaysFocusIconCacheKey, todaysFocusIconPrompt } from "./todays-focus-icons.js";
 import {
   cachedGeneratedImage,
@@ -85,6 +86,7 @@ const ai = new AiService({
 });
 const writingStyleLearner = new WritingStyleLearner(amirosState, ai);
 const intelligenceLearner = new IntelligenceLearner(amirosState, ai);
+const deletedMessageArchive = new DeletedMessageArchive(amirosState);
 const eventImageJobs = new Map<string, Promise<string>>();
 const generateEventImage = (title: string): Promise<string> => {
   const item = { title, type: "calendar" as const };
@@ -122,6 +124,8 @@ const processor = new MessageProcessor(
 const whatsapp = createWhatsAppClient(config, (message, isSelfChat) =>
   processor.process(message, isSelfChat),
   amirosState,
+  (message, original) => deletedMessageArchive.capture(message, original),
+  (message) => deletedMessageArchive.captureViewOnce(message),
 );
 const dashboard = startAmirosDashboard({
   client: whatsapp,
@@ -131,6 +135,7 @@ const dashboard = startAmirosDashboard({
   writingStyleLearner,
   intelligenceLearner,
   controlCenter,
+  deletedMessageArchive,
   syncControlCenterAccess,
   port: config.amirosPort,
 });
