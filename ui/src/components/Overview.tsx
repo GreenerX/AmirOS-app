@@ -25,7 +25,7 @@ import { formatDateTime, formatTime, timeOfDayGreeting } from "../format";
 import { hideIntelligenceAction, readHiddenIntelligenceActions, replyActionId } from "../intelligence-visibility";
 import { buildIntelligenceSnapshot, isKnownIntelligenceContactName } from "../intelligence-snapshot";
 import { replyAssessmentCopy } from "../reply-assessment-copy";
-import { buildTodaysFocus, todaysFocusDismissalIds, todaysFocusPresentation, type TodaysFocusItem } from "../todays-focus";
+import { buildTodaysFocus, isRecentlyPassedCalendarEvent, todaysFocusDismissalIds, todaysFocusPresentation, type TodaysFocusItem } from "../todays-focus";
 import { readHiddenTodaysFocus, saveHiddenTodaysFocus } from "../todays-focus-visibility";
 import type { CalendarEvent, ChatSummary, DashboardData, IntelligenceData, KnowledgeTrackingStatus, ProactiveIntelligenceItem, TodoTask, ViewName } from "../types";
 import { CalendarEventForm, type CalendarEventDraft } from "./CalendarEventForm";
@@ -160,10 +160,13 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
   const [hiddenActionVersion, setHiddenActionVersion] = useState(0);
   const [hiddenTodaysFocus, setHiddenTodaysFocus] = useState<Set<string>>(() => readHiddenTodaysFocus());
   const [todaysFocusIcons, setTodaysFocusIcons] = useState<Record<string, string>>({});
+  const [nextBestVisuals, setNextBestVisuals] = useState<Record<string, string>>({});
   const [actionSummaries, setActionSummaries] = useState<Record<string, string>>(readDashboardActionSummaries);
   const pendingActionSummaries = useRef(new Set<string>());
   const pendingTodaysFocusIcons = useRef(new Set<string>());
   const failedTodaysFocusIcons = useRef(new Set<string>());
+  const pendingNextBestVisuals = useRef(new Set<string>());
+  const failedNextBestVisuals = useRef(new Set<string>());
   const [completingTodoIds, setCompletingTodoIds] = useState<Set<string>>(() => new Set());
   const [todoEditor, setTodoEditor] = useState<(TodoTask & { contactName: string }) | undefined>();
   const [calendarEditor, setCalendarEditor] = useState<(CalendarEvent & { chatId: string; contactName: string }) | undefined>();
@@ -302,6 +305,26 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
     })),
   ].slice(0, 6), [newSignals, planSuggestions, suggestedTodos, visibleNeedsReply]);
   const focus = focusActions[0];
+
+  useEffect(() => {
+    for (const action of focusActions) {
+      const chat = chats.find((candidate) => candidate.id === action.chatId);
+      if (chat?.avatarUrl || nextBestVisuals[action.actionId]
+        || pendingNextBestVisuals.current.has(action.actionId) || failedNextBestVisuals.current.has(action.actionId)) continue;
+      const type = action.actionType === "insight" ? "commitment" : action.actionType;
+      pendingNextBestVisuals.current.add(action.actionId);
+      void ensureTodaysFocusIcon({ title: action.title, type })
+        .then(({ url }) => {
+          if (!url) {
+            failedNextBestVisuals.current.add(action.actionId);
+            return;
+          }
+          setNextBestVisuals((current) => current[action.actionId] ? current : { ...current, [action.actionId]: url });
+        })
+        .catch(() => failedNextBestVisuals.current.add(action.actionId))
+        .finally(() => pendingNextBestVisuals.current.delete(action.actionId));
+    }
+  }, [chats, focusActions, nextBestVisuals]);
 
   useEffect(() => {
     for (const action of focusActions) {
@@ -509,8 +532,12 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
             const isOverdue = (item.type === "todo" || item.type === "commitment")
               && item.hasExplicitDueAt === true
               && item.timestamp < deviceTime.getTime();
+            const isRecentlyPassedEvent = isRecentlyPassedCalendarEvent(item, deviceTime);
+            const isAttentionPastDue = isOverdue || isRecentlyPassedEvent;
             const category = isOverdue
               ? `Overdue · ${eventDateTime(item.timestamp)}`
+              : isRecentlyPassedEvent
+                ? `Started · ${eventDateTime(item.timestamp)}`
               : item.proactive
                 ? item.proactive.kind === "upcoming_context" ? "Worth knowing"
                   : item.proactive.kind === "meaningful_change" ? "Recent change"
@@ -537,7 +564,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
                     : <BellRing size={30} />;
             const openItem = () => openTodaysFocus(item);
             return <article
-              className={`overview-reminder todays-focus-item todays-focus-${item.type} ${isOverdue ? "is-overdue" : ""}`}
+              className={`overview-reminder todays-focus-item todays-focus-${item.type} ${isAttentionPastDue ? "is-overdue" : ""}`}
               key={item.id}
               role="button"
               tabIndex={0}
@@ -582,34 +609,10 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
         </div> : <div className="overview-agenda-empty todays-focus-empty"><CalendarClock size={28} /><span><strong>You’re all caught up for today.</strong><small>When something needs you, it’ll show up here.</small></span></div>}
       </section>
 
-      {trackingRequests.length > 0 ? <section className="panel tracking-review-panel" aria-labelledby="tracking-review-title">
-        <div className="panel-heading">
-          <h2 id="tracking-review-title"><Brain size={19} /> New chats awaiting approval <span className="count-badge intelligence-count">{trackingRequests.length}</span></h2>
-          <span className="tracking-review-note">Nothing is analyzed until you choose.</span>
-        </div>
-        <div className="tracking-review-list">
-          {trackingRequests.map((request) => {
-            const chat = chats.find((item) => item.id === request.chatId);
-            return <article className="tracking-review-row" key={request.chatId}>
-              <button className="tracking-review-copy" type="button" onClick={() => onOpenTrackingChat(request.chatId)}>
-                <ContactAvatar name={request.contactName} src={chat?.avatarUrl} className="tracking-review-avatar" />
-                <span><strong dir="auto">{request.contactName}</strong><small>{request.isGroup ? "Group chat" : "Private chat"} · {request.messageCount} new {request.messageCount === 1 ? "message" : "messages"}</small><p dir="auto">{request.preview}</p></span>
-                <ArrowRight size={15} />
-              </button>
-              <div className="tracking-review-actions">
-                <button className="button compact primary" type="button" onClick={() => void onTrackingDecision(request.chatId, "enabled")}>Track this chat</button>
-                <button className="button compact ghost" type="button" onClick={() => void onTrackingDecision(request.chatId, "snoozed")}>Not now</button>
-                <button className="text-action muted" type="button" onClick={() => void onTrackingDecision(request.chatId, "disabled")}>Never track</button>
-              </div>
-            </article>;
-          })}
-        </div>
-      </section> : null}
-
       <div className="overview-primary-grid">
         <div className="overview-agenda-pair">
           <section className="panel intelligence-snapshot-panel overview-today-agenda-panel" aria-labelledby="overview-agenda-title">
-            <div className="panel-heading">
+            <div className="panel-heading overview-card-heading">
               <h2 id="overview-agenda-title"><CalendarCheck size={19} /> Agenda {todaysAgenda.length > 0 ? <span className="count-badge intelligence-count">{todaysAgenda.length}</span> : null}</h2>
               <span className="overview-agenda-today">Today</span>
             </div>
@@ -624,12 +627,12 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
                   <ArrowRight size={15} />
                 </button>;
               })}
-            </div> : <div className="overview-agenda-empty overview-today-agenda-empty overview-empty-state"><CalendarDays size={22} /><span><strong>Your day is clear.</strong><small>Nothing is scheduled for today yet.</small></span></div>}
+            </div> : <div className="overview-empty-state"><span className="overview-empty-state-icon"><CalendarDays size={21} /></span><span className="overview-empty-state-copy"><strong>Your day is clear.</strong><small>Nothing is scheduled for today yet.</small></span></div>}
             <footer className="overview-today-agenda-footer"><button className="text-button" type="button" onClick={() => onNavigate("calendar")}>View full agenda <ArrowRight size={15} /></button></footer>
           </section>
 
           <section className="panel overview-todos-panel" aria-labelledby="overview-todo-list-title">
-            <div className="panel-heading">
+            <div className="panel-heading overview-card-heading">
               <h2 id="overview-todo-list-title"><ListTodo size={19} /> To-dos <span className="count-badge intelligence-count">{todoCounts.open}</span></h2>
               <button className="text-button" type="button" onClick={() => setTodoFilter("all")}>View all <ArrowRight size={14} /></button>
             </div>
@@ -642,20 +645,41 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
                 <button className="overview-todo-title" type="button" onClick={() => setTodoEditor(todo)} title={`Edit ${todo.title}`}><span className={`overview-todo-priority priority-${todo.priority || "normal"}`} role="img" aria-label={`${todo.priority || "normal"} priority`} /><strong dir="auto">{todo.title}</strong></button>
                 <span className="overview-todo-actions"><button className="overview-todo-action" type="button" title={`Edit ${todo.title}`} aria-label={`Edit ${todo.title}`} onClick={() => setTodoEditor(todo)}><PencilLine size={14} /></button><button className="overview-todo-action danger" type="button" title={`Remove ${todo.title}`} aria-label={`Remove ${todo.title}`} onClick={() => void removeTodo(todo)}><Trash2 size={14} /></button></span>
               </div>)}
-            </div> : <div className="overview-agenda-empty overview-todo-filter-empty overview-empty-state"><ListTodo size={19} /><span><strong>No {todoFilter === "completed" ? "completed" : "open"} to-dos</strong><small>Try another filter to see saved tasks.</small></span></div>}
-            </> : suggestedTodos.length > 0 ? <div className="overview-agenda-empty overview-empty-state"><ListTodo size={19} /><span><strong>{suggestedTodos.length} task {suggestedTodos.length === 1 ? "suggestion" : "suggestions"} waiting</strong><small>Review a message before it becomes a to-do.</small></span></div> : <div className="overview-agenda-empty overview-empty-state"><ListTodo size={19} /><span><strong>No to-dos yet</strong><small>Actionable messages will appear here for review.</small></span></div>}
+            </div> : <div className="overview-empty-state"><span className="overview-empty-state-icon"><ListTodo size={21} /></span><span className="overview-empty-state-copy"><strong>No {todoFilter === "completed" ? "completed" : "open"} to-dos</strong><small>Try another filter to see saved tasks.</small></span></div>}
+            </> : suggestedTodos.length > 0 ? <div className="overview-empty-state"><span className="overview-empty-state-icon"><ListTodo size={21} /></span><span className="overview-empty-state-copy"><strong>{suggestedTodos.length} task {suggestedTodos.length === 1 ? "suggestion" : "suggestions"} waiting</strong><small>Review a message before it becomes a to-do.</small></span></div> : <div className="overview-empty-state"><span className="overview-empty-state-icon"><ListTodo size={21} /></span><span className="overview-empty-state-copy"><strong>No to-dos yet</strong><small>Actionable messages will appear here for review.</small></span></div>}
           </section>
         </div>
 
         <div className="overview-command-rail">
-          <section className="panel next-best-panel">
-            <div className="panel-heading"><h2>Suggested actions</h2><span className={focus ? "attention-label" : "attention-label clear"}>{focus ? "Priority" : "All clear"}</span></div>
-            {focusActions.length > 0 ? <div className="next-best-list">
+          <section className="panel next-best-panel" aria-labelledby="overview-suggested-actions-title">
+            <div className="panel-heading overview-card-heading"><h2 id="overview-suggested-actions-title"><Sparkles size={19} /> Suggested actions</h2><span className={focus || trackingRequests.length > 0 ? "attention-label" : "attention-label clear"}>{focus || trackingRequests.length > 0 ? "Priority" : "All clear"}</span></div>
+            {focusActions.length > 0 || trackingRequests.length > 0 ? <div className="next-best-list">
+              {trackingRequests.map((request) => {
+                const chat = chats.find((item) => item.id === request.chatId);
+                return <div className="intelligence-focus next-best-focus tracking-next-best-focus" key={`tracking:${request.chatId}`}>
+                  <ContactAvatar name={request.contactName} src={chat?.avatarUrl} className="intelligence-focus-avatar" />
+                  <button className="next-best-focus-copy" type="button" onClick={() => onOpenTrackingChat(request.chatId)}>
+                    <small>New chat · choose whether AmirOS should learn</small>
+                    <strong dir="auto">{request.contactName}</strong>
+                    <p dir="auto">{request.isGroup ? "Group chat" : "Private chat"} · {request.messageCount} new {request.messageCount === 1 ? "message" : "messages"} · {request.preview}</p>
+                  </button>
+                  <span className="tracking-review-actions tracking-next-best-actions">
+                    <button className="button compact primary" type="button" onClick={() => void onTrackingDecision(request.chatId, "enabled")}>Track</button>
+                    <button className="button compact ghost" type="button" onClick={() => void onTrackingDecision(request.chatId, "snoozed")}>Not now</button>
+                    <button className="text-action muted" type="button" onClick={() => void onTrackingDecision(request.chatId, "disabled")}>Never</button>
+                  </span>
+                </div>;
+              })}
               {focusActions.map((action) => {
                 const chat = chats.find((candidate) => candidate.id === action.chatId);
                 const replyCopy = action.actionType === "reply" ? replyAssessmentCopy(action.replyAssessment) : undefined;
+                const visual = nextBestVisuals[action.actionId];
                 return <div className="intelligence-focus next-best-focus" key={action.actionId}>
-                  <ContactAvatar name={action.contactName} src={chat?.avatarUrl} className="intelligence-focus-avatar" />
+                  {chat?.avatarUrl
+                    ? <ContactAvatar name={action.contactName} src={chat.avatarUrl} className="intelligence-focus-avatar" />
+                    : visual
+                      ? <img className="intelligence-focus-avatar next-best-focus-art" src={visual} alt="" />
+                      : <span className="intelligence-focus-symbol next-best-focus-art" aria-hidden="true">{action.actionType === "reply" ? <MessageCircle size={21} /> : action.actionType === "calendar" ? <CalendarCheck size={21} /> : action.actionType === "todo" ? <ListTodo size={21} /> : <Brain size={21} />}</span>}
                   <button className="next-best-focus-copy" type="button" onClick={() => openFocus(action)}>
                     <small>{action.kind}</small><strong dir="auto">{action.title}</strong><p dir="auto">{action.actionType === "reply" ? actionSummaries[action.actionId] || action.detail : action.detail}</p>{replyCopy ? <span className="reply-assessment-indicator">{replyCopy.text}</span> : null}
                   </button>
@@ -668,7 +692,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
                   </span>
                 </div>;
               })}
-            </div> : <div className="intelligence-focus caught-up" role="status"><span className="intelligence-focus-symbol"><Sparkles size={19} /></span><span><small>Current status</small><strong>You’re caught up</strong><p>AmirOS will surface the next useful action here.</p></span></div>}
+            </div> : <div className="overview-empty-state" role="status"><span className="overview-empty-state-icon"><Sparkles size={21} /></span><span className="overview-empty-state-copy"><strong>You’re caught up</strong><small>AmirOS will surface the next useful action here.</small></span></div>}
           </section>
 
         </div>

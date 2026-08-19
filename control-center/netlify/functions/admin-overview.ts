@@ -1,6 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import { requireAdmin } from "./_shared/auth";
 import { buildActivationChecklist } from "./_shared/activation-checklist";
+import { reconcileDeletedIdentityAccounts } from "./_shared/identity-reconciliation";
 import { databaseUnavailable, ensureControlAccount, getSupabaseAdmin } from "./_shared/supabase";
 import { json, methodNotAllowed } from "./_shared/http";
 
@@ -17,6 +18,7 @@ export default async (request: Request, _context: Context): Promise<Response> =>
   if (client instanceof Response) return client;
   const operator = await ensureControlAccount(client, admin);
   if (operator instanceof Response) return operator;
+  await reconcileDeletedIdentityAccounts(client);
 
   const [accountsResult, devicesResult, definitionsResult, assignmentsResult, ticketsResult, applicationsResult] = await Promise.all([
     client.from("control_accounts").select("netlify_user_id,email,display_name,first_name,last_name,access_status,setup_state,release_channel,created_at").order("created_at", { ascending: false }),

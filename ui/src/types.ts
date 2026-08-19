@@ -175,6 +175,11 @@ export type DashboardData = {
     models?: { text: string; image: string; voice: string };
     ownerProfile: { displayName: string; avatarUrl: string };
     deletedMessageArchive: { enabled: boolean; saveMedia: boolean };
+    aiServiceAttention?: {
+      kind: "api_key" | "usage_limit" | "model_access" | "service_unavailable" | "request_failed";
+      message: string;
+      updatedAt: number;
+    };
   };
 };
 
@@ -217,7 +222,7 @@ export type ChatMessage = {
   };
   /** A message deleted in WhatsApp that was not present in the local archive. */
   deleted?: {
-    deletedAt: number;
+    deletedAt?: number;
   };
   senderId?: string;
   senderName?: string;
@@ -297,6 +302,8 @@ export type ContactInsight = {
   content: string;
   topicTitle?: string;
   topicTitleConfidence?: number;
+  discoveryTitle?: string;
+  discoverySummary?: string;
   canonicalKey?: string;
   validity?: "current" | "historical" | "temporary";
   evolution?: "reinforce" | "replace" | "append";
@@ -428,13 +435,45 @@ export type IntelligenceData = {
   chats: IntelligenceChat[];
   questionHistory: Array<{
     id: string;
+    parentAnswerId?: string;
     question: string;
     answer: string;
     sources: IntelligenceSearchResult["sources"];
     createdAt: number;
+    feedback?: IntelligenceAnswerFeedbackSummary;
   }>;
   suggestedQuestions: string[];
   proactive?: ProactiveIntelligenceItem[];
+};
+
+export type AssistantSuggestionContext = {
+  chatId: string;
+  sourceIds: string[];
+  candidateId?: string;
+  fingerprint?: string;
+  kind?: ProactiveIntelligenceItem["kind"];
+};
+
+export type IntelligenceAnswerFeedbackReason =
+  | "outdated_or_incorrect"
+  | "wrong_person"
+  | "missed_context"
+  | "irrelevant"
+  | "unclear"
+  | "too_long";
+
+export type IntelligenceAnswerFeedbackSummary = {
+  rating: "helpful" | "needs_work";
+  reasons: IntelligenceAnswerFeedbackReason[];
+  note?: string;
+  createdAt: number;
+};
+
+export type IntelligenceAnswerFeedbackInput = {
+  rating: IntelligenceAnswerFeedbackSummary["rating"];
+  reasons?: IntelligenceAnswerFeedbackReason[];
+  note?: string;
+  suggestionContext?: AssistantSuggestionContext;
 };
 
 export type ProactiveIntelligenceItem = {
@@ -462,6 +501,10 @@ export type ProactiveIntelligenceItem = {
 };
 
 export type IntelligenceSearchResult = {
+  /** Stable local history identity used for feedback and answer revision. */
+  answerId?: string;
+  /** Present when this answer was regenerated from owner feedback on an earlier answer. */
+  parentAnswerId?: string;
   answer: string;
   evidenceIds: string[];
   /** Ordered semantic icon tokens for bulleted answer points. */

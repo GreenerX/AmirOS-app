@@ -9,7 +9,7 @@ import whatsappWeb from "whatsapp-web.js";
 import type { Message } from "whatsapp-web.js";
 import type { AiService } from "./ai.js";
 import { inferMessageLanguage, resolveAutoModeReplyConstraints } from "./ai.js";
-import { AUTO_REPLY_FOLLOW_UP_DELAY_MS, type AmirosState, type ReplyMode } from "./amiros-state.js";
+import { AUTO_REPLY_FOLLOW_UP_DELAY_MS, type AiServiceAttention, type AmirosState, type ReplyMode } from "./amiros-state.js";
 import { parseCommand, type BotCommand } from "./commands.js";
 import type { AppConfig } from "./config.js";
 import type { ControlCenterEntitlement } from "./control-center-entitlement.js";
@@ -201,6 +201,34 @@ export function naturalFailureMessage(error: unknown): string {
     return "I couldn't help with that exact request because it may cross a safety boundary. If you rephrase what you need, I can try a safer version.";
   }
   return "Something went wrong while I was putting that answer together, and I can't tell exactly which part failed. I stopped rather than risk giving you the wrong information—please ask me once more.";
+}
+
+/**
+ * Convert an AI failure into a local recovery notice. This must never be
+ * returned to a WhatsApp recipient: a broken key must not reveal AmirOS.
+ */
+export function aiServiceAttentionForError(error: unknown): Omit<AiServiceAttention, "updatedAt"> {
+  const value = error && typeof error === "object"
+    ? error as { status?: number; code?: string; type?: string; message?: string; cause?: { message?: string } }
+    : undefined;
+  const detail = [value?.code, value?.type, value?.message, value?.cause?.message, error instanceof Error ? error.message : typeof error === "string" ? error : ""]
+    .filter(Boolean)
+    .join(" ")
+    .toLocaleLowerCase();
+  const status = value?.status;
+  if (/invalid[_ -]?api[_ -]?key|authentication|unauthorized|missing.*key/.test(detail) || status === 401) {
+    return { kind: "api_key", message: "Your AI key needs attention. Open Settings to update it before asking AmirOS to reply or analyze." };
+  }
+  if (/insufficient_quota|quota|billing|credit|spend limit|rate[_ -]?limit|too many requests/.test(detail) || status === 429) {
+    return { kind: "usage_limit", message: "Your AI account has reached a usage limit. Check your provider billing or usage limit, then try again." };
+  }
+  if (/model_not_found|model.*access|permission|forbidden/.test(detail) || status === 403) {
+    return { kind: "model_access", message: "The selected AI model is not available to this account. Choose an available model in Settings, then try again." };
+  }
+  if (/timeout|timed out|econnreset|enotfound|fetch failed|network|socket/.test(detail)) {
+    return { kind: "service_unavailable", message: "AmirOS cannot reach the AI service right now. Check your connection and try again shortly." };
+  }
+  return { kind: "request_failed", message: "AmirOS could not complete an AI request. Check Settings, then try again." };
 }
 
 function preventUnverifiedAmirosWriteClaim(answer: string): string {
@@ -902,6 +930,7 @@ export class MessageProcessor {
       }
       this.suppressOutput(chatId, "chat", answer);
       await message.reply(answer, chatId);
+      this.amiros?.clearAiServiceAttention();
       if (autoReplySchedule && this.pendingAutoReplies.get(chatId)?.version === autoReplySchedule.version) {
         this.pendingAutoReplies.delete(chatId);
       }
@@ -934,24 +963,11 @@ export class MessageProcessor {
         error: error instanceof Error ? error.message : String(error),
       });
       this.ai.clearConversation(chatId);
-      if (autoReplySchedule) {
-        // Never expose an internal failure message to a contact from Auto
-        // Mode. A later inbound message may still create a fresh response.
-        if (stillOwnsAutoReply) this.pendingAutoReplies.delete(chatId);
-        return;
-      }
-      const failureMessage = naturalFailureMessage(error);
-      this.suppressOutput(chatId, "chat", failureMessage);
-      await message
-        .reply(failureMessage, chatId)
-        .catch(() => undefined);
-      this.amiros?.rememberMessage(chatId, {
-        role: "assistant",
-        author: "assistant",
-        content: failureMessage,
-        timestamp: Date.now(),
-        countAsIncoming: false,
-      });
+      // Never expose an internal AI failure to any WhatsApp chat. The owner
+      // gets recovery guidance only in their local dashboard.
+      if (autoReplySchedule && stillOwnsAutoReply) this.pendingAutoReplies.delete(chatId);
+      this.amiros?.setAiServiceAttention(aiServiceAttentionForError(error));
+      return;
     }
   }
 

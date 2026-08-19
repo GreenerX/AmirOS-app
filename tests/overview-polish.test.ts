@@ -76,8 +76,8 @@ describe("Overview polish", () => {
     expect(overview).toContain("View full agenda");
     expect(overview).toContain("Nothing is scheduled for today yet.");
     expect(overview).toContain("You’re all caught up for today.");
-    expect(overview).toContain('className="intelligence-focus caught-up" role="status"');
-    expect(overview).not.toContain('className="intelligence-focus caught-up" onClick={() => onNavigate("intelligence")}');
+    expect(overview).toContain('className="overview-empty-state" role="status"');
+    expect(overview).not.toContain('className="overview-empty-state" onClick={() => onNavigate("intelligence")}');
     expect(calendar).toContain("calendar-day-more");
     expect(calendar).toContain("calendar-view-switcher");
     expect(calendar).toContain('selectDisplayMode("day")');
@@ -103,9 +103,9 @@ describe("Overview polish", () => {
     expect(styles).toContain("height: 105px; max-height: 105px");
     expect(styles).toContain("width: fit-content; min-width: 250px");
     expect(styles).toContain("max-width: min(580px, calc(100vw - 42px))");
-    expect(styles).toContain("grid-template-columns: 60px minmax(0, max-content)");
+    expect(styles).toContain("grid-template-columns: 68px minmax(0, max-content)");
     expect(styles).toContain("padding: 7px 20px 6px 12px");
-    expect(styles).toContain("width: 60px; height: 60px");
+    expect(styles).toContain("width: 68px; height: 68px");
     expect(styles).not.toContain("-webkit-line-clamp: 1");
     expect(styles).toContain("flex-wrap: nowrap");
     expect(styles).toContain("overflow-x: auto");

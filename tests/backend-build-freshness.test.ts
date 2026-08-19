@@ -120,6 +120,7 @@ describe("build freshness preflight", () => {
     const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
     copyFileSync(resolve(repository, "scripts/amiros-watchdog.mjs"), resolve(project, "scripts/amiros-watchdog.mjs"));
     copyFileSync(resolve(repository, "scripts/build-freshness.mjs"), resolve(project, "scripts/build-freshness.mjs"));
+    copyFileSync(resolve(repository, "scripts/launch-agent.mjs"), resolve(project, "scripts/launch-agent.mjs"));
 
     const child = spawn(process.execPath, [resolve(project, "scripts/amiros-watchdog.mjs")], {
       cwd: project,

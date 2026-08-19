@@ -5,6 +5,9 @@ const baseFeatures: FeatureAssignment[] = [
   { id: "calendar-views", name: "Calendar views", description: "Day, week, and month planning views.", enabled: true },
   { id: "auto-mode", name: "Auto Mode", description: "Owner-style replies after the configured delay.", enabled: false },
   { id: "early-release", name: "Early releases", description: "Receive internal builds before beta rollout.", enabled: false },
+  { id: "deleted-message-archive", name: "Saved deleted messages", description: "Allow an opted-in local archive of deleted WhatsApp messages on this Mac.", enabled: true },
+  { id: "relationship-suggestions", name: "Relationship suggestions", description: "Show carefully qualified relationship suggestions from recent direct evidence.", enabled: true },
+  { id: "reply-suggestions", name: "Reply suggestions", description: "Offer suggested replies, including a reliable new-message fallback when quoting is unavailable.", enabled: true },
 ];
 
 function demoDevice(id: string, label: string, appVersion: string, status: "active" | "paused" | "revoked" = "active") {

@@ -123,7 +123,7 @@ export async function handleAiUsageApiRoute(options: AiUsageRouteOptions): Promi
     activities: await activitiesWithContactNames(),
     knowledgeTrackingRequests: state.listKnowledgeTrackingRequests()
       .filter((request) => isKnownIntelligenceChat(request.chatId, request.contactName)),
-    settings: { ...state.getSettings(), apiKeyConfigured: ai.isConfigured() },
+    settings: { ...state.getDashboardSettings(), apiKeyConfigured: ai.isConfigured() },
   });
   return true;
 }

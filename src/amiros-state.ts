@@ -139,6 +139,9 @@ export type ContactInsight = {
   /** AI-authored display projection; content remains the canonical insight. */
   topicTitle?: string;
   topicTitleConfidence?: number;
+  /** AI-authored Ask AmirOS card copy; content remains the canonical insight. */
+  discoveryTitle?: string;
+  discoverySummary?: string;
   /** Stable semantic identity used to evolve one fact instead of accumulating rewordings. */
   canonicalKey?: string;
   /** Current facts drive People/Ask AmirOS; historical facts remain retrievable when relevant. */
@@ -170,7 +173,7 @@ export type ContactInsight = {
 
 type AnalyzedInsight = Pick<ContactInsight, "kind" | "content" | "confidence" | "evidence"> &
   Partial<Pick<ContactInsight,
-    "topicTitle" | "topicTitleConfidence" | "canonicalKey" | "validity" | "evolution" |
+    "topicTitle" | "topicTitleConfidence" | "discoveryTitle" | "discoverySummary" | "canonicalKey" | "validity" | "evolution" |
     "status" | "autonomouslyConfirmedAt" | "autonomousConfirmationReason"
   >>;
 
@@ -289,9 +292,38 @@ export type CalendarCaptureResult = {
 
 export type IntelligenceQuestionHistoryItem = {
   id: string;
+  parentAnswerId?: string;
   question: string;
   answer: string;
   sources: IntelligenceSearchRecord[];
+  createdAt: number;
+};
+
+export type IntelligenceAnswerFeedbackReason =
+  | "outdated_or_incorrect"
+  | "wrong_person"
+  | "missed_context"
+  | "irrelevant"
+  | "unclear"
+  | "too_long";
+
+/** Local-only Ask feedback. It guides Ask presentation and ranking without rewriting memory. */
+export type IntelligenceAnswerFeedback = {
+  id: string;
+  answerId: string;
+  rating: "helpful" | "needs_work";
+  reasons: IntelligenceAnswerFeedbackReason[];
+  note?: string;
+  question: string;
+  answerFingerprint: string;
+  sourceRefs: Array<{ id: string; chatId: string; kind: IntelligenceSearchRecord["kind"] }>;
+  resolvedContactId?: string;
+  suggestion?: {
+    candidateId?: string;
+    fingerprint?: string;
+    kind?: ProactiveCandidateKind;
+    chatId?: string;
+  };
   createdAt: number;
 };
 
@@ -525,6 +557,13 @@ export type DeletedMessageArchiveSettings = {
   saveMedia: boolean;
 };
 
+/** A local recovery notice. This data is never sent into a WhatsApp chat. */
+export type AiServiceAttention = {
+  kind: "api_key" | "usage_limit" | "model_access" | "service_unavailable" | "request_failed";
+  message: string;
+  updatedAt: number;
+};
+
 type PersistedState = {
   theme: ThemeName;
   knowledgeTrackingDefault: KnowledgeTrackingDefault;
@@ -540,7 +579,11 @@ type PersistedState = {
     settings: DeletedMessageArchiveSettings;
     messages: Record<string, DeletedMessageArchiveItem[]>;
   };
+  /** Dashboard-only notice when an AI request cannot be completed safely. */
+  aiServiceAttention?: AiServiceAttention;
   intelligenceHistory: IntelligenceQuestionHistoryItem[];
+  /** Private Ask feedback. Excluded from dashboard settings and reply personalization. */
+  intelligenceAnswerFeedback: IntelligenceAnswerFeedback[];
   /** Durable owner corrections prevent reviewed knowledge from resurfacing unchanged. */
   memoryCorrections: MemoryCorrection[];
   quietHours: {
@@ -563,6 +606,11 @@ type PersistedState = {
   proactiveDelivery: Record<string, ProactiveDeliveryDecision>;
   /** Cached AI attention editing, keyed by deterministic evidence fingerprints. */
   proactiveJudgments: Record<string, ProactiveAiJudgmentBatch>;
+};
+
+/** The settings-safe subset sent to the local dashboard. Archive entries stay local-only. */
+export type DashboardSettings = Omit<PersistedState, "deletedMessageArchive" | "intelligenceAnswerFeedback"> & {
+  deletedMessageArchive: DeletedMessageArchiveSettings;
 };
 
 const DEFAULT_CONTACT: ContactPreferences = {
@@ -671,7 +719,9 @@ const DEFAULT_STATE: PersistedState = {
   replyAssessments: {},
   replySuggestionFeedback: {},
   deletedMessageArchive: { settings: { enabled: false, saveMedia: false }, messages: {} },
+  aiServiceAttention: undefined,
   intelligenceHistory: [],
+  intelligenceAnswerFeedback: [],
   memoryCorrections: [],
   quietHours: { enabled: false, start: "23:00", end: "07:00" },
   monthlyBudgetUsd: 20,
@@ -1193,6 +1243,8 @@ export class AmirosState {
                 content: item.content.replace(/\s+/g, " ").trim().slice(0, 1_000),
                 topicTitle: typeof item.topicTitle === "string" ? item.topicTitle.replace(/\s+/g, " ").trim().slice(0, 80) || undefined : undefined,
                 topicTitleConfidence: Number.isFinite(item.topicTitleConfidence) ? Math.max(0, Math.min(1, Number(item.topicTitleConfidence))) : undefined,
+                discoveryTitle: typeof item.discoveryTitle === "string" ? item.discoveryTitle.replace(/\s+/g, " ").trim().slice(0, 96) || undefined : undefined,
+                discoverySummary: typeof item.discoverySummary === "string" ? item.discoverySummary.replace(/\s+/g, " ").trim().slice(0, 170) || undefined : undefined,
                 canonicalKey: typeof item.canonicalKey === "string" ? this.normalizeCanonicalKnowledgeKey(item.canonicalKey) : undefined,
                 validity: item.validity === "historical" || item.validity === "temporary" ? item.validity : "current",
                 evolution: item.evolution === "replace" || item.evolution === "reinforce" ? item.evolution : "append",
@@ -1462,6 +1514,22 @@ export class AmirosState {
             }),
           ),
         },
+        aiServiceAttention: (() => {
+          const attention = parsed.aiServiceAttention as Partial<AiServiceAttention> | undefined;
+          const allowedKinds = new Set<AiServiceAttention["kind"]>([
+            "api_key", "usage_limit", "model_access", "service_unavailable", "request_failed",
+          ]);
+          if (!attention || !allowedKinds.has(attention.kind as AiServiceAttention["kind"]) || typeof attention.message !== "string") return undefined;
+          const message = attention.message.replace(/\s+/gu, " ").trim().slice(0, 280);
+          if (!message) return undefined;
+          return {
+            kind: attention.kind as AiServiceAttention["kind"],
+            message,
+            updatedAt: typeof attention.updatedAt === "number" && Number.isFinite(attention.updatedAt)
+              ? attention.updatedAt
+              : Date.now(),
+          } satisfies AiServiceAttention;
+        })(),
         intelligenceHistory: (Array.isArray(parsed.intelligenceHistory) ? parsed.intelligenceHistory : [])
           .filter((item): item is IntelligenceQuestionHistoryItem =>
             Boolean(item) && typeof item.question === "string" && typeof item.answer === "string",
@@ -1469,12 +1537,44 @@ export class AmirosState {
           .slice(-30)
           .map((item) => ({
             id: typeof item.id === "string" ? item.id.slice(0, 120) : randomUUID(),
+            parentAnswerId: typeof item.parentAnswerId === "string" ? item.parentAnswerId.slice(0, 120) : undefined,
             question: item.question.replace(/\s+/g, " ").trim().slice(0, 500),
             answer: item.answer.trim().slice(0, 8_000),
             sources: (Array.isArray(item.sources) ? item.sources : []).slice(0, 12),
             createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
           }))
           .filter((item) => item.question && item.answer),
+        intelligenceAnswerFeedback: (Array.isArray(parsed.intelligenceAnswerFeedback) ? parsed.intelligenceAnswerFeedback : [])
+          .filter((item): item is IntelligenceAnswerFeedback => Boolean(item)
+            && typeof item.answerId === "string"
+            && (item.rating === "helpful" || item.rating === "needs_work"))
+          .slice(-200)
+          .map((item) => ({
+            id: typeof item.id === "string" ? item.id.slice(0, 120) : randomUUID(),
+            answerId: item.answerId.slice(0, 120),
+            rating: item.rating,
+            reasons: (Array.isArray(item.reasons) ? item.reasons : [])
+              .filter((reason): reason is IntelligenceAnswerFeedbackReason => [
+                "outdated_or_incorrect", "wrong_person", "missed_context", "irrelevant", "unclear", "too_long",
+              ].includes(reason))
+              .slice(0, 4),
+            note: typeof item.note === "string" ? item.note.replace(/\s+/gu, " ").trim().slice(0, 320) || undefined : undefined,
+            question: typeof item.question === "string" ? item.question.replace(/\s+/gu, " ").trim().slice(0, 500) : "",
+            answerFingerprint: typeof item.answerFingerprint === "string" ? item.answerFingerprint.slice(0, 64) : "",
+            sourceRefs: (Array.isArray(item.sourceRefs) ? item.sourceRefs : [])
+              .filter((source): source is IntelligenceAnswerFeedback["sourceRefs"][number] => Boolean(source)
+                && typeof source.id === "string" && typeof source.chatId === "string" && typeof source.kind === "string")
+              .map((source) => ({ id: source.id.slice(0, 160), chatId: source.chatId.slice(0, 240), kind: source.kind }))
+              .slice(0, 12),
+            resolvedContactId: typeof item.resolvedContactId === "string" ? item.resolvedContactId.slice(0, 240) : undefined,
+            suggestion: item.suggestion && typeof item.suggestion === "object" ? {
+              candidateId: typeof item.suggestion.candidateId === "string" ? item.suggestion.candidateId.slice(0, 160) : undefined,
+              fingerprint: typeof item.suggestion.fingerprint === "string" ? item.suggestion.fingerprint.slice(0, 160) : undefined,
+              kind: item.suggestion.kind,
+              chatId: typeof item.suggestion.chatId === "string" ? item.suggestion.chatId.slice(0, 240) : undefined,
+            } : undefined,
+            createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
+          })),
         memoryCorrections: (Array.isArray(parsed.memoryCorrections) ? parsed.memoryCorrections : [])
           .filter((item): item is MemoryCorrection => Boolean(item) && typeof item.chatId === "string" && typeof item.targetInsightId === "string" && typeof item.targetContent === "string")
           .slice(-500)
@@ -1981,13 +2081,34 @@ export class AmirosState {
   }
 
   updateDeletedMessageArchiveSettings(patch: Partial<DeletedMessageArchiveSettings>): DeletedMessageArchiveSettings {
+    const enabled = patch.enabled === undefined
+      ? this.persisted.deletedMessageArchive.settings.enabled
+      : patch.enabled === true;
+    const saveMedia = patch.saveMedia === undefined
+      ? this.persisted.deletedMessageArchive.settings.saveMedia
+      : patch.saveMedia === true;
     this.persisted.deletedMessageArchive.settings = {
-      ...this.persisted.deletedMessageArchive.settings,
-      ...(patch.enabled === undefined ? {} : { enabled: patch.enabled === true }),
-      ...(patch.saveMedia === undefined ? {} : { saveMedia: patch.saveMedia === true }),
+      enabled,
+      // Media cannot remain enabled when the owner turns off the archive.
+      saveMedia: enabled && saveMedia,
     };
     this.save();
     return this.getDeletedMessageArchiveSettings();
+  }
+
+  setAiServiceAttention(attention: Omit<AiServiceAttention, "updatedAt">): AiServiceAttention {
+    const message = attention.message.replace(/\s+/gu, " ").trim().slice(0, 280)
+      || "AmirOS could not reach the AI service. Check your AI settings and try again.";
+    const saved: AiServiceAttention = { ...attention, message, updatedAt: Date.now() };
+    this.persisted.aiServiceAttention = saved;
+    this.save();
+    return structuredClone(saved);
+  }
+
+  clearAiServiceAttention(): void {
+    if (!this.persisted.aiServiceAttention) return;
+    this.persisted.aiServiceAttention = undefined;
+    this.save();
   }
 
   shouldArchiveDeletedMessages(chatId: string): boolean {
@@ -2595,10 +2716,109 @@ export class AmirosState {
     return structuredClone(this.persisted.intelligenceHistory.slice(-safeLimit).reverse());
   }
 
+  intelligenceQuestionById(id: string): IntelligenceQuestionHistoryItem | undefined {
+    const item = this.persisted.intelligenceHistory.find((candidate) => candidate.id === id);
+    return item ? structuredClone(item) : undefined;
+  }
+
+  latestIntelligenceAnswerFeedback(answerId: string): IntelligenceAnswerFeedback | undefined {
+    for (let index = this.persisted.intelligenceAnswerFeedback.length - 1; index >= 0; index -= 1) {
+      const item = this.persisted.intelligenceAnswerFeedback[index];
+      if (item?.answerId === answerId) return structuredClone(item);
+    }
+    return undefined;
+  }
+
+  intelligenceAnswerFeedback(limit = 50): IntelligenceAnswerFeedback[] {
+    const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+    return structuredClone(this.persisted.intelligenceAnswerFeedback.slice(-safeLimit).reverse());
+  }
+
+  recordIntelligenceAnswerFeedback(
+    answerId: string,
+    input: {
+      rating: "helpful" | "needs_work";
+      reasons?: IntelligenceAnswerFeedbackReason[];
+      note?: string;
+      resolvedContactId?: string;
+      suggestion?: IntelligenceAnswerFeedback["suggestion"];
+    },
+  ): IntelligenceAnswerFeedback | undefined {
+    const answer = this.persisted.intelligenceHistory.find((item) => item.id === answerId);
+    if (!answer) return undefined;
+    const allowedReasons = new Set<IntelligenceAnswerFeedbackReason>([
+      "outdated_or_incorrect", "wrong_person", "missed_context", "irrelevant", "unclear", "too_long",
+    ]);
+    const reasons = [...new Set(input.reasons || [])].filter((reason) => allowedReasons.has(reason)).slice(0, 4);
+    const note = input.note?.replace(/\s+/gu, " ").trim().slice(0, 320) || undefined;
+    const feedback: IntelligenceAnswerFeedback = {
+      id: randomUUID(),
+      answerId,
+      rating: input.rating,
+      reasons,
+      note,
+      question: answer.question,
+      answerFingerprint: createHash("sha256").update(answer.answer).digest("hex").slice(0, 24),
+      sourceRefs: answer.sources.slice(0, 12).map((source) => ({ id: source.id, chatId: source.chatId, kind: source.kind })),
+      resolvedContactId: (input.resolvedContactId || answer.sources[0]?.chatId)?.slice(0, 240),
+      suggestion: input.suggestion ? {
+        candidateId: input.suggestion.candidateId?.slice(0, 160),
+        fingerprint: input.suggestion.fingerprint?.slice(0, 160),
+        kind: input.suggestion.kind,
+        chatId: input.suggestion.chatId?.slice(0, 240),
+      } : undefined,
+      createdAt: Date.now(),
+    };
+    this.persisted.intelligenceAnswerFeedback.push(feedback);
+    this.persisted.intelligenceAnswerFeedback = this.persisted.intelligenceAnswerFeedback.slice(-200);
+    this.save();
+    return structuredClone(feedback);
+  }
+
+  /** Presentation-only guidance for Ask. Factual complaints never become style instructions. */
+  intelligenceAnswerGuidance(): string | undefined {
+    const presentationReasons = new Set<IntelligenceAnswerFeedbackReason>(["unclear", "too_long"]);
+    const recent = this.persisted.intelligenceAnswerFeedback
+      .filter((item) => item.rating === "needs_work" && item.reasons.some((reason) => presentationReasons.has(reason)))
+      .slice(-12);
+    if (!recent.length) return undefined;
+    const unclear = recent.filter((item) => item.reasons.includes("unclear")).length;
+    const tooLong = recent.filter((item) => item.reasons.includes("too_long")).length;
+    const notes = recent
+      .filter((item) => item.reasons.every((reason) => presentationReasons.has(reason)))
+      .map((item) => item.note)
+      .filter((note): note is string => Boolean(note))
+      .slice(-3);
+    return [
+      unclear ? "Use clearer, more direct wording and specific lead phrases." : "",
+      tooLong ? "Prefer a shorter answer with only the most useful points." : "",
+      notes.length ? `Owner presentation notes: ${notes.join("; ")}` : "",
+    ].filter(Boolean).join(" ").slice(0, 600) || undefined;
+  }
+
+  /** Exact-question source ranking only. It never changes or deletes canonical knowledge. */
+  intelligenceAnswerSourceRanking(question: string, resolvedContactId?: string): { boosted: Set<string>; penalized: Set<string> } {
+    const normalizedQuestion = question.replace(/\s+/gu, " ").trim().toLocaleLowerCase();
+    const boosted = new Set<string>();
+    const penalized = new Set<string>();
+    for (const feedback of this.persisted.intelligenceAnswerFeedback.slice(-100)) {
+      if (feedback.question.toLocaleLowerCase() !== normalizedQuestion) continue;
+      if (resolvedContactId && feedback.resolvedContactId && feedback.resolvedContactId !== resolvedContactId) continue;
+      const ids = feedback.sourceRefs.map((source) => source.id);
+      if (feedback.rating === "helpful") {
+        for (const id of ids) { boosted.add(id); penalized.delete(id); }
+      } else if (feedback.reasons.includes("irrelevant") || feedback.reasons.includes("wrong_person") || feedback.reasons.includes("outdated_or_incorrect")) {
+        for (const id of ids) { penalized.add(id); boosted.delete(id); }
+      }
+    }
+    return { boosted, penalized };
+  }
+
   rememberIntelligenceAnswer(
     question: string,
     answer: string,
     sources: IntelligenceSearchRecord[],
+    parentAnswerId?: string,
   ): IntelligenceQuestionHistoryItem {
     const historySources = sources.slice(0, 12).map((source) => {
       const historySource = { ...source };
@@ -2607,6 +2827,7 @@ export class AmirosState {
     });
     const item = {
       id: randomUUID(),
+      parentAnswerId: parentAnswerId?.slice(0, 120),
       question: question.replace(/\s+/g, " ").trim().slice(0, 500),
       answer: answer.trim().slice(0, 8_000),
       sources: structuredClone(historySources),
@@ -4510,7 +4731,7 @@ export class AmirosState {
 
   private upsertInsight(
     insights: ContactInsight[],
-    candidate: Pick<ContactInsight, "kind" | "content" | "confidence" | "evidence"> & Partial<Pick<ContactInsight, "id" | "clusterId" | "subjectChatIds" | "subjectNames" | "topicTitle" | "topicTitleConfidence" | "canonicalKey" | "validity" | "evolution" | "status" | "evidenceHistory" | "autonomouslyConfirmedAt" | "autonomousConfirmationReason" | "createdAt" | "updatedAt">>,
+    candidate: Pick<ContactInsight, "kind" | "content" | "confidence" | "evidence"> & Partial<Pick<ContactInsight, "id" | "clusterId" | "subjectChatIds" | "subjectNames" | "topicTitle" | "topicTitleConfidence" | "discoveryTitle" | "discoverySummary" | "canonicalKey" | "validity" | "evolution" | "status" | "evidenceHistory" | "autonomouslyConfirmedAt" | "autonomousConfirmationReason" | "createdAt" | "updatedAt">>,
     now: number,
     chatId: string,
   ): { insight: ContactInsight; created: boolean } {
@@ -4542,6 +4763,8 @@ export class AmirosState {
         content,
         topicTitle: candidate.topicTitle?.replace(/\s+/g, " ").trim().slice(0, 80) || undefined,
         topicTitleConfidence: Number.isFinite(candidate.topicTitleConfidence) ? Math.max(0, Math.min(1, candidate.topicTitleConfidence!)) : undefined,
+        discoveryTitle: candidate.discoveryTitle?.replace(/\s+/g, " ").trim().slice(0, 96) || undefined,
+        discoverySummary: candidate.discoverySummary?.replace(/\s+/g, " ").trim().slice(0, 170) || undefined,
         canonicalKey,
         validity,
         evolution,
@@ -4588,6 +4811,8 @@ export class AmirosState {
       existing.topicTitle = candidate.topicTitle?.replace(/\s+/g, " ").trim().slice(0, 80) || existing.topicTitle;
       existing.topicTitleConfidence = candidate.topicTitleConfidence;
     }
+    if (candidate.discoveryTitle?.trim()) existing.discoveryTitle = candidate.discoveryTitle.replace(/\s+/g, " ").trim().slice(0, 96);
+    if (candidate.discoverySummary?.trim()) existing.discoverySummary = candidate.discoverySummary.replace(/\s+/g, " ").trim().slice(0, 170);
     // Explicit review decisions remain durable. Inferred wording can improve,
     // but the original evidence continues to anchor the canonical topic.
     if ((existing.status === "inferred" && this.similarText(existing.content, existing.evidence.excerpt)) ||
@@ -5070,10 +5295,24 @@ export class AmirosState {
     const settings = structuredClone(this.persisted);
     settings.memories = {};
     settings.intelligenceHistory = [];
+    settings.intelligenceAnswerFeedback = [];
     settings.activities = [];
     settings.replySuggestionFeedback = {};
     settings.deletedMessageArchive.messages = {};
     return settings;
+  }
+
+  /**
+   * Settings as consumed by the dashboard. Keep archived message records out
+   * of every dashboard response and expose the two archive preferences in the
+   * flat shape the UI owns.
+   */
+  getDashboardSettings(): DashboardSettings {
+    const { deletedMessageArchive: _archive, intelligenceAnswerFeedback: _askFeedback, ...settings } = this.getSettings();
+    return {
+      ...settings,
+      deletedMessageArchive: this.getDeletedMessageArchiveSettings(),
+    };
   }
 
   updateSettings(

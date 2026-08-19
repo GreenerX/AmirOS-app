@@ -1,6 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import { getIdentityConfig } from "@netlify/identity";
 import { requireAdmin } from "./_shared/auth";
+import { deleteIdentityAdminUser, findIdentityAdminUserByEmail, getIdentityAdminConfig } from "./_shared/identity-admin";
 import { ensureControlAccount, getSupabaseAdmin } from "./_shared/supabase";
 import { json, methodNotAllowed } from "./_shared/http";
 
@@ -21,6 +22,7 @@ type ApplicantInput = {
   lastName?: unknown;
   email?: unknown;
   internalNote?: unknown;
+  confirmation?: unknown;
 };
 
 type IdentityUserList = { users?: Array<{ email?: unknown }> };
@@ -132,6 +134,36 @@ export default async (request: Request, _context: Context): Promise<Response> =>
     return json({ application: data }, 201);
   }
   if (request.method !== "PATCH" || typeof input.applicationId !== "string") return methodNotAllowed();
+  if (input.action === "remove_invited_identity") {
+    const { data, error } = await client
+      .from("control_beta_applications")
+      .select("id,email,state,account_user_id")
+      .eq("id", input.applicationId)
+      .maybeSingle();
+    if (error || !data) return json({ message: "That applicant could not be found." }, 404);
+    if (data.state !== "invited" || data.account_user_id) return json({ message: "Only a pending invitation can be removed here. Remove connected accounts from Testers." }, 409);
+    if (typeof input.confirmation !== "string" || input.confirmation.trim().toLowerCase() !== data.email.trim().toLowerCase()) return json({ message: "Type the applicant email to confirm removal." }, 400);
+    const identity = getIdentityAdminConfig();
+    if (!identity) return json({ message: "Netlify Identity is unavailable, so this invitation was not removed." }, 503);
+    try {
+      const identityUser = await findIdentityAdminUserByEmail(identity, data.email);
+      if (identityUser !== "missing") {
+        if (identityUser.roles.includes("admin")) return json({ message: "Administrator accounts cannot be removed from the applicant list." }, 409);
+        const { data: account } = await client.from("control_accounts").select("netlify_user_id").eq("netlify_user_id", identityUser.id).maybeSingle();
+        if (account) return json({ message: "This Identity account is already connected. Remove it from Testers instead." }, 409);
+        await deleteIdentityAdminUser(identity, identityUser.id);
+      }
+    } catch {
+      return json({ message: "Netlify could not remove this pending Identity account. The applicant record was kept." }, 503);
+    }
+    const { data: removed, error: removalError } = await client.rpc("control_remove_invited_application", {
+      p_actor_user_id: operator.netlify_user_id,
+      p_application_id: input.applicationId,
+      p_source: "admin_delete",
+    });
+    if (removalError || (removed as { removed?: unknown } | null)?.removed !== true) return json({ message: "The Identity account was removed, but the invitation record could not be cleared. Refreshing Overview will retry the safe cleanup." }, 503);
+    return json({ removed: true });
+  }
   if (input.action === "approve_and_invite") return approveAndInvite(input.applicationId, client, operator.netlify_user_id);
   if (input.action === "update_profile") {
     if (typeof input.firstName !== "string" || typeof input.lastName !== "string" || typeof input.email !== "string" || (input.internalNote !== undefined && typeof input.internalNote !== "string")) return json({ message: "Enter a first name, last name, and email address." }, 400);

@@ -48,6 +48,7 @@ import {
   refreshControlCenterStatus,
   reportControlCenterOnboardingProgress,
   submitReplySuggestionFeedback,
+  submitIntelligenceAnswerFeedback,
 } from "./api";
 import { InboxView } from "./components/InboxView";
 import { IntelligenceView } from "./components/IntelligenceView";
@@ -129,14 +130,26 @@ function preserveLocalMessageState(current: ChatMessage[], incoming: ChatMessage
   const localById = new Map(current.map((message) => [message.id, message]));
   return incoming.map((message) => {
     const local = localById.get(message.id);
+    const locallyRevealedArchive = local?.deletedArchive?.revealed
+      && local.deletedArchive.id === message.deletedArchive?.id
+      ? {
+          ...message.deletedArchive,
+          revealed: true,
+          revealedText: local.deletedArchive.revealedText,
+          revealedMediaUrl: local.deletedArchive.revealedMediaUrl,
+        }
+      : message.deletedArchive;
     const localReactionIsNowSynced = Boolean(
       local?.localReaction && message.reactions?.some((reaction) =>
         reaction.emoji === local.localReaction && reaction.hasReactionByMe,
       ),
     );
+    const preserved = locallyRevealedArchive === message.deletedArchive
+      ? message
+      : { ...message, deletedArchive: locallyRevealedArchive };
     return local?.localReaction && !localReactionIsNowSynced
-      ? { ...message, localReaction: local.localReaction }
-      : message;
+      ? { ...preserved, localReaction: local.localReaction }
+      : preserved;
   });
 }
 
@@ -283,23 +296,27 @@ export function App() {
   const [betaSupportOpen, setBetaSupportOpen] = useState(false);
   const whatsappChecklistReported = useRef(false);
   const hydratedTimeFormat = useRef(false);
+  // Setup-only dashboards deliberately omit private settings until the Mac is
+  // approved. Derive this defensively before the effect so React never has to
+  // evaluate a missing settings object while it is rendering the activation gate.
+  const savedTimeFormat = dashboard && !dashboard.activationOnly ? dashboard.settings.assistant.timeFormat : undefined;
   useEffect(() => {
-    const savedTimeFormat = dashboard && !dashboard.activationOnly ? dashboard.settings.assistant.timeFormat : undefined;
     if (!hydratedTimeFormat.current && savedTimeFormat) {
       hydratedTimeFormat.current = true;
       if (savedTimeFormat !== timeFormat) setTimeFormat(savedTimeFormat);
     }
-  }, [dashboard?.settings.assistant.timeFormat, setTimeFormat, timeFormat]);
+  }, [savedTimeFormat, setTimeFormat, timeFormat]);
   const [updateStatus, setUpdateStatus] = useState<AmirOSUpdateStatus>();
   const mutationVersion = useRef(0);
   const appInstall = useAppInstall();
   const controlFeatureEnabled = (featureId: string) => {
     const controlCenter = dashboard?.controlCenter;
-    if (!controlCenter?.configured || controlCenter.status === "unpaired" || controlCenter.status === "pending") return true;
+    if (!controlCenter?.configured || controlCenter.status !== "active" || controlCenter.setupState !== "active") return true;
     return controlCenter.features.find((feature) => feature.id === featureId)?.enabled ?? true;
   };
   const autoModeEnabled = controlFeatureEnabled("auto-mode");
   const calendarViewsEnabled = controlFeatureEnabled("calendar-views");
+  const deletedMessageArchiveEnabled = controlFeatureEnabled("deleted-message-archive");
 
   const refresh = useCallback(async () => {
     const versionAtStart = mutationVersion.current;
@@ -318,11 +335,11 @@ export function App() {
         setSelectedChatId((current) => current || nextChats[0]?.id);
         setError(undefined);
       } catch (chatError) {
-        setError(
-          chatError instanceof Error
-            ? `Dashboard connected; WhatsApp chats are still syncing (${chatError.message}).`
-            : "Dashboard connected; WhatsApp chats are still syncing.",
-        );
+        // Chat loading can fail transiently while WhatsApp Web reconnects. The
+        // underlying browser error is useful in local logs, but not helpful (or
+        // safe) in the product UI.
+        console.warn("WhatsApp chat sync is temporarily unavailable", chatError);
+        setError("WhatsApp is reconnecting. Your saved dashboard information is still available.");
       }
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : "Could not connect to AmirOS");
@@ -663,6 +680,7 @@ export function App() {
       scope?: { knowledge: boolean; calendar: boolean };
       selectedContactId?: string;
       suggestionContext?: { chatId: string; sourceIds: string[] };
+      improvement?: { answerId: string; reasons?: import("./types").IntelligenceAnswerFeedbackReason[]; note?: string };
       signal?: AbortSignal;
     },
   ): Promise<IntelligenceSearchResult> => {
@@ -882,6 +900,21 @@ export function App() {
     }
   };
 
+  const hideDeletedMessage = (chatId: string, archiveId: string) => {
+    if (chatId !== selectedChatId) return;
+    setMessages((current) => current.map((message) => message.deletedArchive?.id === archiveId
+      ? {
+          ...message,
+          deletedArchive: {
+            ...message.deletedArchive,
+            revealed: false,
+            revealedText: undefined,
+            revealedMediaUrl: undefined,
+          },
+        }
+      : message));
+  };
+
   const clearDeletedMessageArchive = async () => {
     try {
       const result = await clearSavedDeletedMessages();
@@ -954,11 +987,12 @@ export function App() {
     knowledgeTrackingDefault?: KnowledgeTrackingDefault;
     deletedMessageArchive?: Partial<DashboardData["settings"]["deletedMessageArchive"]>;
   }) => {
-    if (!dashboard) return;
+    if (!dashboard) throw new Error("Settings are not available yet");
     try {
       mutationVersion.current += 1;
       const settings = await updateSettings(patch);
       setDashboard((current) => current ? { ...current, settings, models: patch.models || current.models } : current);
+      return settings;
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "Could not save settings");
       throw actionError;
@@ -1012,18 +1046,19 @@ export function App() {
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`} data-time-format={timeFormat}>
       <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} updateAvailable={updateStatus?.status === "available"} connection={dashboard.connection} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} onOpenBetaSupport={() => setBetaSupportOpen(true)} canInstallApp={appInstall.canInstall} installingApp={appInstall.installing} onInstallApp={() => void appInstall.install()} calendarViewsEnabled={calendarViewsEnabled} />
       <div className="app-body">
+        {dashboard.settings.aiServiceAttention ? <div className="error-banner ai-service-attention" role="alert"><AlertTriangle size={17} /><span><strong>AI needs attention.</strong> {dashboard.settings.aiServiceAttention.message}</span><button onClick={() => navigate("settings")}>Open Settings</button></div> : null}
         {error ? <div className="error-banner"><AlertTriangle size={17} />{error}<button onClick={() => setError(undefined)}>Dismiss</button></div> : null}
 {view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onTrackingDecision={decideKnowledgeTracking} onOpenTrackingChat={(chatId) => openChat(chatId)} onOpenNextBestAction={openChat} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onCalendarStatus={changeCalendarStatus} onRegenerateCalendarTitle={regenerateEventTitle} onReplyToMessage={reply} onReplySuggestionFeedback={saveReplySuggestionFeedback} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onDismissNextBestAction={dismissNextBestAction} onProactiveDecision={decideProactiveIntelligence} /> : null}
         {view === "intelligence" ? <IntelligenceView data={intelligence} chats={chats} contacts={dashboard.settings.contacts} ownerName={dashboard.settings.ownerProfile.displayName} loading={loadingIntelligence} onRefresh={refreshIntelligence} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onContactChange={changeContact} onGenerateSummary={(chatId, isGroup) => isGroup ? summarizeSelectedGroup(chatId) : generateProfile(chatId)} onCalendarStatus={changeCalendarStatus} onRegenerateCalendarTitle={regenerateEventTitle} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onCommitmentStatus={changeCommitmentStatus} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onDeleteQuestion={deleteQuestion} navigationRequest={intelligenceNavigationRequest} /> : null}
         {view === "calendar" ? <CalendarView data={intelligence} onOpenChat={openChat} onStatus={changeCalendarStatus} onRegenerateTitle={regenerateEventTitle} /> : null}
-        {view === "inbox" ? <InboxView chats={chats} unreadCount={unreadCount} initialFilter={inboxInitialFilter} initialContactSettingsTab={inboxContactSettingsTab} selectedChatId={selectedChatId} highlightedMessageId={highlightedMessageId} messages={visibleMessages} memory={visibleMemory} manualMemory={visibleManualMemory} profile={visibleProfile} insights={insights} styleProfile={styleProfile} groupSummary={groupSummary} groupDescription={groupDescription} composerDraft={assistantComposerDraft?.chatId === selectedChatId ? assistantComposerDraft?.body : undefined} onComposerDraftConsumed={() => setAssistantComposerDraft(undefined)} incomingMessageCount={incomingMessageCount} contact={visibleContact} drafts={dashboard.drafts} loading={loadingChat} onSelectChat={selectInboxChat} onMarkRead={readChat} onModeChange={changeMode} autoModeEnabled={autoModeEnabled} onContactChange={changeContact} onAddMemory={addMemory} onRemoveMemory={removeMemory} onGenerateProfile={generateProfile} onAnalyzeIntelligence={analyzeIntelligence} onInsightChange={changeInsight} onGenerateWritingStyle={learnWritingStyle} onGenerateGroupSummary={summarizeSelectedGroup} onApproveDraft={approve} onDismissDraft={dismiss} onSend={send} onSendMedia={sendChatMedia} onGenerateImage={generateChatImage} onReact={react} onReply={reply} onForward={forward} onScanHistory={scanHistory} onRevealDeletedMessage={revealDeletedMessage} /> : null}
+        {view === "inbox" ? <InboxView chats={chats} unreadCount={unreadCount} initialFilter={inboxInitialFilter} initialContactSettingsTab={inboxContactSettingsTab} selectedChatId={selectedChatId} highlightedMessageId={highlightedMessageId} messages={visibleMessages} memory={visibleMemory} manualMemory={visibleManualMemory} profile={visibleProfile} insights={insights} styleProfile={styleProfile} groupSummary={groupSummary} groupDescription={groupDescription} composerDraft={assistantComposerDraft?.chatId === selectedChatId ? assistantComposerDraft?.body : undefined} onComposerDraftConsumed={() => setAssistantComposerDraft(undefined)} incomingMessageCount={incomingMessageCount} contact={visibleContact} drafts={dashboard.drafts} loading={loadingChat} onSelectChat={selectInboxChat} onMarkRead={readChat} onModeChange={changeMode} autoModeEnabled={autoModeEnabled} deletedMessageArchiveEnabled={deletedMessageArchiveEnabled} onContactChange={changeContact} onAddMemory={addMemory} onRemoveMemory={removeMemory} onGenerateProfile={generateProfile} onAnalyzeIntelligence={analyzeIntelligence} onInsightChange={changeInsight} onGenerateWritingStyle={learnWritingStyle} onGenerateGroupSummary={summarizeSelectedGroup} onApproveDraft={approve} onDismissDraft={dismiss} onSend={send} onSendMedia={sendChatMedia} onGenerateImage={generateChatImage} onReact={react} onReply={reply} onForward={forward} onScanHistory={scanHistory} onRevealDeletedMessage={revealDeletedMessage} onHideDeletedMessage={hideDeletedMessage} /> : null}
         {view === "contacts" ? <ContactsView chats={chats} onModeChange={changeMode} onOpenChat={openChat} autoModeEnabled={autoModeEnabled} /> : null}
         {view === "automations" ? <AutomationsView data={dashboard} onSave={saveQuietHours} /> : null}
         {view === "usage" ? <UsageView data={dashboard} onPreset={choosePreset} /> : null}
         {view === "terminal" ? <TerminalView connection={dashboard.connection} loadLog={getTerminalLog} subscribeLog={subscribeTerminalLog} /> : null}
-        {view === "settings" ? <SettingsView data={dashboard} onSave={saveSettings} onSaveApiKey={saveApiKey} onRelink={async () => { await relink(); }} onPause={togglePaused} onClearDeletedMessageArchive={clearDeletedMessageArchive} /> : null}
-        <FloatingAssistant data={intelligence} chats={chats} loading={loadingIntelligence} onRefresh={refreshIntelligence} onAsk={askRelationships} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onSaveKnowledge={addMemory} onInsertReply={(chatId, body) => { setAssistantComposerDraft({ chatId, body }); openChat(chatId); }} />
-        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} theme={dashboard.settings.theme} ownerProfile={dashboard.settings.ownerProfile} chats={chats} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onFinishOnboarding={async (choice, theme) => saveSettings({ knowledgeTrackingDefault: choice, theme })} onBuildPeopleDirectory={setupFirstRunPeopleDirectory} onSaveOwnerProfile={async (ownerProfile) => saveSettings({ ownerProfile })} update={updateStatus} onStartUpdate={startDashboardUpdate} onOpenControlCenter={() => setView("settings")} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
+        {view === "settings" ? <SettingsView data={dashboard} deletedMessageArchiveEnabled={deletedMessageArchiveEnabled} onSave={saveSettings} onSaveApiKey={saveApiKey} onRelink={async () => { await relink(); }} onPause={togglePaused} onClearDeletedMessageArchive={clearDeletedMessageArchive} /> : null}
+        <FloatingAssistant data={intelligence} chats={chats} ownerProfile={dashboard.settings.ownerProfile} loading={loadingIntelligence} onRefresh={refreshIntelligence} onAsk={askRelationships} onAnswerFeedback={submitIntelligenceAnswerFeedback} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onSaveKnowledge={addMemory} onInsertReply={(chatId, body) => { setAssistantComposerDraft({ chatId, body }); openChat(chatId); }} />
+        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} theme={dashboard.settings.theme} ownerProfile={dashboard.settings.ownerProfile} chats={chats} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onFinishOnboarding={async (choice, theme) => { await saveSettings({ knowledgeTrackingDefault: choice, theme }); }} onBuildPeopleDirectory={setupFirstRunPeopleDirectory} onSaveOwnerProfile={async (ownerProfile) => { await saveSettings({ ownerProfile }); }} update={updateStatus} onStartUpdate={startDashboardUpdate} onOpenControlCenter={() => setView("settings")} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
         <BetaSupportExperience open={betaSupportOpen} onClose={() => setBetaSupportOpen(false)} destination={dashboard.betaSupport ?? {}} version={dashboard.release.version} connection={dashboard.connection} currentView={view} />
         <UpdatePrompt update={updateStatus} onStartUpdate={startDashboardUpdate} />
       </div>

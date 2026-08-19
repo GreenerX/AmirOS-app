@@ -41,6 +41,13 @@ export function updateAdminUser(input: {
   });
 }
 
+export function deleteAdminUser(input: { userId: string }): Promise<ApiResult<{ removed: boolean }>> {
+  return request<{ removed: boolean }>("/api/admin/users", {
+    method: "DELETE",
+    body: JSON.stringify({ ...input, confirmation: "delete" }),
+  });
+}
+
 export function updateAdminDevice(input: {
   deviceId: string;
   accessStatus: "active" | "paused" | "revoked";
@@ -81,6 +88,13 @@ export function updateBetaApplicationProfile(input: { applicationId: string; fir
 
 export function archiveBetaApplication(input: { applicationId: string; archived: boolean }): Promise<ApiResult<{ application: unknown }>> {
   return request<{ application: unknown }>("/api/admin/applicants", { method: "PATCH", body: JSON.stringify({ applicationId: input.applicationId, action: input.archived ? "archive" : "restore" }) });
+}
+
+export function removeBetaApplicantIdentity(input: { applicationId: string; confirmation: string }): Promise<ApiResult<{ removed: boolean }>> {
+  return request<{ removed: boolean }>("/api/admin/applicants", {
+    method: "PATCH",
+    body: JSON.stringify({ ...input, action: "remove_invited_identity" }),
+  });
 }
 
 export function approveAndInviteBetaApplication(input: {

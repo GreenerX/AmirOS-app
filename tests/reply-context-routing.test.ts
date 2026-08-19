@@ -10,6 +10,7 @@ import {
   MessageProcessor,
   hasAutoReplyPersonaLeak,
   hasRepeatedAutoModeStyleAcknowledgement,
+  aiServiceAttentionForError,
   naturalFailureMessage,
 } from "../src/processor.js";
 
@@ -472,5 +473,36 @@ describe("AI reply context privacy routing", () => {
       .toContain("connection needs attention");
     expect(naturalFailureMessage(new Error("fetch failed: socket timeout")))
       .toContain("trouble reaching the AI service");
+  });
+
+  it("keeps AI failures out of WhatsApp and records dashboard-only recovery guidance", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "amiros-ai-failure-notice-"));
+    directories.push(directory);
+    const state = new AmirosState(join(directory, "state.json"));
+    const ai = {
+      reply: async () => {
+        throw { status: 401, code: "invalid_api_key" };
+      },
+      clearConversation: vi.fn(),
+    } as unknown as AiService;
+    const processor = new MessageProcessor(config, ai, state);
+    const replies: string[] = [];
+    const message = textMessage({
+      id: "contact-key-failure",
+      chatId: "dani@c.us",
+      chatName: "Dani",
+      body: "!bot can you help?",
+      fromMe: false,
+    });
+    Object.assign(message, { reply: async (body: string) => { replies.push(body); } });
+
+    await processor.process(message, false);
+
+    expect(replies).toEqual([]);
+    expect(state.getDashboardSettings().aiServiceAttention).toMatchObject({
+      kind: "api_key",
+      message: expect.stringContaining("AI key needs attention"),
+    });
+    expect(aiServiceAttentionForError({ status: 401, code: "invalid_api_key" }).kind).toBe("api_key");
   });
 });

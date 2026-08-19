@@ -12,10 +12,15 @@ function response(payload: unknown, ok = true, status = ok ? 200 : 400) {
 
 describe("ControlCenterEntitlement", () => {
   it("applies explicit feature assignments only after this Mac has an entitlement", () => {
-    expect(controlCenterFeatureEnabled({ configured: false, status: "unpaired", features: [] }, "auto-mode")).toBe(true);
-    expect(controlCenterFeatureEnabled({ configured: true, status: "pending", features: [] }, "auto-mode")).toBe(true);
-    expect(controlCenterFeatureEnabled({ configured: true, status: "active", features: [{ id: "auto-mode", enabled: false }] }, "auto-mode")).toBe(false);
-    expect(controlCenterFeatureEnabled({ configured: true, status: "offline_grace", features: [{ id: "auto-mode", enabled: true }] }, "auto-mode")).toBe(true);
+    expect(controlCenterFeatureEnabled({ configured: false, status: "unpaired", setupState: "setup_required", features: [] }, "auto-mode")).toBe(true);
+    expect(controlCenterFeatureEnabled({ configured: true, status: "pending", setupState: "device_pending", features: [] }, "auto-mode")).toBe(true);
+    expect(controlCenterFeatureEnabled({ configured: true, status: "active", setupState: "device_pending", features: [{ id: "auto-mode", enabled: false }] }, "auto-mode")).toBe(true);
+    expect(controlCenterFeatureEnabled({ configured: true, status: "active", setupState: "active", features: [] }, "auto-mode")).toBe(true);
+    expect(controlCenterFeatureEnabled({ configured: true, status: "active", setupState: "active", features: [{ id: "auto-mode", enabled: false }] }, "auto-mode")).toBe(false);
+    expect(controlCenterFeatureEnabled({ configured: true, status: "active", setupState: "active", features: [{ id: "auto-mode", enabled: true }] }, "auto-mode")).toBe(true);
+    expect(controlCenterFeatureEnabled({ configured: true, status: "offline_grace", setupState: "active", features: [{ id: "auto-mode", enabled: false }] }, "auto-mode")).toBe(true);
+    expect(controlCenterFeatureEnabled({ configured: true, status: "paused", setupState: "active", features: [{ id: "auto-mode", enabled: false }] }, "auto-mode")).toBe(true);
+    expect(controlCenterFeatureEnabled({ configured: true, status: "revoked", setupState: "active", features: [{ id: "auto-mode", enabled: false }] }, "auto-mode")).toBe(true);
   });
 
   it("keeps only a complete, safe Control Center release decision", () => {
@@ -119,6 +124,56 @@ describe("ControlCenterEntitlement", () => {
       status = "revoked";
       await entitlement.refresh();
       expect(entitlement.snapshot()).toMatchObject({ status: "revoked" });
+      expect(entitlement.blocksAssistant()).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("requires a managed Mac to reconnect when the Control Center removes its device", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "amiros-control-center-"));
+    let removed = false;
+    try {
+      const entitlement = new ControlCenterEntitlement({
+        origin: "https://control.example.com",
+        appVersion: "0.10.8",
+        filePath: join(directory, "device.json"),
+        now: () => Date.parse("2026-08-17T00:01:00.000Z"),
+        requireActivation: true,
+        fetcher: async (url) => {
+          if (url.endsWith("activation-start")) return response({ expiresAt: "2030-01-01T00:10:00.000Z" });
+          if (url.endsWith("activation-status")) return response({ status: "approved" });
+          if (removed) {
+            return response({
+              message: "This Mac must reconnect.",
+              code: "device_reconnection_required",
+            }, false, 401);
+          }
+          return response({
+            status: "active",
+            detail: "This Mac is approved.",
+            checkedAt: "2026-08-17T00:00:00.000Z",
+            setupState: "active",
+            releaseChannel: "beta",
+            release: { action: "available", channel: "beta", version: "0.10.9", downloadUrl: "https://downloads.example.com/AmirOS.zip", sha256: "b".repeat(64) },
+            features: [{ id: "auto-mode", enabled: false }],
+          });
+        },
+      });
+      await entitlement.beginActivation();
+      await entitlement.checkActivation();
+      expect(entitlement.snapshot()).toMatchObject({ status: "active", setupState: "active", releaseChannel: "beta" });
+
+      removed = true;
+      const snapshot = await entitlement.refresh();
+      expect(snapshot).toMatchObject({
+        status: "unpaired",
+        setupState: "setup_required",
+        activationRequired: true,
+        detail: "This Mac was removed from the Control Center. Reconnect it to continue.",
+      });
+      expect(snapshot.release).toBeUndefined();
+      expect(snapshot.features).toEqual([]);
       expect(entitlement.blocksAssistant()).toBe(true);
     } finally {
       rmSync(directory, { recursive: true, force: true });

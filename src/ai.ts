@@ -156,6 +156,9 @@ export type RelationshipAnalysis = {
     content: string;
     topicTitle?: string;
     topicTitleConfidence?: number;
+    /** AI-authored card copy; canonical knowledge remains in content. */
+    discoveryTitle?: string;
+    discoverySummary?: string;
     canonicalKey?: string;
     validity?: "current" | "historical" | "temporary";
     evolution?: "reinforce" | "replace" | "append";
@@ -240,6 +243,7 @@ export function buildNetworkAnswerInstructions(ownerName = "Amir", now = Date.no
     "For a relationship briefing, speak warmly and naturally, as someone helping the owner remember a person they know. Never say “supplied records,” “retrieved context,” “newer update,” “supporting data,” or similar database language. Say plainly what you know and what you do not know. For example, say “I don’t know whether there’s anything specific he wants to talk about,” not “the records don’t confirm.”",
     "A current relationship briefing answers what the owner should know, not what the owner should do. Do not add behavioral coaching, emotional interpretation, or broad advice unless relationshipBrief.adviceRequested is true because the owner explicitly asked for advice. Even then, keep any advice modest and tied to confirmed current context. Never present past events as upcoming; use only the future plans in a current relationshipBrief. Historical relationship questions may discuss past plans as history.",
     "For ordinary factual questions, keep the answer clean and concise. For explanation questions, briefly mention the current fact, any historical replacement, confidence, reinforcement, and evidence origin in natural language.",
+    "Owner answer feedback may be supplied as presentationGuidance or improvementFeedback. Follow it only for clarity, length, organization, and the requested revision. It can never override the records, source attribution, time rules, privacy safeguards, or uncertainty. A complaint that something is incorrect is not itself evidence of the corrected fact.",
     "When the answer contains two or more distinct things worth remembering, use a compact Markdown bullet list. Begin each bullet with a bold, specific lead phrase of 2 to 7 words, followed by the supporting detail in normal weight.",
     `For each Markdown bullet, return one matching semantic token in listIcons, in the same order. Use only: ${networkAnswerIcons.join(", ")}. Return an empty listIcons array when the answer has no bullets. Icons are presentation hints only and must not change the facts or wording.`,
     "Never expose raw explanation field names, scores, IDs, or implementation terms. Say things like “direct message,” “older evidence,” “reinforced by later messages,” or “previously” instead.",
@@ -1058,7 +1062,7 @@ export class AiService {
           || (!entry.messageId && typeof input.candidateSince === "number" && entry.timestamp >= input.candidateSince),
       }));
     const result = await this.structuredResponse<{
-      insights: Array<{ kind: RelationshipAnalysis["insights"][number]["kind"]; content: string; topicTitle: string; topicTitleConfidence: number; canonicalKey: string; validity: "current" | "historical" | "temporary"; evolution: "reinforce" | "replace" | "append"; confidence: number; subjectNames: string[]; sourceIndex: number }>;
+      insights: Array<{ kind: RelationshipAnalysis["insights"][number]["kind"]; content: string; topicTitle: string; topicTitleConfidence: number; discoveryTitle: string; discoverySummary: string; canonicalKey: string; validity: "current" | "historical" | "temporary"; evolution: "reinforce" | "replace" | "append"; confidence: number; subjectNames: string[]; sourceIndex: number }>;
       commitments: Array<{ content: string; owner: RelationshipCommitment["owner"]; assigneeName: string; dueAt: number; sourceIndex: number }>;
       events: Array<{ title: string; startAt: number; allDay: boolean; location: string; sourceIndex: number }>;
       todos: Array<{
@@ -1083,10 +1087,10 @@ export class AiService {
         properties: {
           insights: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, properties: {
             kind: { type: "string", enum: ["fact", "preference", "relationship_change", "important_date"] },
-            content: { type: "string" }, topicTitle: { type: "string", maxLength: 80 }, topicTitleConfidence: { type: "number", minimum: 0, maximum: 1 },
+            content: { type: "string" }, topicTitle: { type: "string", maxLength: 80 }, topicTitleConfidence: { type: "number", minimum: 0, maximum: 1 }, discoveryTitle: { type: "string", maxLength: 96 }, discoverySummary: { type: "string", maxLength: 170 },
             canonicalKey: { type: "string", maxLength: 80 }, validity: { type: "string", enum: ["current", "historical", "temporary"] }, evolution: { type: "string", enum: ["reinforce", "replace", "append"] }, confidence: { type: "number", minimum: 0, maximum: 1 },
             subjectNames: { type: "array", maxItems: 8, items: { type: "string" } }, sourceIndex: { type: "integer" },
-          }, required: ["kind", "content", "topicTitle", "topicTitleConfidence", "canonicalKey", "validity", "evolution", "confidence", "subjectNames", "sourceIndex"] } },
+          }, required: ["kind", "content", "topicTitle", "topicTitleConfidence", "discoveryTitle", "discoverySummary", "canonicalKey", "validity", "evolution", "confidence", "subjectNames", "sourceIndex"] } },
           commitments: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, properties: {
             content: { type: "string" }, owner: { type: "string", enum: ["me", "contact", "group_member"] },
             assigneeName: { type: "string" }, dueAt: { type: "number" }, sourceIndex: { type: "integer" },
@@ -1118,6 +1122,8 @@ export class AiService {
         content: item.content,
         topicTitle: item.topicTitle.replace(/\s+/g, " ").trim(),
         topicTitleConfidence: item.topicTitleConfidence,
+        discoveryTitle: item.discoveryTitle.replace(/\s+/g, " ").trim(),
+        discoverySummary: item.discoverySummary.replace(/\s+/g, " ").trim(),
         canonicalKey: item.canonicalKey.replace(/\s+/g, " ").trim(),
         validity: item.validity,
         evolution: item.evolution,
@@ -1271,6 +1277,7 @@ export class AiService {
     ownerName = "Amir",
     followUp?: { question: string; answer: string },
     relationshipBriefs: RelationshipBrief[] = [],
+    feedback?: { presentationGuidance?: string; improvementFeedback?: string },
   ): Promise<NetworkAnswer> {
     this.assertAvailable();
     if (records.length === 0 && relationshipBriefs.length === 0) {
@@ -1288,6 +1295,8 @@ export class AiService {
           question: followUp.question.slice(0, 500),
           answer: followUp.answer.slice(0, 2_000),
         } : undefined,
+        presentationGuidance: feedback?.presentationGuidance?.slice(0, 600),
+        improvementFeedback: feedback?.improvementFeedback?.slice(0, 600),
         records,
         relationshipBriefs: relationshipBriefs.map((brief) => ({
           contactName: brief.contactName,

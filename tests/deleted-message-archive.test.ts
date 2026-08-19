@@ -51,6 +51,24 @@ describe("deleted-message archive", () => {
     expect(state.listDeletedMessageArchive("dani@c.us")).toHaveLength(1);
   });
 
+  it("keeps the opt-in preference after AmirOS restarts", () => {
+    const { directory, state } = setup();
+    state.updateDeletedMessageArchiveSettings({ enabled: true, saveMedia: true });
+
+    const reloaded = new AmirosState(join(directory, "state.json"));
+    expect(reloaded.getDeletedMessageArchiveSettings()).toEqual({ enabled: true, saveMedia: true });
+  });
+
+  it("returns the same flat archive preferences to the dashboard and disables media with the archive", () => {
+    const { state } = setup();
+    state.updateDeletedMessageArchiveSettings({ enabled: true, saveMedia: true });
+
+    expect(state.getDashboardSettings().deletedMessageArchive).toEqual({ enabled: true, saveMedia: true });
+
+    state.updateDeletedMessageArchiveSettings({ enabled: false });
+    expect(state.getDashboardSettings().deletedMessageArchive).toEqual({ enabled: false, saveMedia: false });
+  });
+
   it("keeps opted-in media in a local archive and clears it on request", async () => {
     const { directory, state, archive } = setup();
     state.updateDeletedMessageArchiveSettings({ enabled: true, saveMedia: true });
@@ -105,7 +123,9 @@ describe("deleted-message archive", () => {
     const dashboard = readFileSync(resolve(process.cwd(), "src/dashboard.ts"), "utf8");
 
     expect(settings).toContain("const saveDeletedMessageArchive");
-    expect(settings).toContain('onSaveRef.current({ deletedMessageArchive: next })');
+    expect(settings).toContain('pendingDeletedMessageArchiveRef.current = next');
+    expect(settings).toContain("The saved archive preference was not confirmed");
+    expect(settings).toContain("Saved on this Mac");
     expect(settings).toContain("Saved immediately.");
     expect(inbox).toContain("Reveal saved content");
     expect(inbox).toContain("This message was deleted in WhatsApp. It was not saved on this Mac.");

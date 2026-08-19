@@ -124,8 +124,14 @@ const processor = new MessageProcessor(
 const whatsapp = createWhatsAppClient(config, (message, isSelfChat) =>
   processor.process(message, isSelfChat),
   amirosState,
-  (message, original) => deletedMessageArchive.capture(message, original),
-  (message) => deletedMessageArchive.captureViewOnce(message),
+  async (message, original) => {
+    if (!controlCenter.isFeatureEnabled("deleted-message-archive")) return;
+    await deletedMessageArchive.capture(message, original);
+  },
+  async (message) => {
+    if (!controlCenter.isFeatureEnabled("deleted-message-archive")) return;
+    await deletedMessageArchive.captureViewOnce(message);
+  },
 );
 const dashboard = startAmirosDashboard({
   client: whatsapp,

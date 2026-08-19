@@ -7,6 +7,14 @@ PID_FILE="$PROJECT_DIR/work/amiros.pid"
 
 AMIROS_PID=""
 
+# Record an intentional stop before unloading the user-level recovery agent.
+# The watchdog consumes this one-time marker and exits successfully, so macOS
+# knows not to reopen AmirOS until the person opens it again.
+mkdir -p "$PROJECT_DIR/work"
+/usr/bin/printf '{"reason":"user-requested stop"}\n' > "$PROJECT_DIR/work/amiros-intentional-stop.json"
+/bin/chmod 600 "$PROJECT_DIR/work/amiros-intentional-stop.json" 2>/dev/null || true
+/bin/launchctl bootout "gui/$UID/com.amiros.app" >/dev/null 2>&1 || true
+
 # Prefer the watchdog PID recorded by the launcher. If that file was removed
 # unexpectedly, find only the watchdog belonging to this exact AmirOS folder.
 if [[ -f "$PID_FILE" ]]; then

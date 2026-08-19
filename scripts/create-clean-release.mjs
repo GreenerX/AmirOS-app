@@ -7,6 +7,13 @@ const releaseRoot = resolve(root, "release", "AmirOS");
 const excludedRelativePaths = new Set([
   "src/profile-pdf 2.ts",
 ]);
+const forbiddenReleaseEntries = [
+  ".env.local",
+  "work",
+  ".wwebjs_auth",
+  ".wwebjs_cache",
+  "node_modules",
+];
 
 function includeReleasePath(source) {
   const relativePath = source.slice(root.length + 1);
@@ -34,6 +41,8 @@ const included = [
   "scripts/build-backend.mjs",
   "scripts/build-ui.mjs",
   "scripts/amiros-watchdog.mjs",
+  "scripts/launch-agent.mjs",
+  "scripts/launch-agent-runner.sh",
   "scripts/launch-amiros.mjs",
   "scripts/profile-pdf.py",
   "scripts/start-backend.mjs",
@@ -68,6 +77,19 @@ if (betaConfigurationLines.length > 0) {
   ].join("\n"), { encoding: "utf8", mode: 0o600 });
 }
 
+// Keep the allow-list honest. These paths are where a local installation can
+// hold credentials, WhatsApp authentication, and personal state; a customer
+// archive must never contain them, even if the release script changes later.
+for (const relativePath of forbiddenReleaseEntries) {
+  if (existsSync(resolve(releaseRoot, relativePath))) {
+    throw new Error(`Refusing to package private local data: ${relativePath}`);
+  }
+}
+const packagedEnvironmentPath = resolve(releaseRoot, ".env");
+if (existsSync(packagedEnvironmentPath) && /^OPENAI_API_KEY=.+$/m.test(readFileSync(packagedEnvironmentPath, "utf8"))) {
+  throw new Error("Refusing to package a non-empty OPENAI_API_KEY.");
+}
+
 writeFileSync(resolve(releaseRoot, "CUSTOMER-START-HERE.md"), `# Welcome to AmirOS
 
 This is a clean customer copy. It contains no WhatsApp link, API key, contact
@@ -92,6 +114,12 @@ Keep all three private. They are intentionally excluded from Git and releases.
 When an update is available, double-click \`Update AmirOS.command\`. It creates
 a private backup first, installs the newest AmirOS files, preserves your data,
 and reopens the dashboard.
+
+## If AmirOS does not open
+
+Double-click \`Open AmirOS.command\` in this folder. It safely starts or
+recovers AmirOS and opens the dashboard. If it still does not open, take a
+screenshot of the window and send it to AmirOS Support.
 `, { encoding: "utf8", mode: 0o644 });
 
 console.log(`Created clean customer release: ${releaseRoot}`);

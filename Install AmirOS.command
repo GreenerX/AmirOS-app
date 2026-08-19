@@ -7,6 +7,7 @@ set -u
 PROJECT_DIR="${0:A:h}"
 NODE_DOWNLOAD_URL="https://nodejs.org/en/download"
 AMIROS_PORT="${AMIROS_PORT:-3789}"
+export AMIROS_PORT
 
 # AmirOS keeps every private item beside the app itself. When a person has
 # downloaded a newer ZIP into a second AmirOS folder, look only at sibling
@@ -199,6 +200,10 @@ echo "Installing AmirOS. This can take a few minutes the first time."
 echo "Keep this window open until AmirOS opens in your browser."
 echo
 
+# A previous AmirOS folder may have registered the stable recovery agent.
+# Unload it before inspecting/merging folders so it cannot restart the old
+# dashboard while this installation is being prepared.
+node "$PROJECT_DIR/scripts/launch-agent.mjs" --stop >/dev/null 2>&1 || true
 if ! stop_existing_amiros; then
   pause
   exit 1
@@ -237,4 +242,13 @@ fi
 
 echo
 echo "Setup is complete. Starting AmirOS..."
+if [[ -n "${AMIROS_INSTALL_TEST_WATCHDOG_ROOT:-}" ]]; then
+  # Installer QA uses an isolated watchdog instead of macOS's stable
+  # LaunchAgent label. A test must never replace a real person's recovery
+  # service just because both processes run under the same macOS account.
+  echo "Installer QA mode: using an isolated temporary recovery process."
+elif ! node "$PROJECT_DIR/scripts/launch-agent.mjs" --start; then
+  echo "AmirOS could not enable automatic recovery. It will still try to open now."
+  echo "If it does not open, double-click Open AmirOS.command again."
+fi
 exec "$PROJECT_DIR/Open AmirOS.command"

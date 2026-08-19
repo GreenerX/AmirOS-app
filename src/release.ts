@@ -29,24 +29,24 @@ export const AMIROS_VERSION = packageVersion();
 
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
-  releasedAt: "2026-08-19",
-  headline: "Clearer answers, safer replies, and a more useful daily view",
+  releasedAt: "2026-08-20",
+  headline: "A more natural, trustworthy AmirOS",
   notes: [
     {
-      title: "Ask AmirOS stays grounded",
-      detail: "Ask AmirOS now clarifies which person you mean when names overlap, keeps answers tied to current evidence, and makes its sources and context easier to understand.",
+      title: "Ask AmirOS makes clearer discoveries",
+      detail: "Ask AmirOS now starts with timely, directly supported relationship discoveries, makes its answers easier to follow, and lets you improve future answers with private feedback.",
     },
     {
-      title: "Replies learn without getting in the way",
-      detail: "Suggested replies can be edited, cleared, regenerated from your feedback, and sent directly. Auto Mode also better respects explicit writing preferences such as using fewer emojis.",
+      title: "Replies stay in your voice",
+      detail: "Auto Mode now understands a short burst of messages together, sends one natural reply in your voice, and more reliably respects each chat’s preferences.",
     },
     {
-      title: "Deleted messages remain private and recoverable",
-      detail: "When you opt in, AmirOS can keep a local copy of deleted WhatsApp text and media and clearly mark it in Inbox so you can choose whether to reveal it.",
+      title: "Deleted messages stay private and recoverable",
+      detail: "When you opt in, AmirOS can keep a local copy of deleted WhatsApp text and available media, clearly mark it in Inbox, and let you reveal it only when you choose.",
     },
     {
-      title: "A cleaner daily workspace",
-      detail: "Overview cards adapt more naturally to the available space, empty states are aligned and easier to scan, and secondary tools have been removed from the main navigation.",
+      title: "A calmer daily workspace",
+      detail: "Today’s Focus, empty states, and the daily overview now fit together more cleanly and make the next useful thing easier to spot.",
     },
   ],
 };

@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-openai-bot",
-  "version": "0.10.13",
+  "version": "0.10.14",
   "private": true,
   "type": "module",
   "engines": {
@@ -19,6 +19,7 @@
     "test:dashboard-health": "npm run ui:build && tsx scripts/dashboard-health-check.ts",
     "test:backend-restart": "tsx scripts/backend-restart-test.ts",
     "test:runtime-recovery": "tsx scripts/runtime-recovery-test.ts",
+    "test:launch-agent": "vitest run tests/launch-agent.test.ts",
     "test:whatsapp-session-recovery": "tsx scripts/whatsapp-session-recovery-test.ts",
     "test:installer-upgrade": "tsx scripts/installer-upgrade-test.ts",
     "ui:dev": "vite --config ui/vite.config.ts",

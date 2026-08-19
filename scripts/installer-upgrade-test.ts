@@ -237,6 +237,8 @@ try {
   assert.ok(!existsSync(resolve(cleanProject, "ui/dist")), "Clean ZIP fixture must not include a dashboard build.");
   const cleanPort = await reservePort();
   const cleanOutput = await runInstaller(cleanProject, cleanPort, testBin);
+  assert.match(cleanOutput, /Installer QA mode: using an isolated temporary recovery process/,
+    "Installer QA must not register the real macOS AmirOS recovery service.");
   assert.match(cleanOutput, /Starting AmirOS in the background/, "Installer should hand off to the production launcher.");
   await waitForDashboard(cleanPort, cleanProject);
   assertBuildAndRuntime(cleanProject);

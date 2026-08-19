@@ -19,7 +19,10 @@ import type {
   ModelPreset,
   GroupConversationSummary,
   IntelligenceData,
+  IntelligenceAnswerFeedbackInput,
+  IntelligenceAnswerFeedbackSummary,
   IntelligenceSearchResult,
+  AssistantSuggestionContext,
   ProactiveIntelligenceItem,
   RelationshipCommitment,
   TodoTask,
@@ -331,13 +334,16 @@ export async function askIntelligence(
     followUp?: { question: string; answer: string; sourceRefs?: Array<{ id: string; chatId: string; kind: "insight" }> };
     scope?: { knowledge: boolean; calendar: boolean };
     selectedContactId?: string;
-    suggestionContext?: { chatId: string; sourceIds: string[] };
+    suggestionContext?: AssistantSuggestionContext;
+    improvement?: { answerId: string; reasons?: IntelligenceAnswerFeedbackInput["reasons"]; note?: string };
     signal?: AbortSignal;
   },
 ): Promise<IntelligenceSearchResult> {
   if (isDemo) {
+    const answerId = `demo-answer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     if (/\bmichelle\b/iu.test(query) && !options?.selectedContactId) {
       return {
+        answerId,
         answer: "Which Michelle do you mean?",
         evidenceIds: [],
         sources: [],
@@ -362,6 +368,7 @@ export async function askIntelligence(
     if (options?.selectedContactId === "michelle-soffen@demo") {
       const timestamp = new Date(2026, 7, 16, 12).getTime();
       return {
+        answerId,
         answer: "The latest I know is from Aug 16: Michelle Soffen was focused on product planning and vendor evaluation, and she preferred clear decisions with practical next steps. I don’t have a newer update on how she is today.",
         evidenceIds: ["demo-michelle-soffen-context"],
         resolvedContactId: "michelle-soffen@demo",
@@ -375,6 +382,7 @@ export async function askIntelligence(
     if (options?.selectedContactId === "michelle-chechi@demo") {
       const timestamp = new Date(2026, 7, 10, 12).getTime();
       return {
+        answerId,
         answer: "The latest I know is from Aug 10: Michelle Chechi was coordinating the next operational handoff and focused on ownership and timing. I don’t have a newer update on how she is today.",
         evidenceIds: ["demo-michelle-chechi-context"],
         resolvedContactId: "michelle-chechi@demo",
@@ -389,6 +397,7 @@ export async function askIntelligence(
     if (/icon demo|worth remembering|remember about amir/iu.test(query)) {
       const timestamp = new Date(2026, 7, 18, 10, 30).getTime();
       return {
+        answerId,
         answer: [
           "A few things stand out as worth remembering:",
           "- **Flexible collaboration:** Dan is flexible about where you meet and wants to share customer and sales insights relevant to your progress together.",
@@ -411,6 +420,7 @@ export async function askIntelligence(
     if (options?.suggestionContext?.sourceIds.includes("demo-sana-personal-topic")) {
       const relationship = data.changes.find((item) => item.id === "demo-sana-personal-topic")!;
       return {
+        answerId,
         answer: "Sana’s role in your work has shifted from a project contact toward a strategic partner. The recent signal is that she values a short personal check-in before moving into project details—useful context for how you open the next conversation.",
         evidenceIds: [relationship.id],
         resolvedContactId: "sana@demo",
@@ -421,9 +431,24 @@ export async function askIntelligence(
         }],
       };
     }
+    if (options?.suggestionContext?.sourceIds.includes("demo-bilal-fact")) {
+      const relationship = data.changes.find((item) => item.id === "demo-bilal-fact")!;
+      return {
+        answerId,
+        answer: "For delivery planning, Bilal usually needs shipments sent to DHA within three business days. That preference comes from his latest saved delivery conversation, so it’s useful context when you confirm timing with him.",
+        evidenceIds: [relationship.id],
+        resolvedContactId: "bilal@demo",
+        sources: [{
+          id: relationship.id, chatId: relationship.chatId, contactName: relationship.contactName,
+          kind: "insight", content: relationship.content, senderName: relationship.evidence.senderName,
+          timestamp: relationship.evidence.timestamp, score: 100,
+        }],
+      };
+    }
     const event = data.events.find((item) => item.id === "demo-next-event")!;
     const insight = data.changes.find((item) => item.id === "demo-sana-launch-topic")!;
     return {
+      answerId,
       answer: "Before meeting Sana tomorrow, bring the final pricing sheet and a one-page decision summary. She values concise recommendations, and she asked to reserve the first 20 minutes to agree the launch sequence and named owners.",
       evidenceIds: [event.id, insight.id],
       resolvedContactId: "sana@demo",
@@ -435,9 +460,27 @@ export async function askIntelligence(
   }
   return request("/api/intelligence/search", {
     method: "POST",
-    body: JSON.stringify({ query, followUp: options?.followUp, scope: options?.scope, selectedContactId: options?.selectedContactId, suggestionContext: options?.suggestionContext }),
+    body: JSON.stringify({
+      query,
+      followUp: options?.followUp,
+      scope: options?.scope,
+      selectedContactId: options?.selectedContactId,
+      suggestionContext: options?.suggestionContext,
+      improvement: options?.improvement,
+    }),
     signal: options?.signal,
   });
+}
+
+export async function submitIntelligenceAnswerFeedback(
+  answerId: string,
+  input: IntelligenceAnswerFeedbackInput,
+): Promise<IntelligenceAnswerFeedbackSummary> {
+  if (isDemo) return { rating: input.rating, reasons: input.reasons || [], note: input.note, createdAt: Date.now() };
+  return (await request<{ feedback: IntelligenceAnswerFeedbackSummary }>(
+    `/api/intelligence/answers/${encodeURIComponent(answerId)}/feedback`,
+    { method: "POST", body: JSON.stringify(input) },
+  )).feedback;
 }
 
 export async function analyzeContactIntelligence(

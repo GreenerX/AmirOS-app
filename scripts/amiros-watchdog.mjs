@@ -3,6 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureFreshBackendBuild, ensureFreshUiBuild, isBuildFreshnessError } from "./build-freshness.mjs";
+import { consumeIntentionalStopMarker } from "./launch-agent.mjs";
 
 const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const configuredWorkDirectory = process.env.AMIROS_WATCHDOG_WORK_DIRECTORY;
@@ -61,6 +62,14 @@ const sessionLockPollMs = positiveMilliseconds("AMIROS_WATCHDOG_SESSION_LOCK_POL
 mkdirSync(workDirectory, { recursive: true });
 writeFileSync(pidPath, `${process.pid}\n`, { encoding: "utf8", mode: 0o600 });
 
+function removeOwnPidFile() {
+  try {
+    if (readFileSync(pidPath, "utf8").trim() === String(process.pid)) unlinkSync(pidPath);
+  } catch {
+    // A replacement watchdog may already own the PID file.
+  }
+}
+
 let child;
 let stopping = false;
 let restartRequest;
@@ -73,6 +82,7 @@ let startingServer = false;
 let sessionRecoveryInProgress = false;
 let shutdownExitTimer;
 let shutdownFinalizing = false;
+let shutdownExitCode = 0;
 
 function logLine(message) {
   const descriptor = openSync(logPath, "a", 0o600);
@@ -303,7 +313,7 @@ async function startServer(reason, isRecovery = false) {
       const exitReason = describeExit(code, signal);
       if (stopping) {
         logLine(`Backend stopped during intentional shutdown (${exitReason}).`);
-        void finishShutdown();
+        void finishShutdown(shutdownExitCode);
         return;
       }
 
@@ -337,7 +347,7 @@ async function startServer(reason, isRecovery = false) {
         stopping = true;
         clearInterval(restartCommandTimer);
         clearInterval(healthTimer);
-        try { unlinkSync(pidPath); } catch {}
+        removeOwnPidFile();
         process.exitCode = 1;
         return;
       }
@@ -439,21 +449,27 @@ healthTimer.unref();
 const restartCommandTimer = setInterval(processRestartCommand, 300);
 restartCommandTimer.unref();
 
-async function finishShutdown() {
+async function finishShutdown(exitCode = 0) {
   if (shutdownFinalizing) return;
   shutdownFinalizing = true;
   if (shutdownExitTimer) clearTimeout(shutdownExitTimer);
   // The backend normally closes Puppeteer itself. This final check handles a
   // rare leftover process without touching any WhatsApp session files.
   await releaseWhatsAppSessionBrowser();
-  try { unlinkSync(pidPath); } catch {}
-  process.exit(0);
+  removeOwnPidFile();
+  process.exit(exitCode);
 }
 
-function shutdown() {
+function shutdown(signal) {
   if (stopping) return;
   stopping = true;
-  logLine("Watchdog stopped by user.");
+  const intentionalReason = consumeIntentionalStopMarker(workDirectory);
+  const managedByMacOS = process.env.AMIROS_LAUNCH_AGENT_MANAGED === "1";
+  const shouldRecoverFromSignal = managedByMacOS && !intentionalReason;
+  shutdownExitCode = shouldRecoverFromSignal ? 1 : 0;
+  if (intentionalReason) logLine(`Watchdog stopped intentionally (${intentionalReason}).`);
+  else if (shouldRecoverFromSignal) logLine(`Watchdog was interrupted externally (${signal || "unknown signal"}). macOS will reopen AmirOS.`);
+  else logLine(`Watchdog stopped (${signal || "unknown signal"}).`);
   restartRequest = undefined;
   recoveryInProgress = false;
   // An intentional stop always wins over a queued dashboard restart. Leaving
@@ -477,13 +493,13 @@ function shutdown() {
         logLine("Backend did not stop cleanly in time; forcing its final shutdown.");
         child.kill("SIGKILL");
       }
-      void finishShutdown();
+      void finishShutdown(shutdownExitCode);
     }, 10_000);
     return;
   }
-  void finishShutdown();
+  void finishShutdown(shutdownExitCode);
 }
 
-process.once("SIGTERM", shutdown);
-process.once("SIGINT", shutdown);
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT", () => shutdown("SIGINT"));
 void startServer("launcher");

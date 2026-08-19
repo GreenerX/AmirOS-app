@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.10.14] - 2026-08-20
+
+### Added
+
+- Added more precise Ask AmirOS discovery cards based on timely, directly supported relationship knowledge.
+- Added local feedback for Ask AmirOS answers so users can improve future presentation and relevance without changing facts silently.
+
+### Changed
+
+- Auto Mode now treats a short burst of incoming messages as one conversation and sends one natural owner-style reply.
+- Improved Ask AmirOS answer hierarchy, person selection, source boundaries, and current-versus-historical context.
+- Improved Inbox handling of deleted messages, including local-only reveal controls for saved content.
+
+### Fixed
+
+- Prevented Auto Mode from sending API or AI-service failure messages into WhatsApp chats.
+- Prevented automatic replies from exposing speaker labels, recipient identities, or internal AmirOS language.
+- Fixed managed first-run activation so a new tester can reach the Connect this Mac screen.
+- Improved local dashboard recovery and build-freshness diagnostics.
+
+### Testing
+
+- Expanded coverage for Auto Mode safety, Ask AmirOS grounding and feedback, deleted-message privacy, managed activation, dashboard recovery, and responsive Overview behavior.
+
 ## [0.10.13] - 2026-08-19
 
 ### Added

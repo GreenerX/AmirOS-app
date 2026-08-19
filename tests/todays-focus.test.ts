@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTodaysFocus, todaysFocusDismissalIds, todaysFocusPresentation } from "../ui/src/todays-focus";
+import { buildTodaysFocus, isRecentlyPassedCalendarEvent, todaysFocusDismissalIds, todaysFocusPresentation } from "../ui/src/todays-focus";
 import type { IntelligenceData } from "../ui/src/types";
 
 const now = new Date(2026, 7, 6, 10, 0, 0);
@@ -77,6 +77,28 @@ describe("buildTodaysFocus", () => {
       imageUrl: "/api/todays-focus/icons/dinner.png",
       source: "whatsapp_bot",
     })]));
+  });
+
+  it("keeps a timed event visible for 30 minutes after it starts so it can be shown as overdue", () => {
+    const value = data();
+    value.events.push({
+      id: "just-started", chatId: "dani", contactName: "Dani", title: "Coffee with Dani",
+      startAt: now.getTime() - 25 * 60_000, allDay: false, status: "confirmed", evidence, createdAt: at(-1), updatedAt: at(-1),
+    });
+
+    const items = buildTodaysFocus(value, now);
+    expect(items).toEqual([expect.objectContaining({ title: "Coffee with Dani", detail: "Just started" })]);
+    expect(isRecentlyPassedCalendarEvent(items[0]!, now)).toBe(true);
+  });
+
+  it("removes a timed event from Focus after its 30-minute grace period", () => {
+    const value = data();
+    value.events.push({
+      id: "too-old", chatId: "dani", contactName: "Dani", title: "Earlier coffee",
+      startAt: now.getTime() - 31 * 60_000, allDay: false, status: "confirmed", evidence, createdAt: at(-1), updatedAt: at(-1),
+    });
+
+    expect(buildTodaysFocus(value, now)).toHaveLength(0);
   });
 
   it("keeps tomorrow's events out of Today’s Focus during the day", () => {

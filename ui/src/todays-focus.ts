@@ -98,6 +98,21 @@ function duePriority(dueAt: number, now: Date) {
   return undefined;
 }
 
+/**
+ * A timed plan remains useful immediately after it starts: it lets the owner
+ * see that they have just missed it without keeping old calendar history in
+ * a daily, action-focused rail. All-day plans deliberately do not use this
+ * grace period because their midnight start time is not a meaningful deadline.
+ */
+export const RECENTLY_PASSED_EVENT_WINDOW_MS = 30 * 60 * 1_000;
+
+export function isRecentlyPassedCalendarEvent(item: TodaysFocusItem, now = new Date()) {
+  if (item.type !== "calendar" || item.allDay) return false;
+  const startAt = toMilliseconds(item.timestamp);
+  const elapsed = now.getTime() - startAt;
+  return elapsed > 0 && elapsed <= RECENTLY_PASSED_EVENT_WINDOW_MS;
+}
+
 /** Builds the small, local-only list of items that deserve attention today. */
 export function buildTodaysFocus(data: IntelligenceData | undefined, now = new Date()): TodaysFocusItem[] {
   if (!data) return [];
@@ -159,15 +174,18 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
   for (const event of data.events) {
     if (proactiveSourceIds.has(event.id)) continue;
     const startAt = toMilliseconds(event.startAt);
-    if (event.status !== "confirmed" || startAt < now.getTime() || startAt >= dayAfterTomorrow) continue;
+    const recentlyPassed = !event.allDay
+      && startAt < now.getTime()
+      && now.getTime() - startAt <= RECENTLY_PASSED_EVENT_WINDOW_MS;
+    if (event.status !== "confirmed" || (!recentlyPassed && startAt < now.getTime()) || startAt >= dayAfterTomorrow) continue;
     add({
       id: `calendar:${event.chatId}:${event.id}`,
       type: "calendar",
       // The next event is the clearest time-bound item on the Overview, so
       // today's confirmed events lead the focus cards chronologically.
-      priority: -1,
+      priority: recentlyPassed ? 0 : -1,
       title: event.title,
-      detail: startAt < tomorrow ? "Happening today" : "Happening tomorrow",
+      detail: recentlyPassed ? "Just started" : startAt < tomorrow ? "Happening today" : "Happening tomorrow",
       chatId: event.chatId,
       contactName: event.contactName,
       messageId: event.evidence.messageId,

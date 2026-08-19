@@ -31,6 +31,18 @@ export type AuthenticatedDevice = {
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{24,128}$/;
 
+/**
+ * A deleted account/device is deliberately indistinguishable from an invalid
+ * credential. Managed clients must treat this as recovery-required, not as an
+ * invitation to fall back to unmanaged access or update policy.
+ */
+function reconnectRequired(): Response {
+  return json({
+    code: "device_reconnection_required",
+    message: "This Mac is no longer connected to a Control Center account. Reconnect it from AmirOS Settings. Your local AmirOS data remains on this Mac.",
+  }, 401);
+}
+
 export function deviceHash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -106,7 +118,7 @@ export async function authenticateDevice(
     .eq("device_key", input.deviceKey)
     .maybeSingle();
   if (deviceError) return json({ message: "The Control Center database is temporarily unavailable. Please try again shortly." }, 503);
-  if (!device) return json({ message: "This Mac is not approved yet." }, 401);
+  if (!device) return reconnectRequired();
 
   const { data: credential, error: credentialError } = await client
     .from("control_device_credentials")
@@ -114,9 +126,7 @@ export async function authenticateDevice(
     .eq("device_id", device.id)
     .maybeSingle();
   if (credentialError) return json({ message: "The Control Center database is temporarily unavailable. Please try again shortly." }, 503);
-  if (!credential || !hashesMatch(credential.device_secret_hash, deviceHash(input.deviceSecret))) {
-    return json({ message: "This Mac is not approved yet." }, 401);
-  }
+  if (!credential || !hashesMatch(credential.device_secret_hash, deviceHash(input.deviceSecret))) return reconnectRequired();
 
   const { data: account, error: accountError } = await client
     .from("control_accounts")

@@ -172,6 +172,7 @@ export function UsageView({ data, onPreset }: UsageViewProps) {
 
 type SettingsViewProps = {
   data: DashboardData;
+  deletedMessageArchiveEnabled?: boolean;
   onRelink: () => Promise<void>;
   onPause: () => Promise<void>;
   onSaveApiKey: (apiKey: string) => Promise<void>;
@@ -183,7 +184,7 @@ type SettingsViewProps = {
     ownerProfile?: Partial<DashboardData["settings"]["ownerProfile"]>;
     knowledgeTrackingDefault?: KnowledgeTrackingDefault;
     deletedMessageArchive?: Partial<DashboardData["settings"]["deletedMessageArchive"]>;
-  }) => Promise<void>;
+  }) => Promise<DashboardData["settings"]>;
   onClearDeletedMessageArchive: () => Promise<{ removed: number }>;
 };
 
@@ -237,7 +238,7 @@ const themes: Array<{
   { id: "graphite", name: "Graphite", description: "Neutral slate and cool mist", colors: ["#53606b", "#f0f3f5", "#ffffff"] },
 ];
 
-export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause, onClearDeletedMessageArchive }: SettingsViewProps) {
+export function SettingsView({ data, deletedMessageArchiveEnabled = true, onSave, onSaveApiKey, onRelink, onPause, onClearDeletedMessageArchive }: SettingsViewProps) {
   const [budget, setBudget] = useState(data.settings.monthlyBudgetUsd);
   const [apiKey, setApiKey] = useState("");
   const [apiKeyState, setApiKeyState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -246,6 +247,7 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause, on
   const [models, setModels] = useState(data.models);
   const [knowledgeTrackingDefault, setKnowledgeTrackingDefault] = useState(data.settings.knowledgeTrackingDefault);
   const [deletedMessageArchive, setDeletedMessageArchive] = useState(data.settings.deletedMessageArchive);
+  const [deletedMessageArchiveSaveState, setDeletedMessageArchiveSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [ownerProfile, setOwnerProfile] = useState(data.settings.ownerProfile);
   const [uploadingProfile, setUploadingProfile] = useState(false);
   const [pendingProfileImage, setPendingProfileImage] = useState<string>();
@@ -269,12 +271,22 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause, on
   const [controlCenter, setControlCenter] = useState<ControlCenterStatus>(data.controlCenter);
   const [controlCenterState, setControlCenterState] = useState<"idle" | "working" | "error">("idle");
   const [deletedArchiveClearState, setDeletedArchiveClearState] = useState<"idle" | "clearing" | "cleared" | "error">("idle");
+  const latestDeletedMessageArchiveRef = useRef(data.settings.deletedMessageArchive);
+  const pendingDeletedMessageArchiveRef = useRef<DashboardData["settings"]["deletedMessageArchive"] | undefined>(undefined);
 
   useEffect(() => {
     setControlCenter(data.controlCenter);
   }, [data.controlCenter]);
 
   useEffect(() => {
+    latestDeletedMessageArchiveRef.current = data.settings.deletedMessageArchive;
+    const pending = pendingDeletedMessageArchiveRef.current;
+    if (pending) {
+      const confirmed = pending.enabled === data.settings.deletedMessageArchive.enabled &&
+        pending.saveMedia === data.settings.deletedMessageArchive.saveMedia;
+      if (!confirmed) return;
+      pendingDeletedMessageArchiveRef.current = undefined;
+    }
     setDeletedMessageArchive(data.settings.deletedMessageArchive);
   }, [data.settings.deletedMessageArchive]);
 
@@ -371,25 +383,45 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause, on
     const serialized = JSON.stringify(payload);
     immediateDeletedArchiveSaveRef.current = serialized;
     pendingAutoSaveRef.current = { payload, serialized };
+    pendingDeletedMessageArchiveRef.current = next;
     window.clearTimeout(autoSaveTimerRef.current);
     window.clearTimeout(saveNoticeTimerRef.current);
     setDeletedMessageArchive(next);
+    setDeletedMessageArchiveSaveState("saving");
     setSaveState("saving");
     const sequence = ++saveSequenceRef.current;
     saveInFlightRef.current += 1;
     void onSaveRef.current({ deletedMessageArchive: next })
-      .then(() => {
+      .then((settings) => {
         if (sequence !== saveSequenceRef.current) return;
+        const confirmedArchive = settings.deletedMessageArchive;
+        const confirmed = confirmedArchive.enabled === next.enabled && confirmedArchive.saveMedia === next.saveMedia;
+        if (!confirmed) {
+          throw new Error("The saved archive preference was not confirmed");
+        }
+        latestDeletedMessageArchiveRef.current = confirmedArchive;
+        setDeletedMessageArchive(confirmedArchive);
+        pendingDeletedMessageArchiveRef.current = undefined;
         lastSavedSettingsRef.current = serialized;
         immediateDeletedArchiveSaveRef.current = undefined;
+        setDeletedMessageArchiveSaveState("saved");
         setSaveState("saved");
-        saveNoticeTimerRef.current = window.setTimeout(() => setSaveState("idle"), 2_400);
+        saveNoticeTimerRef.current = window.setTimeout(() => {
+          setDeletedMessageArchiveSaveState("idle");
+          setSaveState("idle");
+        }, 2_400);
       })
       .catch(() => {
         if (sequence !== saveSequenceRef.current) return;
         immediateDeletedArchiveSaveRef.current = undefined;
+        pendingDeletedMessageArchiveRef.current = undefined;
+        setDeletedMessageArchive(latestDeletedMessageArchiveRef.current);
+        setDeletedMessageArchiveSaveState("error");
         setSaveState("error");
-        saveNoticeTimerRef.current = window.setTimeout(() => setSaveState("idle"), 3_600);
+        saveNoticeTimerRef.current = window.setTimeout(() => {
+          setDeletedMessageArchiveSaveState("idle");
+          setSaveState("idle");
+        }, 3_600);
       })
       .finally(() => {
         saveInFlightRef.current = Math.max(0, saveInFlightRef.current - 1);
@@ -680,8 +712,11 @@ export function SettingsView({ data, onSave, onSaveApiKey, onRelink, onPause, on
           <span className="setting-hero-icon"><Eye size={25} /></span>
           <div className="assistant-config-copy">
             <div><h2>Saved deleted messages</h2><p>Keep a private, local copy of messages that someone deletes after AmirOS receives them.</p></div>
-            <label className="settings-choice-row"><input type="checkbox" checked={deletedMessageArchive.enabled} onChange={(event) => saveDeletedMessageArchive({ ...deletedMessageArchive, enabled: event.target.checked })} /><span><strong>Save deleted messages on this Mac</strong><small>Saved immediately. Off by default. Saved messages never inform memory, suggested actions, replies, Ask AmirOS, or the Control Center.</small></span></label>
-            <label className="settings-choice-row"><input type="checkbox" disabled={!deletedMessageArchive.enabled} checked={deletedMessageArchive.saveMedia} onChange={(event) => saveDeletedMessageArchive({ ...deletedMessageArchive, saveMedia: event.target.checked })} /><span><strong>Also try to save media</strong><small>Saved immediately. Photos, videos, voice notes, and view-once media are saved only when WhatsApp still makes them available before deletion.</small></span></label>
+            {deletedMessageArchiveEnabled ? <>
+              <label className="settings-choice-row"><input type="checkbox" checked={deletedMessageArchive.enabled} onChange={(event) => saveDeletedMessageArchive({ ...deletedMessageArchive, enabled: event.target.checked })} /><span><strong>Save deleted messages on this Mac</strong><small>Saved immediately. Off by default. Saved messages never inform memory, suggested actions, replies, Ask AmirOS, or the Control Center.</small></span></label>
+              <label className="settings-choice-row"><input type="checkbox" disabled={!deletedMessageArchive.enabled} checked={deletedMessageArchive.saveMedia} onChange={(event) => saveDeletedMessageArchive({ ...deletedMessageArchive, saveMedia: event.target.checked })} /><span><strong>Also try to save media</strong><small>Saved immediately. Photos, videos, voice notes, and view-once media are saved only when WhatsApp still makes them available before deletion.</small></span></label>
+              {deletedMessageArchiveSaveState !== "idle" ? <small className={deletedMessageArchiveSaveState === "error" ? "subscription-error" : "settings-inline-save-status"} role="status" aria-live="polite">{deletedMessageArchiveSaveState === "saving" ? "Saving your preference…" : deletedMessageArchiveSaveState === "saved" ? "Saved on this Mac" : "Couldn’t save this preference. Try again."}</small> : null}
+            </> : <small className="settings-inline-save-status">Saved deleted messages are turned off for this AmirOS account. Existing saved messages stay on this Mac and can still be cleared below.</small>}
           </div>
           <div className="calendar-subscription-actions">
             <button className="button compact ghost-danger" type="button" disabled={deletedArchiveClearState === "clearing"} onClick={() => {

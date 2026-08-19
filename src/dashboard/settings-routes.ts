@@ -381,11 +381,12 @@ export async function handleSettingsApiRoute(options: SettingsRouteOptions): Pro
       }
       state.updateOwnerProfile({ displayName, avatarUrl });
     }
-    sendJson(response, 200, {
-      settings: {
-        ...state.updateSettings({
-          ...patch,
-          deletedMessageArchive,
+    const { deletedMessageArchive: _archivePatch, ...settingsPatch } = patch;
+    if (deletedMessageArchive) {
+      state.updateDeletedMessageArchiveSettings(deletedMessageArchive);
+    }
+    state.updateSettings({
+          ...settingsPatch,
           theme: patch.theme as ThemeName | undefined,
           models: patch.models
             ? {
@@ -394,7 +395,10 @@ export async function handleSettingsApiRoute(options: SettingsRouteOptions): Pro
                 voice: patch.models.voice || config.openaiTranscribeModel,
               }
             : state.getSettings().models,
-        }),
+    });
+    sendJson(response, 200, {
+      settings: {
+        ...state.getDashboardSettings(),
         apiKeyConfigured: ai.isConfigured(),
       },
     });

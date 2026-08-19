@@ -89,6 +89,7 @@ type InboxViewProps = {
   onMarkRead: (chatId: string) => Promise<void>;
   onModeChange: (chatId: string, mode: ReplyMode) => Promise<void>;
   autoModeEnabled?: boolean;
+  deletedMessageArchiveEnabled?: boolean;
   onContactChange: (
     chatId: string,
     patch: Partial<ContactPreferences>,
@@ -110,6 +111,7 @@ type InboxViewProps = {
   onForward: (chatId: string, messageId: string, targetChatId: string) => Promise<void>;
   onScanHistory: (chatId: string, limit?: number) => Promise<{ scanned: number; added: number }>;
   onRevealDeletedMessage: (chatId: string, archiveId: string) => Promise<void>;
+  onHideDeletedMessage: (chatId: string, archiveId: string) => void;
 };
 
 type Filter = "all" | "unread" | "review" | "auto";
@@ -255,6 +257,7 @@ export function InboxView({
   onMarkRead,
   onModeChange,
   autoModeEnabled = true,
+  deletedMessageArchiveEnabled = true,
   onContactChange,
   onAddMemory,
   onRemoveMemory,
@@ -273,6 +276,7 @@ export function InboxView({
   onForward,
   onScanHistory,
   onRevealDeletedMessage,
+  onHideDeletedMessage,
 }: InboxViewProps) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Filter>(initialFilter);
@@ -824,7 +828,7 @@ export function InboxView({
             const dateLabel = messageDateLabel(message.timestamp);
             const previousDateLabel = index > 0 ? messageDateLabel(chronologicalMessages[index - 1]!.timestamp) : undefined;
             const reactions = mergedMessageReactions(message);
-            const deletedArchive = message.deletedArchive;
+            const deletedArchive = deletedMessageArchiveEnabled ? message.deletedArchive : undefined;
             const deletedMessage = deletedArchive || message.deleted;
             const revealedDeletedArchive = Boolean(deletedArchive?.revealed);
             const callPresentation = message.call ? callEventPresentation(message.call) : undefined;
@@ -845,7 +849,10 @@ export function InboxView({
                       ? "A private local copy was saved when it arrived."
                       : deletedArchive.hasMedia ? "A private local copy may include the original media." : "A private local copy was saved before it was deleted."
                     : "This message was deleted in WhatsApp. It was not saved on this Mac."}</span>
-                  <small>Deleted {formatDateTime(deletedArchive?.deletedAt || message.deleted?.deletedAt || message.timestamp, { dateStyle: "medium", timeStyle: "short" })}</small>
+                  <small>Sent {formatDateTime(message.timestamp, { dateStyle: "medium", timeStyle: "short" })}</small>
+                  {deletedArchive?.deletedAt || message.deleted?.deletedAt
+                    ? <small>Deleted {formatDateTime(deletedArchive?.deletedAt || message.deleted?.deletedAt || 0, { dateStyle: "medium", timeStyle: "short" })}</small>
+                    : <small>Deletion time unavailable</small>}
                   {deletedArchive && !revealedDeletedArchive ? <button
                     type="button"
                     disabled={revealingDeletedMessageIds.has(deletedArchive.id)}
@@ -864,6 +871,7 @@ export function InboxView({
                     {deletedArchive.revealedText ? <p className="deleted-message-revealed-text" dir={textDirection(deletedArchive.revealedText)}>{deletedArchive.revealedText}</p> : null}
                     {deletedArchive.revealedMediaUrl ? <a className="deleted-message-media-link" href={deletedArchive.revealedMediaUrl} target="_blank" rel="noreferrer">Open saved {deletedArchive.kind === "view_once" ? "one-time media" : "media"}</a> : null}
                     {!deletedArchive.revealedText && !deletedArchive.revealedMediaUrl ? <small>Saved content is no longer available.</small> : null}
+                    <button type="button" className="deleted-message-hide-content" onClick={() => onHideDeletedMessage(selectedChat.id, deletedArchive.id)}>Hide saved content</button>
                   </div> : null}
                 </div> : null}
                 {!deletedMessage && message.quotedMessage ? <button className="quoted-message" type="button" onClick={() => scrollToQuotedMessage(message.quotedMessage!.id)}><strong>{message.quotedMessage.fromMe ? "You" : message.quotedMessage.senderName || selectedChat.name}</strong><span dir={textDirection(message.quotedMessage.body)}>{message.quotedMessage.body}</span></button> : null}

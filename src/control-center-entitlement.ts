@@ -47,10 +47,14 @@ export type ControlCenterSnapshot = {
  * administrator's explicit setting.
  */
 export function controlCenterFeatureEnabled(
-  snapshot: Pick<ControlCenterSnapshot, "configured" | "status" | "features">,
+  snapshot: Pick<ControlCenterSnapshot, "configured" | "status" | "setupState" | "features">,
   featureId: string,
 ): boolean {
-  if (!snapshot.configured || snapshot.status === "unpaired" || snapshot.status === "pending") return true;
+  // A Control Center feature flag is authoritative only once this Mac is an
+  // active, paired managed device. Every other state deliberately retains the
+  // local product behaviour, including a temporarily unavailable control plane
+  // or a Mac that has not completed its Control Center connection yet.
+  if (!snapshot.configured || snapshot.status !== "active" || snapshot.setupState !== "active") return true;
   return snapshot.features.find((feature) => feature.id === featureId)?.enabled ?? true;
 }
 
@@ -99,6 +103,8 @@ type FetchResponse = {
   status: number;
   json(): Promise<unknown>;
 };
+
+const RECONNECTION_REQUIRED_CODE = "device_reconnection_required";
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<FetchResponse>;
 
@@ -389,6 +395,18 @@ export class ControlCenterEntitlement {
       this.transientDetail = undefined;
       this.write(this.saved);
     } catch (error) {
+      // A managed device that has been removed in the Control Center is not
+      // merely offline. Discard its previous credential immediately so it
+      // cannot retain an old entitlement, feature assignment, or release
+      // decision during offline grace. This does not touch any local AmirOS
+      // data; the owner can reconnect this Mac from the recovery controls.
+      if (error instanceof ControlCenterRequestError
+        && error.status === 401
+        && error.code === RECONNECTION_REQUIRED_CODE) {
+        this.forgetThisMac();
+        this.transientDetail = "This Mac was removed from the Control Center. Reconnect it to continue.";
+        return this.snapshot();
+      }
       this.transientDetail = error instanceof Error ? error.message : "AmirOS could not reach the Control Center right now.";
     }
     return this.snapshot();
@@ -508,9 +526,12 @@ export class ControlCenterEntitlement {
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-      const payload = await response.json().catch(() => ({})) as { message?: unknown } & T;
+      const payload = await response.json().catch(() => ({})) as { message?: unknown; code?: unknown } & T;
       if (!response.ok) {
-        throw new ControlCenterRequestError(response.status, typeof payload.message === "string" ? payload.message : "AmirOS could not reach the Control Center right now.");
+        const code = typeof payload.code === "string" && /^[a-z0-9_]{1,80}$/u.test(payload.code)
+          ? payload.code
+          : undefined;
+        throw new ControlCenterRequestError(response.status, typeof payload.message === "string" ? payload.message : "AmirOS could not reach the Control Center right now.", code);
       }
       return payload;
     } finally {
@@ -520,7 +541,7 @@ export class ControlCenterEntitlement {
 }
 
 export class ControlCenterRequestError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(readonly status: number, message: string, readonly code?: string) {
     super(message);
     this.name = "ControlCenterRequestError";
   }

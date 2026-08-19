@@ -239,6 +239,7 @@ else
 fi
 
 echo "Update package is ready. Backing up your private AmirOS data..."
+"$NODE_BIN" "$PROJECT_DIR/scripts/launch-agent.mjs" --stop >/dev/null 2>&1 || true
 stop_amiros
 backup_private_data || fail "AmirOS could not back up your private data."
 echo "Private data backup created at: $BACKUP_DIR"
@@ -271,4 +272,8 @@ fi
 
 echo
 echo "AmirOS is up to date. Opening your dashboard..."
+if ! "$NODE_BIN" "$PROJECT_DIR/scripts/launch-agent.mjs" --start; then
+  echo "AmirOS could not enable automatic recovery. It will still try to open now."
+  echo "If it does not open, double-click Open AmirOS.command again."
+fi
 exec "$PROJECT_DIR/Open AmirOS.command"

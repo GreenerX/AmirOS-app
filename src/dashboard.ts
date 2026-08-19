@@ -30,6 +30,7 @@ import {
   type DeletedMessageArchiveItem,
   type TodoTask,
 } from "./amiros-state.js";
+import { findDeletedMessageArchiveMatch } from "./deleted-message-matching.js";
 import {
   type AppConfig,
 } from "./config.js";
@@ -502,7 +503,7 @@ export type DashboardMessage = {
   };
   /** A WhatsApp message that was revoked but was not available in the local archive. */
   deleted?: {
-    deletedAt: number;
+    deletedAt?: number;
   };
 };
 
@@ -1091,7 +1092,7 @@ async function listChats(
       const ids = chat.lastMessage?.mentionIds || [];
       return ids.length > 0 && mentionLabelsForIds(ids, contactNameCache).length < ids.length;
     })
-    .map((chat) => listMessages(client, chat.id._serialized, contactNameCache, state, 100).catch(() => [])));
+    .map((chat) => listMessages(client, chat.id._serialized, contactNameCache, state, 100, false).catch(() => [])));
   const namedChats = displayableChats
     .map((chat) => {
       const id = chat.id._serialized;
@@ -1443,8 +1444,9 @@ async function listMessages(
   senderNameCache: Map<string, string>,
   state: AmirosState,
   limit = 100,
+  includeDeletedArchive = true,
 ) {
-  const includeDeletedArchive = (liveMessages: DashboardMessage[]): DashboardMessage[] => {
+  const mergeDeletedArchive = (liveMessages: DashboardMessage[]): DashboardMessage[] => {
     const archivedByMessageId = new Map(state.listDeletedMessageArchive(chatId).map((item) => [item.messageId, item]));
     const toDeletedDashboardMessage = (item: DeletedMessageArchiveItem, id = `deleted:${item.id}`): DashboardMessage => ({
         id,
@@ -1464,9 +1466,9 @@ async function listMessages(
         },
       });
     const liveWithDeletedPresentation = liveMessages.map((message) => {
-      const archived = archivedByMessageId.get(message.id);
+      const archived = archivedByMessageId.get(message.id) || findDeletedMessageArchiveMatch(message, archivedByMessageId.values());
       if (!archived) return message;
-      archivedByMessageId.delete(message.id);
+      archivedByMessageId.delete(archived.messageId);
       // WhatsApp often retains a generic media shell after deletion. Replace
       // that shell with the local archive notice instead of making it look
       // like an ordinary media message.
@@ -1539,7 +1541,7 @@ async function listMessages(
         type: messageType,
         hasMedia: message.hasMedia,
         deleted: isDeleted
-          ? { deletedAt: message.timestamp < 10_000_000_000 ? message.timestamp * 1_000 : message.timestamp }
+          ? { deletedAt: undefined }
           : undefined,
         mediaUrl: message.hasMedia ? mediaUrlFor(chatId, id) : undefined,
         senderId: chatId.endsWith("@g.us") ? message.author : undefined,
@@ -1552,7 +1554,8 @@ async function listMessages(
     }));
     const resolvedMessages = resolveQuotedMessageReferences(dashboardMessages);
     const namedMessages = await withGroupSenderNames(client, chatId, resolvedMessages, senderNameCache);
-    return includeDeletedArchive(restoreOutgoingMediaCaptions(state, chatId, namedMessages));
+    const liveMessages = restoreOutgoingMediaCaptions(state, chatId, namedMessages);
+    return includeDeletedArchive ? mergeDeletedArchive(liveMessages) : liveMessages;
   } catch {
     // Fall back to WhatsApp Web's per-chat collection while the public API is syncing.
     const page = (client as WhatsAppClient & {
@@ -1735,7 +1738,7 @@ async function listMessages(
     const resolvedMessages = resolveQuotedMessageReferences(dashboardMessages);
     const namedMessages = await withGroupSenderNames(client, chatId, resolvedMessages, senderNameCache);
     const liveMessages = restoreOutgoingMediaCaptions(state, chatId, namedMessages);
-    return includeDeletedArchive(liveMessages);
+    return includeDeletedArchive ? mergeDeletedArchive(liveMessages) : liveMessages;
   }
 }
 
@@ -1823,6 +1826,15 @@ export function startAmirosDashboard(options: DashboardOptions) {
     calendarFeedTokenPath,
     port,
   } = options;
+  // Managed feature flags are deliberately fail-open for local capabilities.
+  // Only a concrete disabled assignment on an active paired Mac turns a
+  // feature off; missing, pending, offline, and unmanaged states keep the
+  // user's existing local experience intact.
+  const controlledFeatureEnabled = (featureId: string) =>
+    !controlCenter || controlCenter.isFeatureEnabled(featureId);
+  const deletedMessageArchiveEnabled = () => controlledFeatureEnabled("deleted-message-archive");
+  const relationshipSuggestionsEnabled = () => controlledFeatureEnabled("relationship-suggestions");
+  const replySuggestionsEnabled = () => controlledFeatureEnabled("reply-suggestions");
   const dashboardStartedAt = Date.now();
   const refreshWritingStyle = (chatId: string) => {
     void writingStyleLearner?.refreshIfDue(chatId).catch((error) => {
@@ -2349,7 +2361,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
       const messageMatch = pathname.match(/^\/api\/chats\/([^/]+)\/messages$/);
       if (request.method === "GET" && messageMatch?.[1]) {
         const chatId = decodeURIComponent(messageMatch[1]);
-        const messages = await listMessages(client, chatId, senderNameCache, state);
+        const messages = await listMessages(client, chatId, senderNameCache, state, 100, deletedMessageArchiveEnabled());
         const added = rememberDashboardMessages(state, chatId, messages);
         if (added > 0) void intelligenceLearner?.analyzeIncoming(chatId);
         const contactName = chatNameCache.get(chatId) || state.getChatName(chatId) || "WhatsApp contact";
@@ -2375,6 +2387,10 @@ export function startAmirosDashboard(options: DashboardOptions) {
       const deletedMessageMatch = pathname.match(/^\/api\/chats\/([^/]+)\/deleted-messages\/([^/]+)$/);
       const deletedMessageMediaMatch = pathname.match(/^\/api\/chats\/([^/]+)\/deleted-messages\/([^/]+)\/media$/);
       if (request.method === "GET" && deletedMessageMatch?.[1] && deletedMessageMatch[2]) {
+        if (!deletedMessageArchiveEnabled()) {
+          sendJson(response, 403, { error: "Saved deleted messages are turned off for this AmirOS account." });
+          return;
+        }
         if (!deletedMessageArchive) {
           sendJson(response, 404, { error: "Saved deleted messages are not available in this AmirOS copy." });
           return;
@@ -2401,6 +2417,10 @@ export function startAmirosDashboard(options: DashboardOptions) {
         return;
       }
       if (request.method === "GET" && deletedMessageMediaMatch?.[1] && deletedMessageMediaMatch[2]) {
+        if (!deletedMessageArchiveEnabled()) {
+          sendJson(response, 403, { error: "Saved deleted messages are turned off for this AmirOS account." });
+          return;
+        }
         if (!deletedMessageArchive) {
           sendJson(response, 404, { error: "Saved deleted media is not available in this AmirOS copy." });
           return;
@@ -2439,7 +2459,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
         const chatId = decodeURIComponent(scanHistoryMatch[1]);
         const body = await readJson<{ limit?: number }>(request);
         const limit = Math.max(50, Math.min(500, Math.floor(body.limit || 300)));
-        const messages = await listMessages(client, chatId, senderNameCache, state, limit);
+        const messages = await listMessages(client, chatId, senderNameCache, state, limit, false);
         const added = rememberDashboardMessages(state, chatId, messages);
         if (added > 0) void intelligenceLearner?.analyzeIncoming(chatId);
         state.addActivity("system", "Older chat history scanned", `${chatNameCache.get(chatId) || chatId} · ${added} new messages saved`);
@@ -2462,6 +2482,8 @@ export function startAmirosDashboard(options: DashboardOptions) {
         }
         const ownerName = state.getSettings().ownerProfile.displayName;
         const assessedAt = Date.now();
+        const replySuggestionsAvailable = replySuggestionsEnabled();
+        const relationshipSuggestionsAvailable = relationshipSuggestionsEnabled();
         const candidates = state.intelligenceSnapshot()
           .filter((item) => !archived.has(item.chatId))
           .map((item) => {
@@ -2487,7 +2509,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
           .filter((item) => isKnownIntelligenceChat(item.chatId, item.contactName));
         const ambiguousContexts = new Map<string, ReplyAssessmentContextEntry[]>();
         const uncachedAmbiguousChatIds = new Set(
-          candidates
+          (replySuggestionsAvailable ? candidates : [])
             .filter((item) => item.replyAssessment.requiresAi)
             .filter((item) => {
               const context = state.getConversationMemory(item.chatId, 8);
@@ -2516,7 +2538,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
             context,
             cache: state,
             ai,
-            allowAi: uncachedAmbiguousChatIds.has(item.chatId),
+            allowAi: replySuggestionsAvailable && uncachedAmbiguousChatIds.has(item.chatId),
           });
           const { replyAssessment: _deterministicReplyAssessment, ...chat } = item;
           return { ...chat, needsReply: replyAssessment.needsReply, replyAssessment };
@@ -2560,9 +2582,13 @@ export function startAmirosDashboard(options: DashboardOptions) {
           lastIncoming: item.lastIncoming,
           lastInteraction: item.lastInteraction,
         })), assessedAt);
-        state.resolveInactiveProactiveDelivery(new Set(proactiveCandidates.map((item) => item.id)), assessedAt);
+        const enabledProactiveCandidates = proactiveCandidates.filter((item) =>
+          (replySuggestionsAvailable || item.kind !== "reply") &&
+          (relationshipSuggestionsAvailable || item.kind !== "meaningful_change"),
+        );
+        state.resolveInactiveProactiveDelivery(new Set(enabledProactiveCandidates.map((item) => item.id)), assessedAt);
         const feedbackRankedProactive = applyProactiveFeedbackRanking(
-          applyProactiveDeliveryState(proactiveCandidates, proactiveDelivery),
+          applyProactiveDeliveryState(enabledProactiveCandidates, proactiveDelivery),
           proactiveDelivery,
           assessedAt,
         );
@@ -2600,7 +2626,7 @@ export function startAmirosDashboard(options: DashboardOptions) {
           subjectNames: string[];
           subjectChatIds: string[];
         }>();
-        for (const chat of chats) {
+        for (const chat of relationshipSuggestionsAvailable ? chats : []) {
           const chatId = chat.chatId;
           if (!chatId) continue;
           for (const insight of chat.insights) {
@@ -2638,6 +2664,15 @@ export function startAmirosDashboard(options: DashboardOptions) {
         }
         const questionHistory = state.intelligenceQuestionHistory().map((item) => ({
           ...item,
+          feedback: (() => {
+            const feedback = state.latestIntelligenceAnswerFeedback(item.id);
+            return feedback ? {
+              rating: feedback.rating,
+              reasons: feedback.reasons,
+              note: feedback.note,
+              createdAt: feedback.createdAt,
+            } : undefined;
+          })(),
           answer: cleanNetworkAnswerText(item.answer, []),
           sources: item.sources.filter((source) => isKnownIntelligenceChat(
             source.chatId,
@@ -2649,21 +2684,25 @@ export function startAmirosDashboard(options: DashboardOptions) {
         }));
         sendJson(response, 200, {
           generatedAt: Date.now(),
-          needsReply: chats.filter((item) =>
-            item.needsReply &&
-            !item.chatId.endsWith("@newsletter") &&
-            !item.chatId.endsWith("@broadcast")
-          ).slice(0, 20),
+          needsReply: replySuggestionsAvailable
+            ? chats.filter((item) =>
+              item.needsReply &&
+              !item.chatId.endsWith("@newsletter") &&
+              !item.chatId.endsWith("@broadcast")
+            ).slice(0, 20)
+            : [],
           commitments,
           events,
           calendarEvents,
           todos,
           // A changing relationship can have several supporting observations,
           // but the Overview should ask for at most one review per person.
-          changes: [...changesByCluster.values()]
-            .sort((a, b) => b.updatedAt - a.updatedAt)
-            .filter((item, index, items) => items.findIndex((candidate) => candidate.chatId === item.chatId) === index)
-            .slice(0, 30),
+          changes: relationshipSuggestionsAvailable
+            ? [...changesByCluster.values()]
+              .sort((a, b) => b.updatedAt - a.updatedAt)
+              .filter((item, index, items) => items.findIndex((candidate) => candidate.chatId === item.chatId) === index)
+              .slice(0, 30)
+            : [],
           chats,
           questionHistory,
           suggestedQuestions: suggestedIntelligenceQuestions(chats, commitments, events),
@@ -2701,13 +2740,80 @@ export function startAmirosDashboard(options: DashboardOptions) {
         return;
       }
 
+      const intelligenceFeedbackMatch = pathname.match(/^\/api\/intelligence\/answers\/([^/]+)\/feedback$/);
+      if (request.method === "POST" && intelligenceFeedbackMatch?.[1]) {
+        const answerId = decodeURIComponent(intelligenceFeedbackMatch[1]);
+        const body = await readJson<{
+          rating?: "helpful" | "needs_work";
+          reasons?: string[];
+          note?: string;
+          suggestionContext?: {
+            chatId?: string;
+            candidateId?: string;
+            fingerprint?: string;
+            kind?: "upcoming_context" | "commitment" | "todo" | "reply" | "meaningful_change";
+          };
+        }>(request);
+        if (body.rating !== "helpful" && body.rating !== "needs_work") {
+          sendJson(response, 400, { error: "Choose helpful or needs work" });
+          return;
+        }
+        const allowedReasons = new Set([
+          "outdated_or_incorrect", "wrong_person", "missed_context", "irrelevant", "unclear", "too_long",
+        ]);
+        const reasons = [...new Set(Array.isArray(body.reasons) ? body.reasons : [])]
+          .filter((reason): reason is "outdated_or_incorrect" | "wrong_person" | "missed_context" | "irrelevant" | "unclear" | "too_long" => allowedReasons.has(reason))
+          .slice(0, 4);
+        const suggestion = body.suggestionContext ? {
+          candidateId: body.suggestionContext.candidateId,
+          fingerprint: body.suggestionContext.fingerprint,
+          kind: body.suggestionContext.kind,
+          chatId: body.suggestionContext.chatId,
+        } : undefined;
+        const feedback = state.recordIntelligenceAnswerFeedback(answerId, {
+          rating: body.rating,
+          reasons,
+          note: body.note,
+          suggestion,
+        });
+        if (!feedback) {
+          sendJson(response, 404, { error: "Ask answer not found" });
+          return;
+        }
+        if (suggestion?.candidateId && suggestion.fingerprint && /^[a-f0-9]{24}$/u.test(suggestion.fingerprint)) {
+          const shouldRetireSuggestion = body.rating === "needs_work"
+            && reasons.some((reason) => reason === "outdated_or_incorrect" || reason === "wrong_person" || reason === "irrelevant");
+          state.setProactiveDeliveryDecision(
+            suggestion.candidateId,
+            suggestion.fingerprint,
+            shouldRetireSuggestion ? "dismissed" : "opened",
+            Date.now(),
+            { kind: suggestion.kind, chatId: suggestion.chatId },
+          );
+        }
+        sendJson(response, 201, { feedback: {
+          rating: feedback.rating,
+          reasons: feedback.reasons,
+          note: feedback.note,
+          createdAt: feedback.createdAt,
+        } });
+        return;
+      }
+
       if (request.method === "POST" && pathname === "/api/intelligence/search") {
         const body = await readJson<{
           query?: string;
           followUp?: { question?: string; answer?: string; sourceRefs?: Array<{ id?: string; chatId?: string; kind?: string }> };
           scope?: { knowledge?: boolean; calendar?: boolean };
           selectedContactId?: string;
-          suggestionContext?: { chatId?: string; sourceIds?: string[] };
+          suggestionContext?: {
+            chatId?: string;
+            sourceIds?: string[];
+            candidateId?: string;
+            fingerprint?: string;
+            kind?: "upcoming_context" | "commitment" | "todo" | "reply" | "meaningful_change";
+          };
+          improvement?: { answerId?: string; reasons?: string[]; note?: string };
         }>(request);
         const query = body.query?.replace(/\s+/g, " ").trim() || "";
         if (!query || query.length > 500) {
@@ -2720,7 +2826,17 @@ export function startAmirosDashboard(options: DashboardOptions) {
         } catch {
           // Continue with saved memory if WhatsApp is still syncing.
         }
-        const followUp = body.followUp?.question && body.followUp?.answer ? {
+        const priorAnswerForImprovement = typeof body.improvement?.answerId === "string"
+          ? state.intelligenceQuestionById(body.improvement.answerId.slice(0, 120))
+          : undefined;
+        const followUp = priorAnswerForImprovement ? {
+          question: priorAnswerForImprovement.question,
+          answer: priorAnswerForImprovement.answer.slice(0, 2_000),
+          sourceRefs: priorAnswerForImprovement.sources
+            .filter((source) => source.kind === "insight")
+            .map((source) => ({ id: source.id, chatId: source.chatId }))
+            .slice(0, 12),
+        } : body.followUp?.question && body.followUp?.answer ? {
           question: body.followUp.question.replace(/\s+/g, " ").trim().slice(0, 500),
           answer: body.followUp.answer.replace(/\s+/g, " ").trim().slice(0, 2_000),
           sourceRefs: (Array.isArray(body.followUp.sourceRefs) ? body.followUp.sourceRefs : [])
@@ -2772,8 +2888,10 @@ export function startAmirosDashboard(options: DashboardOptions) {
             return;
           }
           if (correction.status === "applied") {
-            state.rememberIntelligenceAnswer(query, correction.answer, []);
+            const historyItem = state.rememberIntelligenceAnswer(query, correction.answer, []);
             state.addActivity("system", "Memory corrected", correction.result.previous.content.slice(0, 140));
+            sendJson(response, 200, { answerId: historyItem.id, answer: correction.answer, evidenceIds: [], sources: [] });
+            return;
           }
           sendJson(response, 200, { answer: correction.answer, evidenceIds: [], sources: [] });
           return;
@@ -2804,6 +2922,11 @@ export function startAmirosDashboard(options: DashboardOptions) {
             ),
           );
         }
+        const feedbackRanking = state.intelligenceAnswerSourceRanking(query, resolvedContactId);
+        retrievedRecords.sort((left, right) => {
+          const rank = (id: string) => feedbackRanking.boosted.has(id) ? -1 : feedbackRanking.penalized.has(id) ? 1 : 0;
+          return rank(left.id) - rank(right.id);
+        });
         const suggestionChatId = typeof body.suggestionContext?.chatId === "string"
           ? body.suggestionContext.chatId.replace(/\s+/g, "").slice(0, 240)
           : undefined;
@@ -2831,7 +2954,12 @@ export function startAmirosDashboard(options: DashboardOptions) {
           ? state.searchIntelligence(relationship.temporalFocus === "historical" ? "historical events" : "", 80, archived)
             .filter((record) => relationshipSourceIds.has(record.id))
           : [];
-        const groundedRecords = [...new Map([...anchoredRecords, ...records, ...relationshipRecords].map((record) => [record.id, record])).values()].slice(0, 60);
+        // A proactive card is a promise about its own evidence. Do not widen it
+        // with generic keyword or relationship retrieval: that was allowing a
+        // person-memory prompt to pull in unrelated tasks, plans, and facts.
+        const groundedRecords = anchoredRecords.length
+          ? anchoredRecords
+          : [...new Map([...records, ...relationshipRecords].map((record) => [record.id, record])).values()].slice(0, 60);
         const answerRecords = groundedRecords;
         const enriched = groundedRecords.map((record) => ({
           ...record,
@@ -2843,6 +2971,13 @@ export function startAmirosDashboard(options: DashboardOptions) {
           state.getSettings().ownerProfile.displayName,
           followUp,
           relationship.briefs,
+          {
+            presentationGuidance: state.intelligenceAnswerGuidance(),
+            improvementFeedback: priorAnswerForImprovement ? [
+              `Revise the previous answer for this same question. Feedback reasons: ${(body.improvement?.reasons || []).filter((reason) => typeof reason === "string").slice(0, 4).join(", ") || "needs work"}.`,
+              typeof body.improvement?.note === "string" ? `Owner note: ${body.improvement.note.replace(/\s+/gu, " ").trim().slice(0, 320)}` : "",
+            ].filter(Boolean).join(" ") : undefined,
+          },
         );
         const recordsById = new Map(answerRecords.map((record) => [record.id, record]));
         const evidenceIds = answer.evidenceIds.length || anchoredRecords.length === 0
@@ -2856,9 +2991,9 @@ export function startAmirosDashboard(options: DashboardOptions) {
               contactName: chatNameCache.get(record.chatId) || state.getChatName(record.chatId) || "WhatsApp contact",
             }] : [];
           });
-        state.rememberIntelligenceAnswer(query, answer.answer, sources);
+        const historyItem = state.rememberIntelligenceAnswer(query, answer.answer, sources, priorAnswerForImprovement?.id);
         state.addActivity("system", "Relationship memory searched", `${records.length} local records reviewed`);
-        sendJson(response, 200, { ...answer, evidenceIds, sources, resolvedContactId });
+        sendJson(response, 200, { ...answer, answerId: historyItem.id, parentAnswerId: historyItem.parentAnswerId, evidenceIds, sources, resolvedContactId });
         return;
       }
 
@@ -2985,6 +3120,10 @@ export function startAmirosDashboard(options: DashboardOptions) {
         /^\/api\/chats\/([^/]+)\/messages\/([^/]+)\/reply-suggestion$/,
       );
       if (request.method === "POST" && replySuggestionMatch?.[1] && replySuggestionMatch[2]) {
+        if (!replySuggestionsEnabled()) {
+          sendJson(response, 403, { error: "Reply suggestions are turned off for this AmirOS account." });
+          return;
+        }
         const chatId = decodeURIComponent(replySuggestionMatch[1]);
         const messageId = decodeURIComponent(replySuggestionMatch[2]);
         const contact = state.getContact(chatId);
@@ -3031,6 +3170,10 @@ export function startAmirosDashboard(options: DashboardOptions) {
         /^\/api\/chats\/([^/]+)\/messages\/([^/]+)\/reply-suggestion\/feedback$/,
       );
       if (request.method === "POST" && replySuggestionFeedbackMatch?.[1] && replySuggestionFeedbackMatch[2]) {
+        if (!replySuggestionsEnabled()) {
+          sendJson(response, 403, { error: "Reply suggestions are turned off for this AmirOS account." });
+          return;
+        }
         const chatId = decodeURIComponent(replySuggestionFeedbackMatch[1]);
         const messageId = decodeURIComponent(replySuggestionFeedbackMatch[2]);
         const body = await readJson<{ rating?: unknown; reasons?: unknown; note?: unknown }>(request, 2_048);

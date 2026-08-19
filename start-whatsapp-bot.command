@@ -93,10 +93,35 @@ fi
 
 if [[ ! -f "$PID_FILE" ]]; then
   echo "Starting AmirOS in the background..."
-  "$NODE_BIN" scripts/launch-amiros.mjs
+  if [[ -n "${AMIROS_INSTALL_TEST_WATCHDOG_ROOT:-}" ]]; then
+    # The installer integration test runs under the developer's macOS user.
+    # Keep its process completely isolated from the real AmirOS LaunchAgent.
+    "$NODE_BIN" scripts/launch-amiros.mjs
+  elif ! "$NODE_BIN" scripts/launch-agent.mjs --start; then
+    echo "Automatic recovery could not be set up. Starting AmirOS normally instead."
+    "$NODE_BIN" scripts/launch-amiros.mjs
+  fi
 fi
 
-AMIROS_PID="$(<"$PID_FILE")"
+AMIROS_PID=""
+for _attempt in {1..10}; do
+  if [[ -f "$PID_FILE" ]]; then
+    candidate_pid="$(<"$PID_FILE")"
+    if [[ "$candidate_pid" =~ '^[0-9]+$' ]]; then
+      AMIROS_PID="$candidate_pid"
+      break
+    fi
+  fi
+  sleep 1
+done
+
+if [[ -z "$AMIROS_PID" ]]; then
+  echo "AmirOS could not start its background recovery service."
+  echo "Please take a screenshot of this window and contact AmirOS Support."
+  read -r "?Press Return to close..."
+  exit 1
+fi
+
 echo "Background process: $AMIROS_PID"
 echo "You can close this Terminal window after the dashboard opens. AmirOS will keep monitoring itself."
 echo "Use stop-whatsapp-bot.command when you want to stop AmirOS."
