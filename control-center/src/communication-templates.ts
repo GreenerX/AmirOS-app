@@ -93,8 +93,12 @@ function copyFor(template: CommunicationTemplateKey, name: string, options: Comm
       subject: "A new AmirOS beta update is ready ✦",
       eyebrow: "UPDATE READY",
       headline: "A calmer improvement is ready.",
-      paragraphs: [`Hi ${greeting},`, "A new AmirOS update is ready for your Mac. Open the Control Center to choose the Latest private beta download when you are ready."],
-      action: { label: "Latest private beta download", href: controlCenterUrl },
+      paragraphs: [
+        `Hi ${greeting},`,
+        "A new AmirOS beta update is ready for your Mac. Open AmirOS and accept its manual update prompt when you are ready. AmirOS never installs an update automatically.",
+        "Only if AmirOS does not show a prompt or needs recovery, use the tested download in the Control Center. In Downloads, unpack AmirOS-latest.zip if needed, open the AmirOS folder, then double-click Install AmirOS.command.",
+      ],
+      action: { label: "Open Control Center", href: controlCenterUrl },
       closing: "Amir",
     };
   }

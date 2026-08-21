@@ -12,6 +12,7 @@ import {
   ListTodo,
   MessageCircle,
   PencilLine,
+  ShieldCheck,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
@@ -24,6 +25,7 @@ import { readDashboardActionSummaries, saveDashboardActionSummary } from "../das
 import { formatDateTime, formatTime, timeOfDayGreeting } from "../format";
 import { hideIntelligenceAction, readHiddenIntelligenceActions, replyActionId } from "../intelligence-visibility";
 import { buildIntelligenceSnapshot, isKnownIntelligenceContactName } from "../intelligence-snapshot";
+import { isTrustworthyIntelligenceCard } from "../../../shared/intelligence-card-eligibility";
 import { replyAssessmentCopy } from "../reply-assessment-copy";
 import { buildTodaysFocus, isRecentlyPassedCalendarEvent, todaysFocusDismissalIds, todaysFocusPresentation, type TodaysFocusItem } from "../todays-focus";
 import { readHiddenTodaysFocus, saveHiddenTodaysFocus } from "../todays-focus-visibility";
@@ -65,6 +67,17 @@ export type NextBestAction = {
 };
 
 type TodoFilter = "all" | "open" | "completed";
+
+type RelationshipBriefKind = "change" | "thread" | "upcoming" | "reconnect";
+type RelationshipBriefItem = {
+  id: string;
+  kind: RelationshipBriefKind;
+  contactName: string;
+  chatId: string;
+  messageId?: string;
+  detail: string;
+  timestamp: number;
+};
 
 const OVERVIEW_QUOTES = [
   { text: "The only way to do great work is to love what you do.", author: "Steve Jobs" },
@@ -142,6 +155,101 @@ function nextBestText(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function contactFirstName(value: string) {
+  return value.trim().split(/\s+/u)[0] || value;
+}
+
+function agendaEventDetails(event: CalendarEvent & { contactName?: string }) {
+  const title = event.title.replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  const location = event.location?.replace(/\s+/g, " ").trim();
+  // Calendar imports can repeat the event name inside the location/description.
+  // Keep the useful person or place, but never repeat the title in a second line.
+  const locationRepeatsTitle = Boolean(location && title && location.toLocaleLowerCase().includes(title));
+  return [event.contactName, location && !locationRepeatsTitle ? location : undefined]
+    .filter(Boolean)
+    .join(" · ") || "Confirmed event";
+}
+
+function relationshipBriefItems(intelligence: IntelligenceData | undefined, now: number, activeChatIds?: ReadonlySet<string>, hidden?: ReadonlySet<string>): RelationshipBriefItem[] {
+  if (!intelligence) return [];
+  const directChats = new Map(intelligence.chats
+    .filter((chat) => !chat.isGroup)
+    .map((chat) => [chat.chatId, chat]));
+  const selected = new Set<string>();
+  const items: RelationshipBriefItem[] = [];
+  const eligible = (
+    chatId: string,
+    title: string,
+    detail: string,
+    evidence: { messageId?: string; timestamp?: number },
+    options: { currentClaim?: boolean; openFollowUp?: boolean; dueAt?: number } = {},
+  ) => {
+    const chat = directChats.get(chatId);
+    return Boolean(chat && (!activeChatIds || activeChatIds.has(chatId)) && isTrustworthyIntelligenceCard({
+      chatId,
+      isGroup: false,
+      title,
+      detail,
+      sourceIds: [evidence.messageId || title],
+      evidence: [evidence],
+      retainedMessageIds: chat.retainedMessageIds,
+      now,
+      ...options,
+    }));
+  };
+  const add = (item: RelationshipBriefItem) => {
+    if (selected.has(item.chatId)) return false;
+    selected.add(item.chatId);
+    items.push(item);
+    return true;
+  };
+  const change = [...intelligence.changes]
+    .filter((insight) => insight.status !== "outdated" && isKnownIntelligenceContactName(insight.contactName))
+    .sort((left, right) => toMilliseconds(right.evidence.timestamp) - toMilliseconds(left.evidence.timestamp))
+    .find((insight) => !selected.has(insight.chatId) && !hidden?.has(`change:${insight.id}`) && eligible(
+      insight.chatId, `What changed with ${contactFirstName(insight.contactName)}`, insight.content, insight.evidence,
+      { currentClaim: insight.validity === "current" || insight.freshness === "fresh" },
+    ));
+  if (change) add({ id: `change:${change.id}`, kind: "change", contactName: change.contactName, chatId: change.chatId, messageId: change.evidence.messageId, detail: nextBestText(change.content), timestamp: toMilliseconds(change.evidence.timestamp) });
+
+  const thread = [...intelligence.commitments]
+    .filter((commitment) => commitment.status === "open" || commitment.status === "needs_review")
+    .sort((left, right) => toMilliseconds(right.evidence.timestamp) - toMilliseconds(left.evidence.timestamp))
+    .find((commitment) => !selected.has(commitment.chatId) && !hidden?.has(`thread:${commitment.id}`) && eligible(
+      commitment.chatId, `Open thread with ${contactFirstName(commitment.contactName)}`, commitment.content, commitment.evidence,
+      { openFollowUp: true, dueAt: commitment.dueAt },
+    ));
+  if (thread) add({ id: `thread:${thread.id}`, kind: "thread", contactName: thread.contactName, chatId: thread.chatId, messageId: thread.evidence.messageId, detail: nextBestText(thread.content), timestamp: toMilliseconds(thread.evidence.timestamp) });
+
+  const upcoming = [...intelligence.events]
+    .filter((event) => event.status === "confirmed" && toMilliseconds(event.startAt) >= now)
+    .sort((left, right) => toMilliseconds(left.startAt) - toMilliseconds(right.startAt))
+    .find((event) => !selected.has(event.chatId) && !hidden?.has(`upcoming:${event.id}`) && eligible(
+      event.chatId, `Upcoming with ${contactFirstName(event.contactName)}: ${event.title}`, event.note || event.title, event.evidence,
+      { dueAt: toMilliseconds(event.startAt) },
+    ));
+  if (upcoming) add({ id: `upcoming:${upcoming.id}`, kind: "upcoming", contactName: upcoming.contactName, chatId: upcoming.chatId, messageId: upcoming.evidence.messageId, detail: `${nextBestText(upcoming.title)} · ${eventDateTime(toMilliseconds(upcoming.startAt))}`, timestamp: toMilliseconds(upcoming.evidence.timestamp) });
+
+  if (items.length < 3) {
+    const reconnect = [...directChats.values()]
+      .filter((chat) => chat.lastInteraction?.messageId && chat.lastInteraction.timestamp)
+      .map((chat) => ({ chat, timestamp: toMilliseconds(chat.lastInteraction!.timestamp) }))
+      .filter(({ timestamp }) => timestamp <= now - 21 * 86_400_000 && timestamp >= now - 120 * 86_400_000)
+      .sort((left, right) => left.timestamp - right.timestamp)
+      .find(({ chat, timestamp }) => !selected.has(chat.chatId) && !hidden?.has(`reconnect:${chat.chatId}`) && eligible(
+        chat.chatId, `Reconnect with ${contactFirstName(chat.contactName)}`, chat.lastInteraction?.content || "",
+        { messageId: chat.lastInteraction?.messageId, timestamp },
+      ));
+    if (reconnect) add({
+      id: `reconnect:${reconnect.chat.chatId}`, kind: "reconnect", contactName: reconnect.chat.contactName, chatId: reconnect.chat.chatId,
+      messageId: reconnect.chat.lastInteraction?.messageId,
+      detail: `You last spoke ${eventDateTime(reconnect.timestamp)}. ${nextBestText(reconnect.chat.lastInteraction?.content || "")}`,
+      timestamp: reconnect.timestamp,
+    });
+  }
+  return items;
+}
+
 function localDateTime(value: number) {
   const timestamp = toMilliseconds(value);
   const date = new Date(timestamp);
@@ -153,6 +261,29 @@ function calendarEnd(event: CalendarEvent) {
   return event.endAt && toMilliseconds(event.endAt) > startAt ? toMilliseconds(event.endAt) : startAt + 60 * 60 * 1_000;
 }
 
+type OverviewReadiness = {
+  kind: "connection" | "consent" | "learning" | "quiet";
+  eyebrow: string;
+  title: string;
+  detail: string;
+  action?: { label: string; view: ViewName };
+};
+
+function OverviewReadinessPanel({ state, onNavigate }: { state: OverviewReadiness; onNavigate: (view: ViewName) => void }) {
+  const icon = state.kind === "connection"
+    ? <MessageCircle size={23} />
+    : state.kind === "consent"
+      ? <ShieldCheck size={23} />
+      : state.kind === "learning"
+        ? <Sparkles size={23} />
+        : <CalendarClock size={23} />;
+  return <div className={`overview-readiness overview-readiness-${state.kind}`} role="status">
+    <span className="overview-readiness-icon" aria-hidden="true">{icon}</span>
+    <span className="overview-readiness-copy"><small>{state.eyebrow}</small><strong>{state.title}</strong><span>{state.detail}</span></span>
+    {state.action ? <button className="button compact primary overview-readiness-action" type="button" onClick={() => onNavigate(state.action!.view)}>{state.action.label}<ArrowRight size={15} /></button> : null}
+  </div>;
+}
+
 export function Overview({ data, chats, intelligence, onNavigate, onTrackingDecision, onOpenTrackingChat, onOpenNextBestAction, onTodoStatus, onTodoUpdate, onCalendarStatus, onRegenerateCalendarTitle, onReplyToMessage, onReplySuggestionFeedback, onInsightStatus, onDismissNextBestAction, onProactiveDecision }: OverviewProps) {
   const [deviceTime, setDeviceTime] = useState(() => new Date());
   const [quote] = useState(chooseOverviewQuote);
@@ -160,13 +291,10 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
   const [hiddenActionVersion, setHiddenActionVersion] = useState(0);
   const [hiddenTodaysFocus, setHiddenTodaysFocus] = useState<Set<string>>(() => readHiddenTodaysFocus());
   const [todaysFocusIcons, setTodaysFocusIcons] = useState<Record<string, string>>({});
-  const [nextBestVisuals, setNextBestVisuals] = useState<Record<string, string>>({});
   const [actionSummaries, setActionSummaries] = useState<Record<string, string>>(readDashboardActionSummaries);
   const pendingActionSummaries = useRef(new Set<string>());
   const pendingTodaysFocusIcons = useRef(new Set<string>());
   const failedTodaysFocusIcons = useRef(new Set<string>());
-  const pendingNextBestVisuals = useRef(new Set<string>());
-  const failedNextBestVisuals = useRef(new Set<string>());
   const [completingTodoIds, setCompletingTodoIds] = useState<Set<string>>(() => new Set());
   const [todoEditor, setTodoEditor] = useState<(TodoTask & { contactName: string }) | undefined>();
   const [calendarEditor, setCalendarEditor] = useState<(CalendarEvent & { chatId: string; contactName: string }) | undefined>();
@@ -223,8 +351,19 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
       .filter((todo) => todo.status === "inferred" && !hidden.has(todo.id))
       .sort((left, right) => toMilliseconds(right.evidence.timestamp) - toMilliseconds(left.evidence.timestamp));
   }, [hiddenActionVersion, intelligence]);
-  const newSignals = intelligence?.changes.filter((item) => item.status === "inferred" && isKnownIntelligenceContactName(item.contactName)) || [];
+  const relationshipBrief = useMemo(
+    () => relationshipBriefItems(intelligence, deviceTime.getTime(), new Set(chats.map((chat) => chat.id)), readHiddenIntelligenceActions()),
+    [chats, deviceTime, hiddenActionVersion, intelligence],
+  );
   const trackingRequests = data.knowledgeTrackingRequests.filter((item) => item.status === "pending").slice(0, 3);
+  const trackedChatCount = useMemo(() => Object.values(data.settings.contacts)
+    .filter((contact) => contact.knowledgeTracking === "enabled").length, [data.settings.contacts]);
+  const hasRecordedIntelligence = Boolean(intelligence && [
+    intelligence.chats.length,
+    intelligence.events.length,
+    intelligence.todos?.length || 0,
+    intelligence.changes.length,
+  ].some((count) => count > 0));
   const todaysAgenda = useMemo(() => (intelligence?.events || [])
     .filter((event) => (
       event.status === "confirmed"
@@ -241,6 +380,42 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
     () => todaysFocusPresentation(visibleTodaysFocus, deviceTime),
     [deviceTime, visibleTodaysFocus],
   );
+  const overviewReadiness = useMemo<OverviewReadiness>(() => {
+    if (data.connection.status !== "ready") return {
+      kind: "connection",
+      eyebrow: "Private workspace",
+      title: "Connect WhatsApp to begin",
+      detail: "Once connected, AmirOS can help you review the conversations you choose—nothing is learned without your permission.",
+      action: { label: "Open settings", view: "settings" },
+    };
+    if (trackingRequests.length > 0) return {
+      kind: "consent",
+      eyebrow: "First value",
+      title: "A conversation is ready for your approval",
+      detail: "Choose whether AmirOS should learn from it before it can surface private context.",
+      action: { label: "Review conversation", view: "inbox" },
+    };
+    if (trackedChatCount === 0) return {
+      kind: "consent",
+      eyebrow: "First value",
+      title: "Choose your first conversation",
+      detail: "Start with a chat you care about. AmirOS will only learn from conversations you explicitly allow.",
+      action: { label: "Choose a chat", view: "inbox" },
+    };
+    if (!hasRecordedIntelligence) return {
+      kind: "learning",
+      eyebrow: "Building your first brief",
+      title: "AmirOS is looking for what is worth keeping",
+      detail: "It surfaces plans, requests, and relationship context only when they can point back to an original message.",
+      action: { label: "Explore people", view: "intelligence" },
+    };
+    return {
+      kind: "quiet",
+      eyebrow: "Today",
+      title: "Nothing confirmed needs your attention",
+      detail: "Your approved conversations are checked for evidence-backed plans, requests, and meaningful changes.",
+    };
+  }, [data.connection.status, hasRecordedIntelligence, trackedChatCount, trackingRequests.length]);
   useEffect(() => {
     for (const item of visibleTodaysFocus) {
       const isBirthday = item.action === "calendar" && /birthday/i.test(item.title);
@@ -293,38 +468,8 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
       actionType: "todo" as const,
       actionId: todo.id,
     })),
-    ...newSignals.map((insight) => ({
-      kind: "New relationship detail",
-      title: insight.contactName,
-      detail: `${nextBestText(insight.content)}${suggestedSourceTime(insight.evidence.timestamp) ? ` · Suggested from ${suggestedSourceTime(insight.evidence.timestamp)}` : ""}`,
-      chatId: insight.chatId,
-      contactName: insight.contactName,
-      messageId: insight.evidence.messageId,
-      actionType: "insight" as const,
-      actionId: insight.id,
-    })),
-  ].slice(0, 6), [newSignals, planSuggestions, suggestedTodos, visibleNeedsReply]);
+  ].slice(0, 6), [planSuggestions, suggestedTodos, visibleNeedsReply]);
   const focus = focusActions[0];
-
-  useEffect(() => {
-    for (const action of focusActions) {
-      const chat = chats.find((candidate) => candidate.id === action.chatId);
-      if (chat?.avatarUrl || nextBestVisuals[action.actionId]
-        || pendingNextBestVisuals.current.has(action.actionId) || failedNextBestVisuals.current.has(action.actionId)) continue;
-      const type = action.actionType === "insight" ? "commitment" : action.actionType;
-      pendingNextBestVisuals.current.add(action.actionId);
-      void ensureTodaysFocusIcon({ title: action.title, type })
-        .then(({ url }) => {
-          if (!url) {
-            failedNextBestVisuals.current.add(action.actionId);
-            return;
-          }
-          setNextBestVisuals((current) => current[action.actionId] ? current : { ...current, [action.actionId]: url });
-        })
-        .catch(() => failedNextBestVisuals.current.add(action.actionId))
-        .finally(() => pendingNextBestVisuals.current.delete(action.actionId));
-    }
-  }, [chats, focusActions, nextBestVisuals]);
 
   useEffect(() => {
     for (const action of focusActions) {
@@ -362,6 +507,12 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
       return;
     }
     await onDismissNextBestAction(action);
+  };
+  const dismissRelationshipBrief = (item: RelationshipBriefItem) => {
+    // This only hides the item from this local briefing. It never deletes a
+    // message or changes the underlying relationship knowledge.
+    hideIntelligenceAction(item.id);
+    setHiddenActionVersion((version) => version + 1);
   };
   const openCalendarSuggestion = (action: NextBestAction) => {
     const event = planSuggestions.find((candidate) => candidate.id === action.actionId && candidate.chatId === action.chatId);
@@ -519,10 +670,10 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
           <div className="todays-focus-title-block">
             <span>
               <span className="todays-focus-title-row">
-                <h2 id="overview-reminders-title">{focusPresentation.title}</h2>
+                <h2 id="overview-reminders-title">{visibleTodaysFocus.length > 0 ? focusPresentation.title : overviewReadiness.kind === "quiet" ? "Today" : "Your private workspace"}</h2>
                 {visibleTodaysFocus.length > 0 ? <span className="count-badge intelligence-count">{visibleTodaysFocus.length}</span> : null}
               </span>
-              <small>{focusPresentation.subtitle}</small>
+              <small>{visibleTodaysFocus.length > 0 ? focusPresentation.subtitle : overviewReadiness.kind === "quiet" ? "A calm, evidence-backed view of what matters." : "Your private relationship intelligence, on your terms."}</small>
             </span>
           </div>
         </div>
@@ -606,7 +757,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
               </div>
             </article>;
           })}
-        </div> : <div className="overview-agenda-empty todays-focus-empty"><CalendarClock size={28} /><span><strong>You’re all caught up for today.</strong><small>When something needs you, it’ll show up here.</small></span></div>}
+        </div> : <OverviewReadinessPanel state={overviewReadiness} onNavigate={onNavigate} />}
       </section>
 
       <div className="overview-primary-grid">
@@ -619,7 +770,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
             {todaysAgenda.length > 0 ? <div className="overview-today-agenda" data-event-count={todaysAgenda.length > 5 ? "many" : todaysAgenda.length}>
               {todaysAgenda.map((event, index) => {
                 const startAt = toMilliseconds(event.startAt);
-                const details = [event.contactName, event.location].filter(Boolean).join(" · ") || "Confirmed event";
+                const details = agendaEventDetails(event);
                 return <button className="overview-timeline-event" type="button" key={event.id} onClick={() => onNavigate("calendar")}>
                   <time dateTime={new Date(startAt).toISOString()}>{event.allDay ? "All day" : formatTime(startAt)}</time>
                   <span className="overview-timeline-rail" aria-hidden="true"><span className={`overview-timeline-marker marker-${index % 4}`} /></span>
@@ -627,7 +778,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
                   <ArrowRight size={15} />
                 </button>;
               })}
-            </div> : <div className="overview-empty-state"><span className="overview-empty-state-icon"><CalendarDays size={21} /></span><span className="overview-empty-state-copy"><strong>Your day is clear.</strong><small>Nothing is scheduled for today yet.</small></span></div>}
+            </div> : <div className="overview-empty-state"><span className="overview-empty-state-icon"><CalendarDays size={21} /></span><span className="overview-empty-state-copy"><strong>No confirmed plans for today.</strong><small>Your day stays clear until a plan is confirmed.</small></span></div>}
             <footer className="overview-today-agenda-footer"><button className="text-button" type="button" onClick={() => onNavigate("calendar")}>View full agenda <ArrowRight size={15} /></button></footer>
           </section>
 
@@ -651,7 +802,33 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
         </div>
 
         <div className="overview-command-rail">
-          <section className="panel next-best-panel" aria-labelledby="overview-suggested-actions-title">
+          {relationshipBrief.length > 0 ? <section className="panel overview-private-briefing" aria-labelledby="overview-private-briefing-title">
+            <div className="panel-heading overview-card-heading">
+              <h2 id="overview-private-briefing-title"><Brain size={19} /> Private briefing</h2>
+              <span className="attention-label clear">Current</span>
+            </div>
+            <div className="overview-private-briefing-list">
+              {relationshipBrief.map((item) => {
+                const chat = chats.find((candidate) => candidate.id === item.chatId);
+                const timing = suggestedSourceTime(item.timestamp);
+                const category = item.kind === "change" ? "What changed" : item.kind === "thread" ? "Open thread" : item.kind === "upcoming" ? "Coming up" : "Reconnect";
+                const icon = item.kind === "change" ? <Sparkles size={16} /> : item.kind === "thread" ? <MessageCircle size={16} /> : item.kind === "upcoming" ? <CalendarCheck size={16} /> : <BellRing size={16} />;
+                return <div className="overview-private-briefing-row" key={item.id}>
+                  <button className="overview-private-briefing-item" type="button" onClick={() => onOpenNextBestAction(item.chatId, item.messageId)}>
+                    <span className="overview-private-briefing-avatar-wrap"><ContactAvatar name={item.contactName} src={chat?.avatarUrl} className="overview-private-briefing-avatar" /><span className="overview-private-briefing-kind" aria-hidden="true">{icon}</span></span>
+                    <span className="overview-private-briefing-copy">
+                      <small>{category} · {contactFirstName(item.contactName)}{timing ? ` · ${timing}` : ""}</small>
+                      <strong dir="auto">{item.detail}</strong>
+                    </span>
+                    <ArrowRight size={16} aria-hidden="true" />
+                  </button>
+                  <button className="overview-private-briefing-dismiss" type="button" aria-label={`Dismiss ${category.toLowerCase()} about ${contactFirstName(item.contactName)}`} title="Dismiss from Private briefing" onClick={() => dismissRelationshipBrief(item)}><X size={15} /></button>
+                </div>;
+              })}
+            </div>
+          </section> : null}
+
+          <section className="panel next-best-panel overview-suggested-actions-panel" aria-labelledby="overview-suggested-actions-title">
             <div className="panel-heading overview-card-heading"><h2 id="overview-suggested-actions-title"><Sparkles size={19} /> Suggested actions</h2><span className={focus || trackingRequests.length > 0 ? "attention-label" : "attention-label clear"}>{focus || trackingRequests.length > 0 ? "Priority" : "All clear"}</span></div>
             {focusActions.length > 0 || trackingRequests.length > 0 ? <div className="next-best-list">
               {trackingRequests.map((request) => {
@@ -673,13 +850,11 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
               {focusActions.map((action) => {
                 const chat = chats.find((candidate) => candidate.id === action.chatId);
                 const replyCopy = action.actionType === "reply" ? replyAssessmentCopy(action.replyAssessment) : undefined;
-                const visual = nextBestVisuals[action.actionId];
+                const actionIcon = action.actionType === "reply" ? <MessageCircle size={20} /> : action.actionType === "calendar" ? <CalendarCheck size={20} /> : action.actionType === "todo" ? <ListTodo size={20} /> : <Brain size={20} />;
                 return <div className="intelligence-focus next-best-focus" key={action.actionId}>
                   {chat?.avatarUrl
                     ? <ContactAvatar name={action.contactName} src={chat.avatarUrl} className="intelligence-focus-avatar" />
-                    : visual
-                      ? <img className="intelligence-focus-avatar next-best-focus-art" src={visual} alt="" />
-                      : <span className="intelligence-focus-symbol next-best-focus-art" aria-hidden="true">{action.actionType === "reply" ? <MessageCircle size={21} /> : action.actionType === "calendar" ? <CalendarCheck size={21} /> : action.actionType === "todo" ? <ListTodo size={21} /> : <Brain size={21} />}</span>}
+                    : <span className="next-best-row-icon" aria-hidden="true">{actionIcon}</span>}
                   <button className="next-best-focus-copy" type="button" onClick={() => openFocus(action)}>
                     <small>{action.kind}</small><strong dir="auto">{action.title}</strong><p dir="auto">{action.actionType === "reply" ? actionSummaries[action.actionId] || action.detail : action.detail}</p>{replyCopy ? <span className="reply-assessment-indicator">{replyCopy.text}</span> : null}
                   </button>
@@ -692,7 +867,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
                   </span>
                 </div>;
               })}
-            </div> : <div className="overview-empty-state" role="status"><span className="overview-empty-state-icon"><Sparkles size={21} /></span><span className="overview-empty-state-copy"><strong>You’re caught up</strong><small>AmirOS will surface the next useful action here.</small></span></div>}
+            </div> : <div className="overview-empty-state overview-quiet-summary" role="status"><span className="overview-empty-state-icon"><Sparkles size={21} /></span><span className="overview-empty-state-copy"><strong>Nothing needs confirmation.</strong><small>Only useful, evidence-backed items appear here.</small></span></div>}
           </section>
 
         </div>
@@ -715,7 +890,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
         <section className="event-detail-bubble reply-suggestion-editor reply-suggestion-editor--reply" role="dialog" aria-modal="true" aria-labelledby="overview-reply-suggestion-title" onMouseDown={(event) => event.stopPropagation()}>
           <header><ContactAvatar name={replyEditor.contactName} src={chats.find((chat) => chat.id === replyEditor.chatId)?.avatarUrl} className="reply-suggestion-avatar" /><span><small>Reply suggestion</small><h2 id="overview-reply-suggestion-title">Reply to {replyEditor.contactName}</h2></span><button className="icon-button" type="button" aria-label="Close" disabled={replySending} onClick={() => setReplyEditor(undefined)}><X size={18} /></button></header>
           <p className="reply-suggestion-context" dir="auto">{replyEditor.detail}</p>
-          <label className="reply-suggestion-compose"><span>Your reply</span><textarea autoFocus value={replyBody} placeholder={replyLoading ? "Preparing a reply…" : "Write a reply"} disabled={replyLoading || replySending} onChange={(event) => setReplyBody(event.target.value)} /></label>
+          <label className="reply-suggestion-compose"><span>Your reply</span><textarea dir="auto" autoFocus value={replyBody} placeholder={replyLoading ? "Preparing a reply…" : "Write a reply"} disabled={replyLoading || replySending} onChange={(event) => setReplyBody(event.target.value)} /></label>
           <div className="reply-suggestion-compose-tools">
             <button className="reply-draft-clear" type="button" disabled={replyLoading || replySending || !replyBody} onClick={() => { setReplyBody(""); setReplyError(""); }}>Clear draft</button>
             {onReplySuggestionFeedback && replyEditor.messageId ? <div className="reply-suggestion-feedback-quick" aria-label="Reply suggestion feedback">
@@ -728,7 +903,7 @@ export function Overview({ data, chats, intelligence, onNavigate, onTrackingDeci
           {onReplySuggestionFeedback && replyEditor.messageId && replyFeedback === "needs_work" ? <section className="reply-suggestion-feedback-details" aria-label="Improve this reply">
             <div><strong>What should be better?</strong><small>Your feedback helps shape future replies in this chat.</small></div>
             <div className="reply-suggestion-feedback-reasons">{["Doesn’t sound like me", "Too formal", "Too long", "Missed the point"].map((reason) => <button type="button" className={replyFeedbackReasons.includes(reason) ? "selected" : ""} key={reason} onClick={() => setReplyFeedbackReasons((current) => current.includes(reason) ? current.filter((item) => item !== reason) : [...current, reason])}>{reason}</button>)}</div>
-            <textarea className="reply-suggestion-feedback-note" value={replyFeedbackNote} maxLength={320} placeholder="Optional note" disabled={replyLoading || replySending} onChange={(event) => setReplyFeedbackNote(event.target.value)} />
+            <textarea className="reply-suggestion-feedback-note" dir="auto" value={replyFeedbackNote} maxLength={320} placeholder="Optional note" disabled={replyLoading || replySending} onChange={(event) => setReplyFeedbackNote(event.target.value)} />
             <button className="button compact reply-feedback-save" type="button" disabled={replyLoading || replySending || replyFeedbackState === "saving" || (replyFeedbackReasons.length === 0 && !replyFeedbackNote.trim())} onClick={() => void improveReplyFromFeedback()}>{replyFeedbackState === "saving" ? "Improving…" : "Improve reply"}</button>
           </section> : null}
           {replyError ? <p className="event-action-error">{replyError}</p> : null}

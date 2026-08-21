@@ -74,6 +74,13 @@ export type ThemeName =
 /** An explicit, per-contact preference. AmirOS never infers this from a name or photo. */
 export type ContactPronouns = "unspecified" | "she/her" | "he/him" | "they/them";
 
+export type ComposerTranslationPreference = {
+  targetLanguage: string;
+  direction: "outgoing_to_target";
+  confirmedAt: number;
+  source: "user_confirmed";
+};
+
 export type ContactPreferences = {
   mode: ReplyMode;
   autoReplyInitialDelaySeconds?: AutoReplyInitialDelaySeconds;
@@ -82,12 +89,36 @@ export type ContactPreferences = {
   hidden: boolean;
   tone: string;
   language: string;
+  /** A user-confirmed city and IANA zone used only for local-time display and scheduling. */
+  location?: string;
+  timezone?: string;
+  composerTranslationPreference: ComposerTranslationPreference | null;
   pronouns: ContactPronouns;
   memoryEnabled: boolean;
   knowledgeTracking: KnowledgeTrackingStatus;
   customInstructions: string;
   ownerTriggerAccess: OwnerTriggerAccess[];
   contactTriggerAccess: OwnerTriggerAccess[];
+};
+
+export type ScheduledMessageStatus = "pending" | "sending" | "sent" | "failed" | "cancelled";
+
+export type ScheduledMessage = {
+  id: string;
+  chatId: string;
+  body: string;
+  scheduledAt: number;
+  timezone: string;
+  status: ScheduledMessageStatus;
+  createdAt: number;
+  updatedAt: number;
+  attemptCount: number;
+  idempotencyKey: string;
+  source: "owner";
+  sentAt?: number;
+  failedAt?: number;
+  cancelledAt?: number;
+  error?: string;
 };
 
 export type KnowledgeTrackingRequest = {
@@ -380,6 +411,8 @@ export type IntelligenceChat = {
   chatId: string;
   contactName: string;
   isGroup: boolean;
+  /** Exact local message targets retained for evidence-backed card eligibility. */
+  retainedMessageIds?: string[];
   insights: ContactInsight[];
   commitments: RelationshipCommitment[];
   events: CalendarEvent[];
@@ -439,11 +472,39 @@ export type IntelligenceData = {
     question: string;
     answer: string;
     sources: IntelligenceSearchResult["sources"];
+    points?: Array<{ text: string; evidenceIds: string[] }>;
+    claims?: Array<{ text: string; evidenceIds: string[] }>;
     createdAt: number;
     feedback?: IntelligenceAnswerFeedbackSummary;
   }>;
   suggestedQuestions: string[];
   proactive?: ProactiveIntelligenceItem[];
+  /** Evidence-complete, presentation-neutral pool for future rotating surfaces. */
+  intelligenceCandidates?: IntelligenceCandidate[];
+};
+
+export type IntelligenceCandidate = {
+  id: string;
+  lane: "upcoming_plan" | "reply_context" | "open_commitment" | "due_task" | "recent_change" | "relationship_memory" | "reconnect_memory";
+  chatId: string;
+  contactName: string;
+  title: string;
+  preview: string;
+  question: string;
+  sourceIds: string[];
+  evidence: Array<{
+    messageId: string;
+    chatId: string;
+    conversationName?: string;
+    authorName?: string;
+    timestamp: number;
+    originalText: string;
+    exactMessageAvailable: true;
+  }>;
+  evidenceIds: string[];
+  timestamp: number;
+  temporalFrame: "current" | "upcoming" | "open_follow_up" | "worth_remembering";
+  dedupeKey: string;
 };
 
 export type AssistantSuggestionContext = {
@@ -474,6 +535,19 @@ export type IntelligenceAnswerFeedbackInput = {
   reasons?: IntelligenceAnswerFeedbackReason[];
   note?: string;
   suggestionContext?: AssistantSuggestionContext;
+};
+
+/** Local-only P2 review queue metadata. It intentionally omits answer and message bodies. */
+export type IntelligenceFeedbackReviewQueueItem = {
+  id: string;
+  answerId: string;
+  rating: IntelligenceAnswerFeedbackSummary["rating"];
+  reasons: IntelligenceAnswerFeedbackReason[];
+  createdAt: number;
+  resolvedContactId?: string;
+  sourceRefs: Array<{ id: string; chatId: string; kind: string }>;
+  status: "open" | "acknowledged" | "resolved";
+  reviewedAt?: number;
 };
 
 export type ProactiveIntelligenceItem = {
@@ -507,6 +581,10 @@ export type IntelligenceSearchResult = {
   parentAnswerId?: string;
   answer: string;
   evidenceIds: string[];
+  /** Structured answer envelope; each point must map to exact evidence IDs. */
+  points?: Array<{ text: string; evidenceIds: string[] }>;
+  /** Deterministic claim-to-source linkage returned by Ask. */
+  claims?: Array<{ text: string; evidenceIds: string[] }>;
   /** Ordered semantic icon tokens for bulleted answer points. */
   listIcons?: AnswerPointIcon[];
   /** Stable direct-contact identity resolved from a full name or picker choice. */
@@ -514,7 +592,10 @@ export type IntelligenceSearchResult = {
   disambiguation?: Array<{
     chatId: string;
     contactName: string;
-    /** Optional presentation context for a compact person-picker row. */
+    /** Verified direct-chat identity; group rows are never returned here. */
+    identityVerified?: true;
+    directChat?: true;
+    /** Presentation context for a compact person-picker row. */
     detail?: string;
     avatarUrl?: string;
     lastInteractionAt?: number;
@@ -524,6 +605,19 @@ export type IntelligenceSearchResult = {
     chatId: string;
     contactName: string;
     kind: "message" | "memory" | "insight" | "commitment" | "todo" | "profile" | "calendar_event";
+    /** Original saved message behind an interpreted insight, for evidence review. */
+    sourceContent?: string;
+    sourceTimestamp?: number;
+    /** The only source form eligible to prove an Ask answer. */
+    evidence: {
+      messageId: string;
+      chatId: string;
+      conversationName?: string;
+      authorName?: string;
+      timestamp: number;
+      originalText: string;
+      exactMessageAvailable: true;
+    };
     content: string;
     senderName?: string;
     explanation?: MemoryExplanation;

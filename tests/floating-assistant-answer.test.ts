@@ -46,10 +46,31 @@ describe("Ask AmirOS answer experience", () => {
     expect(styles).toContain("--answer-point-size: 28px; --answer-point-center: 14px; --answer-connector-gap: 5px;");
     expect(styles).toContain("grid-template-columns: var(--answer-point-size) minmax(0, 1fr)");
     expect(styles).toContain(".ask-drawer-answer .floating-ai-answer-content .answer-icon-item { padding-inline-start: 0; }");
+    expect(component).toContain("evidence.originalText");
+    expect(component).toContain("function namesKnownContact(query: string, chats: ChatSummary[]): boolean");
+    expect(component).toContain("sourceChatIds.length === 1 ? sourceChatIds[0] : undefined");
     expect(styles).toContain("inset-inline-start: calc(var(--answer-point-center) - .5px)");
     expect(styles).toContain("top: calc(var(--answer-point-size) + var(--answer-connector-gap)); bottom: var(--answer-connector-gap);");
     expect(styles).toContain("width: var(--answer-point-size); height: var(--answer-point-size);");
     expect(styles).toContain("padding: 5px;");
     expect(styles).toContain(".answer-icon-item:last-child { padding-bottom: 0; }");
+  });
+
+  it("keeps a restrained rail shadow closed and deepens it seamlessly as Ask opens", () => {
+    expect(styles).toContain("box-shadow: -16px 0 38px rgba(3, 37, 26, .24), -4px 0 14px rgba(3, 37, 26, .17)");
+    expect(styles).toContain("transition: clip-path .82s cubic-bezier(.4, 0, .2, 1), box-shadow .82s cubic-bezier(.4, 0, .2, 1)");
+    expect(styles).toContain("box-shadow: -29px 0 62px rgba(3, 37, 26, .3), -8px 0 22px rgba(3, 37, 26, .18)");
+    expect(styles).toContain(".floating-assistant.open .ask-drawer-depth { opacity: 1; }");
+    expect(component).toContain('className="ask-rail-shadow"');
+    expect(styles).toContain(".ask-rail-shadow {");
+    expect(styles).toContain("A duplicate of the ribbon lives behind it solely to cast a contour-shaped shadow.");
+    expect(styles).toContain("filter: drop-shadow(-16px 0 22px rgba(3, 37, 26, .28))");
+    expect(styles).toContain(".floating-assistant.open .ask-rail-shadow {");
+    expect(styles).toContain("filter: drop-shadow(-28px 0 42px rgba(3, 37, 26, .32))");
+    expect(styles).toContain(".floating-assistant.motion-closing .ask-drawer-depth");
+    expect(styles).toContain("animation: ask-drawer-depth-close .82s cubic-bezier(.4, 0, .2, 1) both");
+    expect(styles).toContain("30% { opacity: .9; }");
+    expect(styles).toContain("72% { opacity: .26; }");
+    expect(styles).toContain(".floating-assistant.motion-closing .ask-rail-shadow");
   });
 });

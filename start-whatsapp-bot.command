@@ -7,6 +7,14 @@ AMIROS_PORT="${AMIROS_PORT:-3789}"
 DASHBOARD_URL="http://127.0.0.1:${AMIROS_PORT}"
 PID_FILE="$PROJECT_DIR/work/amiros.pid"
 
+# Test-only installer launches are deliberately isolated from the normal
+# dashboard. Refuse the production port even if a future test is configured
+# incorrectly; this prevents a temporary copy from ever hiding real data.
+if [[ -n "${AMIROS_INSTALL_TEST_WATCHDOG_ROOT:-}" && "$AMIROS_PORT" == "3789" ]]; then
+  echo "Installer QA requires an isolated local port; port 3789 belongs to the normal AmirOS dashboard."
+  exit 1
+fi
+
 cd "$PROJECT_DIR" || exit 1
 mkdir -p "$PROJECT_DIR/work"
 

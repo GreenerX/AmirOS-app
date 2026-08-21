@@ -21,6 +21,7 @@ import type {
   IntelligenceData,
   IntelligenceAnswerFeedbackInput,
   IntelligenceAnswerFeedbackSummary,
+  IntelligenceFeedbackReviewQueueItem,
   IntelligenceSearchResult,
   AssistantSuggestionContext,
   ProactiveIntelligenceItem,
@@ -29,6 +30,7 @@ import type {
   ThemeName,
   TerminalLog,
   WritingStyleProfile,
+  ScheduledMessage,
   AmirOSUpdateStatus,
   ControlCenterStatus,
 } from "./types";
@@ -37,6 +39,7 @@ import type { CurrentWeather, TimeZoneBackgrounds, TimeZoneCity } from "./timezo
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 const demoManualMemory = new Map<string, ContactMemoryItem[]>();
 const demoContacts = new Map<string, ContactPreferences>();
+const demoScheduledMessages = new Map<string, ScheduledMessage[]>();
 
 function demoContactFor(chatId: string): ContactPreferences {
   const existing = demoContacts.get(chatId);
@@ -198,9 +201,11 @@ export async function restartAmirosBackend(): Promise<{ accepted: true; status: 
   return request("/api/system/backend-restart", { method: "POST", body: "{}" });
 }
 
-export async function getChats(): Promise<ChatSummary[]> {
-  if (isDemo) return structuredClone(demoChats);
-  return (await request<{ chats: ChatSummary[] }>("/api/chats")).chats;
+export type ChatsPage = { chats: ChatSummary[]; hasMore: boolean };
+
+export async function getChats(offset = 0, limit = 80): Promise<ChatsPage> {
+  if (isDemo) return { chats: structuredClone(demoChats.slice(offset, offset + limit)), hasMore: offset + limit < demoChats.length };
+  return request<ChatsPage>(`/api/chats?offset=${encodeURIComponent(offset)}&limit=${encodeURIComponent(limit)}`);
 }
 
 export async function getMessages(chatId: string): Promise<{
@@ -282,6 +287,16 @@ export async function scanChatHistory(chatId: string, limit = 300): Promise<{
   memory: ChatMemoryEntry[];
   incomingMessageCount: number;
 }> {
+  if (isDemo) {
+    const messages = structuredClone(demoMessagesForChat(chatId)).slice(-limit);
+    return {
+      scanned: messages.length,
+      added: messages.length,
+      messages,
+      memory: [],
+      incomingMessageCount: messages.filter((message) => !message.fromMe).length,
+    };
+  }
   return request(`/api/chats/${encodeURIComponent(chatId)}/history/scan`, {
     method: "POST",
     body: JSON.stringify({ limit }),
@@ -328,6 +343,17 @@ export async function getCalendarSubscription(): Promise<CalendarSubscriptionInf
   return request("/api/calendar/subscription");
 }
 
+function demoAskEvidence(
+  messageId: string,
+  chatId: string,
+  conversationName: string,
+  authorName: string | undefined,
+  timestamp: number,
+  originalText: string,
+) {
+  return { messageId, chatId, conversationName, authorName, timestamp, originalText, exactMessageAvailable: true as const };
+}
+
 export async function askIntelligence(
   query: string,
   options?: {
@@ -371,10 +397,13 @@ export async function askIntelligence(
         answerId,
         answer: "The latest I know is from Aug 16: Michelle Soffen was focused on product planning and vendor evaluation, and she preferred clear decisions with practical next steps. I don’t have a newer update on how she is today.",
         evidenceIds: ["demo-michelle-soffen-context"],
+        claims: [{ text: "Michelle Soffen was focused on product planning and vendor evaluation.", evidenceIds: ["demo-michelle-soffen-context"] }],
         resolvedContactId: "michelle-soffen@demo",
         sources: [{
           id: "demo-michelle-soffen-context", chatId: "michelle-soffen@demo", contactName: "Michelle Soffen",
           kind: "insight", content: "Michelle was focused on product planning and vendor evaluation and preferred clear decisions with practical next steps.",
+          sourceContent: "I’m focused on the product plan and vendor evaluation. Please bring clear decisions and practical next steps.",
+          evidence: demoAskEvidence("demo-michelle-soffen-message", "michelle-soffen@demo", "Michelle Soffen", "Michelle Soffen", timestamp, "I’m focused on the product plan and vendor evaluation. Please bring clear decisions and practical next steps."),
           senderName: "Michelle Soffen", timestamp, score: 100,
         }],
       };
@@ -385,10 +414,13 @@ export async function askIntelligence(
         answerId,
         answer: "The latest I know is from Aug 10: Michelle Chechi was coordinating the next operational handoff and focused on ownership and timing. I don’t have a newer update on how she is today.",
         evidenceIds: ["demo-michelle-chechi-context"],
+        claims: [{ text: "Michelle Chechi was coordinating the next operational handoff.", evidenceIds: ["demo-michelle-chechi-context"] }],
         resolvedContactId: "michelle-chechi@demo",
         sources: [{
           id: "demo-michelle-chechi-context", chatId: "michelle-chechi@demo", contactName: "Michelle Chechi",
           kind: "insight", content: "Michelle was coordinating the next operational handoff and focused on ownership and timing.",
+          sourceContent: "I’m coordinating the next operational handoff. Can we confirm who owns each step and when it happens?",
+          evidence: demoAskEvidence("demo-michelle-chechi-message", "michelle-chechi@demo", "Michelle Chechi", "Michelle Chechi", timestamp, "I’m coordinating the next operational handoff. Can we confirm who owns each step and when it happens?"),
           senderName: "Michelle Chechi", timestamp, score: 100,
         }],
       };
@@ -409,11 +441,14 @@ export async function askIntelligence(
           "- **A useful industry connection:** Payton has a WME connection and wants to help present films to Hollywood.",
         ].join("\n"),
         evidenceIds: ["demo-sana-launch-topic"],
+        claims: [{ text: "Sana asked to reserve the first 20 minutes for launch-sequence decisions.", evidenceIds: ["demo-sana-launch-topic"] }],
         listIcons: ["collaboration", "connection", "event", "people", "location", "music", "work"],
         resolvedContactId: "sana@demo",
         sources: [{
           id: "demo-sana-launch-topic", chatId: "sana@demo", contactName: "Sana Farooq", kind: "insight",
           content: "A compact set of remembered relationship details.", senderName: "Sana Farooq", timestamp, score: 100,
+          sourceContent: "Let’s keep the first 20 minutes focused on the launch sequence and who owns each decision.",
+          evidence: demoAskEvidence("demo-sana-launch-message", "sana@demo", "Sana Farooq", "Sana Farooq", timestamp, "Let’s keep the first 20 minutes focused on the launch sequence and who owns each decision."),
         }],
       };
     }
@@ -423,10 +458,13 @@ export async function askIntelligence(
         answerId,
         answer: "Sana’s role in your work has shifted from a project contact toward a strategic partner. The recent signal is that she values a short personal check-in before moving into project details—useful context for how you open the next conversation.",
         evidenceIds: [relationship.id],
+        claims: [{ text: "Sana values a short personal check-in before project details.", evidenceIds: [relationship.id] }],
         resolvedContactId: "sana@demo",
         sources: [{
           id: relationship.id, chatId: relationship.chatId, contactName: relationship.contactName,
           kind: "insight", content: relationship.content, senderName: relationship.evidence.senderName,
+          sourceContent: relationship.evidence.excerpt,
+          evidence: demoAskEvidence("demo-sana-personal-message", relationship.chatId, relationship.contactName, relationship.evidence.senderName, relationship.updatedAt, relationship.evidence.excerpt),
           timestamp: relationship.updatedAt, score: 100,
         }],
       };
@@ -437,10 +475,13 @@ export async function askIntelligence(
         answerId,
         answer: "For delivery planning, Bilal usually needs shipments sent to DHA within three business days. That preference comes from his latest saved delivery conversation, so it’s useful context when you confirm timing with him.",
         evidenceIds: [relationship.id],
+        claims: [{ text: "Bilal usually needs shipments sent to DHA within three business days.", evidenceIds: [relationship.id] }],
         resolvedContactId: "bilal@demo",
         sources: [{
           id: relationship.id, chatId: relationship.chatId, contactName: relationship.contactName,
           kind: "insight", content: relationship.content, senderName: relationship.evidence.senderName,
+          sourceContent: relationship.evidence.excerpt,
+          evidence: demoAskEvidence("demo-bilal-message", relationship.chatId, relationship.contactName, relationship.evidence.senderName, relationship.evidence.timestamp, relationship.evidence.excerpt),
           timestamp: relationship.evidence.timestamp, score: 100,
         }],
       };
@@ -451,10 +492,14 @@ export async function askIntelligence(
       answerId,
       answer: "Before meeting Sana tomorrow, bring the final pricing sheet and a one-page decision summary. She values concise recommendations, and she asked to reserve the first 20 minutes to agree the launch sequence and named owners.",
       evidenceIds: [event.id, insight.id],
+      claims: [
+        { text: "The meeting has a final pricing sheet and decision-summary preparation need.", evidenceIds: [event.id] },
+        { text: "Sana asked to reserve time for launch-sequence decisions.", evidenceIds: [insight.id] },
+      ],
       resolvedContactId: "sana@demo",
       sources: [
-        { id: event.id, chatId: event.chatId, contactName: event.contactName, kind: "calendar_event", content: `${event.title} · ${event.location}`, senderName: event.evidence.senderName, timestamp: event.startAt, score: 100 },
-        { id: insight.id, chatId: insight.chatId, contactName: insight.contactName, kind: "insight", content: insight.content, senderName: insight.evidence.senderName, timestamp: insight.updatedAt, score: 100 },
+        { id: event.id, chatId: event.chatId, contactName: event.contactName, kind: "calendar_event", content: `${event.title} · ${event.location}`, sourceContent: event.evidence.excerpt, evidence: demoAskEvidence("demo-next-event-message", event.chatId, event.contactName, event.evidence.senderName, event.evidence.timestamp, event.evidence.excerpt), senderName: event.evidence.senderName, timestamp: event.startAt, score: 100 },
+        { id: insight.id, chatId: insight.chatId, contactName: insight.contactName, kind: "insight", content: insight.content, sourceContent: insight.evidence.excerpt, evidence: demoAskEvidence("demo-sana-launch-topic-message", insight.chatId, insight.contactName, insight.evidence.senderName, insight.evidence.timestamp, insight.evidence.excerpt), senderName: insight.evidence.senderName, timestamp: insight.updatedAt, score: 100 },
       ],
     };
   }
@@ -483,6 +528,23 @@ export async function submitIntelligenceAnswerFeedback(
   )).feedback;
 }
 
+/** Additive local API contract; no renderer consumes this queue yet. */
+export async function getIntelligenceFeedbackReviewQueue(): Promise<IntelligenceFeedbackReviewQueueItem[]> {
+  if (isDemo) return [];
+  return (await request<{ items: IntelligenceFeedbackReviewQueueItem[] }>("/api/intelligence/feedback/review")).items;
+}
+
+export async function updateIntelligenceFeedbackReview(
+  feedbackId: string,
+  status: IntelligenceFeedbackReviewQueueItem["status"],
+): Promise<{ feedbackId: string; status: IntelligenceFeedbackReviewQueueItem["status"]; updatedAt: number }> {
+  if (isDemo) return { feedbackId, status, updatedAt: Date.now() };
+  return (await request<{ review: { feedbackId: string; status: IntelligenceFeedbackReviewQueueItem["status"]; updatedAt: number } }>(
+    `/api/intelligence/feedback/review/${encodeURIComponent(feedbackId)}`,
+    { method: "PATCH", body: JSON.stringify({ status }) },
+  )).review;
+}
+
 export async function analyzeContactIntelligence(
   chatId: string,
   messageLimit?: number,
@@ -491,6 +553,7 @@ export async function analyzeContactIntelligence(
   insights: ContactInsight[];
   commitments: RelationshipCommitment[];
 }> {
+  if (isDemo) return { insights: [], commitments: [] };
   return request(`/api/contacts/${encodeURIComponent(chatId)}/intelligence/analyze`, {
     method: "POST",
     body: JSON.stringify({
@@ -741,6 +804,82 @@ export async function sendMessage(chatId: string, body: string): Promise<void> {
   });
 }
 
+export async function translateComposerDraft(input: {
+  body: string;
+  targetLanguage: string;
+  sourceLanguage?: string;
+}): Promise<{ body: string; targetLanguage: string }> {
+  if (isDemo) return { body: input.body, targetLanguage: input.targetLanguage };
+  return request("/api/translate", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function getScheduledMessages(chatId: string): Promise<ScheduledMessage[]> {
+  if (isDemo) return structuredClone(demoScheduledMessages.get(chatId) || []);
+  return (await request<{ scheduledMessages: ScheduledMessage[] }>(`/api/scheduled-messages?chatId=${encodeURIComponent(chatId)}`)).scheduledMessages;
+}
+
+export async function scheduleMessage(chatId: string, input: {
+  body: string;
+  scheduledAt: number;
+  timezone: string;
+}): Promise<ScheduledMessage> {
+  if (isDemo) {
+    const now = Date.now();
+    const scheduledMessage: ScheduledMessage = {
+      id: `scheduled-${now}`,
+      chatId,
+      ...input,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+      attemptCount: 0,
+      idempotencyKey: `demo-${now}`,
+      source: "owner",
+    };
+    demoScheduledMessages.set(chatId, [...(demoScheduledMessages.get(chatId) || []), scheduledMessage]);
+    return structuredClone(scheduledMessage);
+  }
+  return (await request<{ scheduledMessage: ScheduledMessage }>(`/api/chats/${encodeURIComponent(chatId)}/scheduled-messages`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  })).scheduledMessage;
+}
+
+export async function updateScheduledMessage(id: string, patch: {
+  body?: string;
+  scheduledAt?: number;
+  timezone?: string;
+}): Promise<ScheduledMessage> {
+  if (isDemo) {
+    for (const [chatId, messages] of demoScheduledMessages) {
+      const index = messages.findIndex((message) => message.id === id);
+      if (index < 0) continue;
+      const next = { ...messages[index]!, ...patch, updatedAt: Date.now() };
+      demoScheduledMessages.set(chatId, messages.map((message, messageIndex) => messageIndex === index ? next : message));
+      return structuredClone(next);
+    }
+    throw new Error("Scheduled message not found");
+  }
+  return (await request<{ scheduledMessage: ScheduledMessage }>(`/api/scheduled-messages/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  })).scheduledMessage;
+}
+
+export async function cancelScheduledMessage(id: string): Promise<ScheduledMessage> {
+  if (isDemo) {
+    return updateScheduledMessage(id, {}).then((message) => {
+      const next = { ...message, status: "cancelled" as const, cancelledAt: Date.now(), updatedAt: Date.now() };
+      demoScheduledMessages.set(next.chatId, (demoScheduledMessages.get(next.chatId) || []).map((item) => item.id === id ? next : item));
+      return next;
+    });
+  }
+  return (await request<{ scheduledMessage: ScheduledMessage }>(`/api/scheduled-messages/${encodeURIComponent(id)}/cancel`, {
+    method: "POST",
+    body: "{}",
+  })).scheduledMessage;
+}
+
 export async function sendMedia(chatId: string, input: {
   data: string;
   mimetype: string;
@@ -764,12 +903,23 @@ export async function sendMedia(chatId: string, input: {
   })).message;
 }
 
-export async function generateImageForChat(chatId: string, prompt: string): Promise<ChatMessage> {
-  if (isDemo) return { id: `generated-${Date.now()}`, body: `${prompt} 🎨`, fullBody: `${prompt} 🎨`, fromMe: true, timestamp: Math.floor(Date.now() / 1_000), type: "image", hasMedia: true, mediaUrl: demoMessagesForChat(chatId).find((message) => message.hasMedia)?.mediaUrl };
-  return (await request<{ message: ChatMessage }>(`/api/chats/${encodeURIComponent(chatId)}/generate-image`, {
+export type GeneratedImageAttachment = {
+  data: string;
+  mimetype: string;
+  filename: string;
+  prompt: string;
+};
+
+export async function generateImageForChat(chatId: string, prompt: string): Promise<GeneratedImageAttachment> {
+  if (isDemo) {
+    const safePrompt = prompt.replace(/[<>&]/g, "").slice(0, 72);
+    const preview = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="768"><rect width="100%" height="100%" fill="#e9f6ef"/><circle cx="512" cy="338" r="170" fill="#0f7b58" opacity=".18"/><path d="M385 470c90-215 165-215 254 0" fill="none" stroke="#087453" stroke-width="34" stroke-linecap="round"/><text x="512" y="630" text-anchor="middle" font-family="Arial" font-size="34" fill="#14523f">${safePrompt || "AmirOS image"}</text></svg>`;
+    return { data: btoa(preview), mimetype: "image/svg+xml", filename: "amiros-generated.svg", prompt };
+  }
+  return (await request<{ attachment: GeneratedImageAttachment }>(`/api/chats/${encodeURIComponent(chatId)}/generate-image`, {
     method: "POST",
     body: JSON.stringify({ prompt }),
-  })).message;
+  })).attachment;
 }
 
 export async function reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void> {
@@ -788,8 +938,32 @@ export async function replyToMessage(chatId: string, messageId: string, body: st
   })).message;
 }
 
+function demoReplySuggestionForMessage(chatId: string, messageId: string): { body: string } {
+  const selected = demoMessagesForChat(chatId).find((message) => message.id === messageId);
+  if (!selected || selected.fromMe) {
+    throw new Error("Choose a message from your contact to draft a reply.");
+  }
+  const targetedDrafts: Record<string, string> = {
+    "sana-1": "Thanks, Sana — I’m glad the launch deck is coming together more clearly.",
+    "sana-3": "Absolutely — I’ll send the final pricing sheet and keep the recommendations concise.",
+    "sana-5": "Of course — I’ll reserve 20 minutes at the start to decide on the launch sequence.",
+  };
+  if (targetedDrafts[messageId]) return { body: targetedDrafts[messageId]! };
+  if (selected.type === "ptt" || selected.type === "audio") {
+    return { body: "Thanks for the voice note. I’ll review the details and get back to you shortly." };
+  }
+  const chatDrafts: Record<string, string> = {
+    "bilal@demo": "Delivery to DHA usually takes 2–3 business days. I’ll confirm the exact window for your order.",
+    "mariam@demo": "Yes, it’s available in black. Would you like me to reserve one for you?",
+    "zain@demo": "I’ll send the bank details to you privately now.",
+    "hassan@demo": "Perfect — see you tomorrow!",
+    "product-team@demo": "Yes, we can move the launch review. What time works best for everyone?",
+  };
+  return { body: chatDrafts[chatId] || "Thanks — I’ll look into that and get back to you shortly." };
+}
+
 export async function suggestReplyForMessage(chatId: string, messageId: string): Promise<{ body: string }> {
-  if (isDemo) return { body: "Sounds good — thank you!" };
+  if (isDemo) return demoReplySuggestionForMessage(chatId, messageId);
   return request<{ body: string }>(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/reply-suggestion`, {
     method: "POST",
   });

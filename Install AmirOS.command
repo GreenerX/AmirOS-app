@@ -9,6 +9,14 @@ NODE_DOWNLOAD_URL="https://nodejs.org/en/download"
 AMIROS_PORT="${AMIROS_PORT:-3789}"
 export AMIROS_PORT
 
+# The integration test starts an isolated throwaway watchdog. It must never
+# share the customer's real dashboard port: doing so can make a browser open
+# the test copy instead of the installed AmirOS with the person's own data.
+if [[ -n "${AMIROS_INSTALL_TEST_WATCHDOG_ROOT:-}" && "$AMIROS_PORT" == "3789" ]]; then
+  echo "Installer QA requires an isolated local port; port 3789 belongs to the normal AmirOS dashboard."
+  exit 1
+fi
+
 # AmirOS keeps every private item beside the app itself. When a person has
 # downloaded a newer ZIP into a second AmirOS folder, look only at sibling
 # AmirOS folders for prior private data. This is deliberately narrow: it will

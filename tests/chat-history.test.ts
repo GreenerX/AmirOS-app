@@ -22,6 +22,7 @@ const contact: ContactPreferences = {
   hidden: false,
   tone: "Friendly",
   language: "Automatic",
+  composerTranslationPreference: null,
   pronouns: "unspecified",
   memoryEnabled: true,
   knowledgeTracking: "enabled",

@@ -7,7 +7,8 @@ import {
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { chooseAssistantHandleCenter } from "../assistant-docking";
 import {
-  ASSISTANT_DISCOVERY_ROTATION_MS,
+  ASSISTANT_DISCOVERY_CLOSED_ROTATION_MS,
+  ASSISTANT_DISCOVERY_OPEN_ROTATION_MS,
   buildAssistantSuggestionCards,
   rotateAssistantSuggestions,
   type AssistantSuggestionCard,
@@ -22,7 +23,10 @@ import type {
 import { ContactAvatar } from "./ContactAvatar";
 
 const PINNED_ANSWERS_KEY = "amiros-pinned-answers";
+const ASK_READY_NOTICE_KEY = "amiros.ask-ready-notice.v1";
 const DRAWER_TRANSITION_MS = 820;
+const ASK_HANDLE_PULSE_INTERVAL_MS = 5 * 60_000;
+const ASK_HANDLE_PULSE_DURATION_MS = 10_000;
 const feedbackReasonLabels: Array<{ id: IntelligenceAnswerFeedbackReason; label: string }> = [
   { id: "outdated_or_incorrect", label: "Outdated or incorrect" },
   { id: "wrong_person", label: "Wrong person" },
@@ -31,6 +35,17 @@ const feedbackReasonLabels: Array<{ id: IntelligenceAnswerFeedbackReason; label:
   { id: "unclear", label: "Unclear" },
   { id: "too_long", label: "Too long" },
 ];
+
+function namesKnownContact(query: string, chats: ChatSummary[]): boolean {
+  const normalizedQuery = ` ${query.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/gu, " ").trim()} `;
+  return chats.some((chat) => {
+    if (chat.isGroup) return false;
+    const normalizedName = chat.name.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/gu, " ").trim();
+    const firstName = normalizedName.split(" ")[0];
+    return Boolean(normalizedName && normalizedQuery.includes(` ${normalizedName} `))
+      || Boolean(firstName && firstName.length >= 3 && normalizedQuery.includes(` ${firstName} `));
+  });
+}
 
 function readPinnedAnswers(): Set<string> {
   try {
@@ -102,7 +117,7 @@ function AskInsightPreview({
       <strong>{suggestion.title}</strong>
       <small>{suggestion.preview}</small>
       <em>{suggestion.detail}</em>
-      <span>See what changed <ArrowRight size={18} strokeWidth={1.9} /></span>
+      <span>See the evidence <ArrowRight size={18} strokeWidth={1.9} /></span>
     </span>
   </button>;
 
@@ -177,14 +192,15 @@ type FloatingAssistantProps = {
   onRefresh: () => Promise<void>;
   onAsk: (query: string, options?: AskOptions) => Promise<IntelligenceSearchResult>;
   onAnswerFeedback: (answerId: string, input: IntelligenceAnswerFeedbackInput) => Promise<IntelligenceAnswerFeedbackSummary>;
-  onOpenChat: (chatId: string) => void;
+  onOpenChat: (chatId: string, messageId?: string) => void;
   onOpenCalendar: () => void;
   onSaveKnowledge: (chatId: string, content: string) => Promise<void>;
   onInsertReply: (chatId: string, body: string) => void;
+  tourDemo?: boolean;
 };
 
 export function FloatingAssistant({
-  data, chats, ownerProfile, loading, onRefresh, onAsk, onAnswerFeedback, onOpenChat, onOpenCalendar, onSaveKnowledge, onInsertReply,
+  data, chats, ownerProfile, loading, onRefresh, onAsk, onAnswerFeedback, onOpenChat, onOpenCalendar, onSaveKnowledge, onInsertReply, tourDemo = false,
 }: FloatingAssistantProps) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -218,6 +234,9 @@ export function FloatingAssistant({
   const [drawerMotion, setDrawerMotion] = useState<"idle" | "opening" | "closing">("idle");
   const [handleCenterY, setHandleCenterY] = useState<number>();
   const [discoveryCycle, setDiscoveryCycle] = useState(0);
+  const [handlePulseActive, setHandlePulseActive] = useState(false);
+  const [railReadyNotice, setRailReadyNotice] = useState(false);
+  const tourDemoVisible = useRef(false);
   const scope = { knowledge: true, calendar: true };
   const [pinned, setPinned] = useState<Set<string>>(readPinnedAnswers);
   const abortRef = useRef<AbortController | undefined>(undefined);
@@ -236,8 +255,12 @@ export function FloatingAssistant({
     () => rotateAssistantSuggestions(assistantSuggestions, discoveryCycle),
     [assistantSuggestions, discoveryCycle],
   );
-  const evidenceSources = answer ? [...new Map(answer.sources.map((source) => [source.id, source])).values()] : [];
-  const sourceChats = answer ? [...new Map(answer.sources.map((source) => [source.chatId, source])).values()] : [];
+  // A source list is evidence only when it contains the original, retained
+  // message. Do not fall back to sourceContent or an AI-produced summary.
+  const evidenceSources = answer ? [...new Map(answer.sources
+    .filter((source) => source.evidence?.exactMessageAvailable === true)
+    .map((source) => [source.id, source])).values()] : [];
+  const sourceChats = [...new Map(evidenceSources.map((source) => [source.chatId, source])).values()];
   const firstSource = sourceChats[0];
   const activeContactId = selectedContactId || firstSource?.chatId;
   const activeChat = chats.find((chat) => chat.id === activeContactId);
@@ -256,12 +279,65 @@ export function FloatingAssistant({
   }, [searching]);
 
   useEffect(() => {
-    if (!open || assistantSuggestions.length <= 4) return;
-    const timer = window.setInterval(() => setDiscoveryCycle((current) => current + 1), ASSISTANT_DISCOVERY_ROTATION_MS);
+    if (assistantSuggestions.length <= 4) return;
+    const interval = open ? ASSISTANT_DISCOVERY_OPEN_ROTATION_MS : ASSISTANT_DISCOVERY_CLOSED_ROTATION_MS;
+    const timer = window.setInterval(() => setDiscoveryCycle((current) => current + 1), interval);
     return () => window.clearInterval(timer);
   }, [assistantSuggestions.length, open]);
 
+  useEffect(() => {
+    if (open) return;
+    // A closed drawer still refreshes its source pool. This lets the next
+    // reveal include newly processed conversations instead of merely rotating
+    // the cards that were present when the page first loaded.
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void onRefresh();
+    }, ASSISTANT_DISCOVERY_CLOSED_ROTATION_MS);
+    return () => window.clearInterval(timer);
+  }, [onRefresh, open]);
+
+  useEffect(() => {
+    if (open || assistantSuggestions.length === 0) {
+      setHandlePulseActive(false);
+      return;
+    }
+    let clearPulseTimer: number | undefined;
+    const pulse = () => {
+      setHandlePulseActive(true);
+      if (clearPulseTimer) window.clearTimeout(clearPulseTimer);
+      clearPulseTimer = window.setTimeout(() => setHandlePulseActive(false), ASK_HANDLE_PULSE_DURATION_MS);
+    };
+    const interval = window.setInterval(pulse, ASK_HANDLE_PULSE_INTERVAL_MS);
+    return () => {
+      window.clearInterval(interval);
+      if (clearPulseTimer) window.clearTimeout(clearPulseTimer);
+    };
+  }, [assistantSuggestions.length, open]);
+
+  useEffect(() => {
+    // Do not equate time elapsed with value. This only fires once when the
+    // strict, evidence-backed discovery list becomes available locally.
+    if (tourDemo || open || assistantSuggestions.length === 0) return;
+    try {
+      if (window.localStorage.getItem(ASK_READY_NOTICE_KEY) === "opened") return;
+      // Keep the quiet rail cue active across a refresh until the tester has
+      // actually opened Ask. The label itself fades through CSS.
+      window.localStorage.setItem(ASK_READY_NOTICE_KEY, "pending");
+    } catch {
+      // Local-storage failure should never hide a legitimately useful rail.
+    }
+    setRailReadyNotice(true);
+  }, [assistantSuggestions.length, open, tourDemo]);
+
   const show = () => {
+    if (railReadyNotice) {
+      setRailReadyNotice(false);
+      try {
+        window.localStorage.setItem(ASK_READY_NOTICE_KEY, "opened");
+      } catch {
+        // Opening Ask must never depend on local-storage availability.
+      }
+    }
     if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
     if (motionTimerRef.current) window.clearTimeout(motionTimerRef.current);
     if (openFrameRef.current) window.cancelAnimationFrame(openFrameRef.current);
@@ -271,7 +347,7 @@ export function FloatingAssistant({
       openFrameRef.current = window.requestAnimationFrame(() => setOpen(true));
     });
     motionTimerRef.current = window.setTimeout(() => setDrawerMotion("idle"), DRAWER_TRANSITION_MS);
-    if (!data && !loading) void onRefresh();
+    void onRefresh();
   };
 
   const close = () => {
@@ -365,9 +441,11 @@ export function FloatingAssistant({
   ) => {
     const question = (suggestion || query).trim();
     if (!question || searching || (!scope.knowledge && !scope.calendar)) return;
+    const explicitlyNamesContact = !contactId && !suggestionContext && namesKnownContact(question, chats);
+    const continuingAnswer = Boolean(improvement) || (!suggestion && !explicitlyNamesContact);
     const controller = new AbortController();
     abortRef.current = controller;
-    const currentSuggestionContext = suggestionContext || (contactId ? pendingSuggestionContext : activeSuggestionContext);
+    const currentSuggestionContext = suggestionContext || (contactId ? pendingSuggestionContext : continuingAnswer ? activeSuggestionContext : undefined);
     const previousAnswer = answer;
     const previousQuestion = lastQuestion;
     const previousContactId = selectedContactId;
@@ -382,7 +460,7 @@ export function FloatingAssistant({
     setCopied(false);
     setSaved(false);
     setEvidenceOpen(false);
-    const followUp = answer && lastQuestion && !answer.disambiguation?.length && !contactId ? {
+    const followUp = answer && lastQuestion && !answer.disambiguation?.length && !contactId && continuingAnswer ? {
       question: lastQuestion,
       answer: answer.answer,
       sourceRefs: answer.sources
@@ -411,9 +489,10 @@ export function FloatingAssistant({
       }
       setAnswer(result);
       setQuery("");
+      const sourceChatIds = [...new Set(result.sources.map((source) => source.chatId))];
       setSelectedContactId(result.disambiguation?.length
         ? undefined
-        : result.resolvedContactId || contactId || result.sources[0]?.chatId);
+        : result.resolvedContactId || contactId || (sourceChatIds.length === 1 ? sourceChatIds[0] : undefined));
       if (!result.disambiguation?.length) {
         setActiveSuggestionContext(currentSuggestionContext);
         setPendingSuggestionContext(undefined);
@@ -458,6 +537,31 @@ export function FloatingAssistant({
     setEvidenceOpen(false);
     resetFeedbackComposer();
   };
+
+  useEffect(() => {
+    if (tourDemo) {
+      tourDemoVisible.current = true;
+      show();
+      setLastQuestion("What should I remember before Sana’s launch review?");
+      setSelectedContactId("sana@demo");
+      const tourEvidenceTimestamp = Date.now();
+      setAnswer({
+        answer: "**Reserve 20 minutes at the start to decide the launch sequence.**\n\n- Sana values calm preparation and concise recommendations.\n- Send the final pricing sheet before the meeting.",
+        evidenceIds: ["tour-sana-launch", "tour-sana-pricing"],
+        listIcons: ["calendar", "task"],
+        sources: [
+          { id: "tour-sana-launch", chatId: "sana@demo", contactName: "Sana Farooq", kind: "message", senderName: "Sana Farooq", content: "Please reserve 20 minutes at the start to decide on the launch sequence.", evidence: { messageId: "tour-sana-launch-message", chatId: "sana@demo", conversationName: "Sana Farooq", authorName: "Sana Farooq", timestamp: tourEvidenceTimestamp, originalText: "Please reserve 20 minutes at the start to decide on the launch sequence.", exactMessageAvailable: true }, timestamp: tourEvidenceTimestamp, score: 1 },
+          { id: "tour-sana-pricing", chatId: "sana@demo", contactName: "Sana Farooq", kind: "message", senderName: "Sana Farooq", content: "Could you send the final pricing sheet and keep the recommendations concise?", evidence: { messageId: "tour-sana-pricing-message", chatId: "sana@demo", conversationName: "Sana Farooq", authorName: "Sana Farooq", timestamp: tourEvidenceTimestamp, originalText: "Could you send the final pricing sheet and keep the recommendations concise?", exactMessageAvailable: true }, timestamp: tourEvidenceTimestamp, score: .98 },
+        ],
+      });
+      setEvidenceOpen(true);
+      return;
+    }
+    if (!tourDemoVisible.current) return;
+    tourDemoVisible.current = false;
+    clearAnswer();
+    close();
+  }, [tourDemo]);
 
   const startNewQuestion = () => {
     abortRef.current?.abort();
@@ -571,7 +675,8 @@ export function FloatingAssistant({
     setHistoryOpen(false);
   };
 
-  return <div className={`floating-assistant ${open ? "open" : ""} ${mounted ? "mounted" : ""} ${drawerMotion !== "idle" ? `motion-${drawerMotion}` : ""}`} style={handleCenterY === undefined ? undefined : { "--ask-handle-y": `${handleCenterY}px` } as CSSProperties}>
+  return <div className={`floating-assistant ${open ? "open" : ""} ${mounted ? "mounted" : ""} ${railReadyNotice ? "ask-ready-notice" : ""} ${handlePulseActive ? "ask-handle-pulse" : ""} ${drawerMotion !== "idle" ? `motion-${drawerMotion}` : ""}`} style={handleCenterY === undefined ? undefined : { "--ask-handle-y": `${handleCenterY}px` } as CSSProperties}>
+    <div className="ask-rail-shadow" aria-hidden="true" />
     {mounted ? <div className="ask-drawer-depth" aria-hidden="true" /> : null}
     {mounted ? <section id="ask-amiros-drawer" className="floating-assistant-panel ask-drawer" role="dialog" aria-modal="false" aria-label="Ask AmirOS">
       <header className="ask-drawer-header">
@@ -618,7 +723,6 @@ export function FloatingAssistant({
               </section> : null}
             </section> : <p className="ask-drawer-proactive-empty">Ask anything above. Ask only surfaces timely, grounded context when there is something genuinely useful to know.</p>}
 
-            <footer><span><Sparkles size={14} />Only timely, grounded context appears here.</span><button onClick={() => setHistoryOpen(true)}>Answer history</button></footer>
           </section> : null}
 
           {answer ? <>
@@ -652,7 +756,7 @@ export function FloatingAssistant({
               {activeChat ? <button className="ask-drawer-person" onClick={() => { onOpenChat(activeChat.id); close(); }}><ContactAvatar name={activeChat.name} src={activeChat.avatarUrl} className="ask-drawer-person-avatar" /><span dir="auto"><strong>{activeChat.name}</strong><small>Selected person</small></span><ArrowRight size={15} /></button> : null}
               <FormattedAnswer text={answer.answer} listIcons={answer.listIcons} />
 
-              {evidenceSources.length ? <section className="ask-drawer-grounding"><button onClick={() => setEvidenceOpen((value) => !value)} aria-expanded={evidenceOpen}><span><Sparkles size={14} />Grounded in {sourceChats.length} conversation{sourceChats.length === 1 ? "" : "s"} and {evidenceSources.length} source{evidenceSources.length === 1 ? "" : "s"}</span><ChevronDown size={15} className={evidenceOpen ? "open" : ""} /></button>{evidenceOpen ? <div>{evidenceSources.map((source) => <article key={source.id}><span><strong>{source.contactName}</strong><small>{source.senderName ? `Sent by ${source.senderName}` : source.kind.replaceAll("_", " ")}</small></span><p dir="auto">{source.content.replace(/^\[Chat: [^\]]+\]\s*/u, "")}</p><button onClick={() => { onOpenChat(source.chatId); close(); }}>Open source<ArrowRight size={12} /></button></article>)}</div> : null}</section> : <p className="ask-drawer-no-sources">No supporting sources were returned for this answer.</p>}
+              {evidenceSources.length ? <section className="ask-drawer-grounding"><button onClick={() => setEvidenceOpen((value) => !value)} aria-expanded={evidenceOpen}><span><Sparkles size={14} />Grounded in {sourceChats.length} conversation{sourceChats.length === 1 ? "" : "s"} and {evidenceSources.length} source{evidenceSources.length === 1 ? "" : "s"}</span><ChevronDown size={15} className={evidenceOpen ? "open" : ""} /></button>{evidenceOpen ? <div>{evidenceSources.map((source, index) => { const sourceChat = chats.find((chat) => chat.id === source.chatId); const evidence = source.evidence!; const author = evidence.authorName || source.contactName; const conversation = evidence.conversationName || source.contactName; return <article key={source.id}><div className="ask-drawer-source-person"><ContactAvatar name={source.contactName} src={sourceChat?.avatarUrl} tone={index} /><span><strong>{author}</strong><small>{conversation} · {formatDateTime(evidence.timestamp, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}</small></span></div><p dir="auto">{evidence.originalText}</p><button onClick={() => { onOpenChat(source.chatId, evidence.messageId); close(); }}>Open source<ArrowRight size={12} /></button></article>; })}</div> : null}</section> : <p className="ask-drawer-no-sources">No original supporting messages were returned for this answer.</p>}
 
               {answer.answerId ? <section className={`ask-answer-feedback ${feedbackOpen ? "open" : ""}`} aria-label="Answer feedback">
                 <div className="ask-answer-feedback-prompt">
@@ -675,11 +779,8 @@ export function FloatingAssistant({
 
               <div className="floating-ai-search ask-drawer-followup"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void ask(); }} placeholder="Ask a follow-up…" />{searching ? <button className="floating-ai-stop" aria-label="Stop search" title="Stop search" onClick={stopSearch}><Square size={13} /></button> : <button className="floating-ai-send" disabled={!query.trim()} aria-label="Ask follow-up" onClick={() => void ask()}><Send size={16} /></button>}</div>
 
-              <footer className="ask-drawer-answer-actions">
-                <button onClick={() => void copyAnswer()}>{copied ? <Check size={15} /> : <Copy size={15} />}{copied ? "Copied" : "Copy"}</button>
-              </footer>
-
               <details className="ask-drawer-more-actions"><summary>More actions<ChevronDown size={14} /></summary><div>
+                <button onClick={() => void copyAnswer()}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "Copied" : "Copy answer"}</button>
                 <button className={pinned.has(lastQuestion) ? "active" : ""} onClick={togglePin}><Pin size={14} />{pinned.has(lastQuestion) ? "Pinned" : "Pin answer"}</button>
                 {hasCalendar ? <button onClick={() => { onOpenCalendar(); close(); }}><CalendarPlus size={14} />Open calendar</button> : null}
                 {firstSource ? <button onClick={() => void saveKnowledge()}><BookmarkPlus size={14} />{saved ? "Saved" : "Save as knowledge"}</button> : null}
@@ -689,8 +790,10 @@ export function FloatingAssistant({
             </article>}
           </> : null}
         </main>
+        {!answer && !searching ? <footer className="ask-drawer-proactive-footer"><span><Sparkles size={14} />Only timely, grounded context appears here.</span><button onClick={() => setHistoryOpen(true)}>Answer history</button></footer> : null}
       </>}
     </section> : null}
+    {railReadyNotice && !open ? <span className="ask-ready-callout" role="status"><Sparkles size={14} />New context to explore</span> : null}
     <button ref={triggerRef} className="floating-assistant-trigger" aria-label={open ? "Close Ask AmirOS" : "Open Ask AmirOS"} aria-expanded={open} aria-controls="ask-amiros-drawer" title={open ? "Close Ask AmirOS" : "Open Ask AmirOS"} onClick={open ? close : show}><Sparkles size={20} /><span>Ask AmirOS</span></button>
   </div>;
 }

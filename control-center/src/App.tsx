@@ -146,7 +146,7 @@ export function App() {
     />;
   }
 
-  if (!user && page !== "download") {
+  if (!user) {
     return <AuthScreen
       identityAvailable={identityAvailable}
       invitationToken={invitationToken}
@@ -160,6 +160,10 @@ export function App() {
 
   if (page === "connect") {
     return <DeviceConnectionPage onNavigate={navigate} />;
+  }
+
+  if (page === "download") {
+    return <DownloadPortal user={user} onNavigate={navigate} onSignOut={() => void signOut().then(() => setUser(undefined))} />;
   }
 
   if (page === "admin") {
@@ -200,12 +204,28 @@ function DeviceConnectionPage({ onNavigate }: { onNavigate: (page: Page) => void
     <section>
       <MonitorCog size={34} />
       <h1>{activationCode ? "Connect this Mac?" : "Open this from AmirOS."}</h1>
-      <p>{activationCode ? "Approve the Mac that requested access. AmirOS will send only its device credential, version, and access check—never conversations, memory, WhatsApp material, or API keys." : "In AmirOS, open Settings and select Connect this Mac. Then return here using the link it opens."}</p>
+      <p>{activationCode ? "Approve the Mac that requested access. AmirOS will send only its device credential, version, and access check—never conversations, memory, WhatsApp material, or API keys." : "Open AmirOS and select Connect this Mac. Then return here using the link it opens."}</p>
       {message ? <p className="form-message" role="status">{message}</p> : null}
       {activationCode && state !== "approved" ? <button className="button button-primary" disabled={state === "working"} onClick={() => void approve()}>{state === "working" ? "Approving…" : "Approve this Mac"}</button> : null}
       {state === "approved" || !activationCode ? <button className="button button-secondary" onClick={() => onNavigate("account")}>Go to your account</button> : null}
     </section>
     <footer className="not-authorized-footer"><CopyrightNotice /></footer>
+  </main>;
+}
+
+function DownloadPortal({ user, onNavigate, onSignOut }: { user?: ControlCenterUser; onNavigate: (page: Page) => void; onSignOut: () => void }) {
+  return <main className="portal-shell">
+    <PortalHeader page="download" user={user} onNavigate={onNavigate} onSignOut={onSignOut} />
+    <section className="portal-hero"><div><p className="section-index">Download</p><h1>Get AmirOS for your Mac.</h1><p>Download the latest private beta, then open AmirOS and select <strong>Connect this Mac</strong>.</p></div></section>
+    <section className="portal-grid" aria-label="AmirOS download">
+      <article className="download-card">
+        <div className="app-icon"><MonitorCog size={34} /></div>
+        <div className="download-copy"><h2>{productName} for Mac</h2><p>Your conversations and memory remain on your Mac.</p><small>macOS 13 or later · Apple Silicon or Intel</small></div>
+        <div className="download-action"><a className="button button-primary" href={downloadUrl}>Download for Mac <Download size={17} /></a><span>Latest private beta download</span></div>
+      </article>
+      <InstallerStepsCard onNavigate={onNavigate} />
+    </section>
+    <footer className="portal-footer"><CopyrightNotice /></footer>
   </main>;
 }
 
@@ -304,6 +324,7 @@ function AccountPortal({ user, onNavigate, onSignOut }: { user?: ControlCenterUs
 
   const account = snapshot;
   const activationInProgress = Boolean(account && account.activation.nextAction.id !== "complete");
+  const setupNeedsDownload = !account || account.setupState !== "active";
   const openSupport = () => {
     setSupportOpen(true);
     window.setTimeout(() => document.getElementById("support")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
@@ -319,16 +340,17 @@ function AccountPortal({ user, onNavigate, onSignOut }: { user?: ControlCenterUs
 
   return <main className="portal-shell">
     <PortalHeader page="account" user={user} onNavigate={onNavigate} onSignOut={onSignOut} />
-    <section className="portal-hero"><div><p className="section-index">Account</p><h1>{activationInProgress ? "Your AmirOS setup." : "Your access, devices, and updates."}</h1><p>{activationInProgress ? account?.activation.nextAction.description : "Everything needed to keep your personal assistant running smoothly—without sending your conversations to us."}</p></div>{account ? <StatusCard status={account.status} expiresAt={account.expiresAt} /> : <div className="status-card status-empty"><CircleHelp size={21} /><span>Connect your Control Center database to show account status.</span></div>}</section>
+    <section className="portal-hero"><div><p className="section-index">Account</p><h1>{setupNeedsDownload ? "Start with AmirOS." : activationInProgress ? "Your AmirOS setup." : "Your access, devices, and updates."}</h1><p>{setupNeedsDownload ? "Download AmirOS, open it, then select Connect this Mac to continue your guided setup." : activationInProgress ? account?.activation.nextAction.description : "Everything needed to keep your personal assistant running smoothly—without sending your conversations to us."}</p></div>{account ? <StatusCard status={account.status} expiresAt={account.expiresAt} /> : <div className="status-card status-empty"><CircleHelp size={21} /><span>Preparing your account details.</span></div>}</section>
     {apiMessage && <div className="service-notice"><CircleHelp size={18} /><span>{apiMessage}</span></div>}
     <section className="portal-grid" aria-label="Your account controls">
       {account ? <ActivationChecklistCard checklist={account.activation} setupState={account.setupState} onNavigate={onNavigate} onOpenSupport={openSupport} /> : null}
-      {account && account.setupState === "active" ? <>
       <article className="download-card">
         <div className="app-icon"><MonitorCog size={34} /></div>
-        <div className="download-copy"><h2>{productName} for Mac</h2><p>Private help with the people, plans, and details you choose to remember.</p><small>macOS 13 or later · Apple Silicon or Intel</small></div>
-        <div className="download-action"><a className="button button-primary" href={downloadUrl}>Download for Mac <Download size={17} /></a><span>Latest public beta · Safe local installer</span></div>
+        <div className="download-copy"><h2>{productName} for Mac</h2><p>Download the latest private beta, then open AmirOS and select Connect this Mac.</p><small>macOS 13 or later · Apple Silicon or Intel</small></div>
+        <div className="download-action"><a className="button button-primary" href={downloadUrl}>Download for Mac <Download size={17} /></a><span>Latest private beta download</span></div>
       </article>
+      {setupNeedsDownload ? <InstallerStepsCard onNavigate={onNavigate} /> : null}
+      {account && account.setupState === "active" ? <>
       <article className="detail-card"><CardHeading icon={Laptop} title="Authorized devices" description="Only signed-in Macs can use your access." />
         {account?.devices.length ? account.devices.map((device) => <div className="device-row" key={device.id}><div className="device-icon"><Laptop size={19} /></div><div><strong>{device.label}</strong><span>{device.platform} · {device.appVersion} · {device.lastSeenAt}</span></div>{device.isCurrent && <span className="soft-tag">This Mac</span>}<button className="icon-button" aria-label={`More options for ${device.label}`}><MoreHorizontal size={19} /></button></div>) : <EmptyCopy text="Your signed-in Mac will appear here after device authorization." />}
       </article>
@@ -346,6 +368,20 @@ function AccountPortal({ user, onNavigate, onSignOut }: { user?: ControlCenterUs
   </main>;
 }
 
+function InstallerStepsCard({ onNavigate }: { onNavigate: (page: Page) => void }) {
+  return <article className="detail-card installer-steps-card">
+    <CardHeading icon={MonitorCog} title="After downloading" description="Start the installer from the AmirOS folder in Downloads." />
+    <ol>
+      <li>Open your <strong>Downloads</strong> folder.</li>
+      <li>If needed, double-click <strong>AmirOS-latest.zip</strong> to unpack it.</li>
+      <li>Open the new <strong>AmirOS</strong> folder, then double-click <strong>Install AmirOS.command</strong>.</li>
+      <li>Keep its window open until AmirOS opens, then select <strong>Connect this Mac</strong>.</li>
+    </ol>
+    <p className="detail-footnote">If Node.js is needed, the installer opens the official download page and tells you how to continue. Your Control Center account manages access and updates—not conversations or personal memory.</p>
+    <button className="button button-secondary" onClick={() => onNavigate("account")}>Return to account <ArrowUpRight size={16} /></button>
+  </article>;
+}
+
 function ActivationChecklistCard({ checklist, setupState, onNavigate, onOpenSupport }: { checklist: ActivationChecklist; setupState: SetupState; onNavigate: (page: Page) => void; onOpenSupport: () => void }) {
   const action = checklist.nextAction;
   return <article className="activation-checklist">
@@ -358,7 +394,7 @@ function ActivationChecklistCard({ checklist, setupState, onNavigate, onOpenSupp
       {action.target === "local_amiros" ? <span className="local-action-label">Next in AmirOS</span> : null}
       {action.target === "none" ? <span className="local-action-label is-complete">All set</span> : null}
     </div>
-    {setupState === "device_pending" ? <p className="activation-download-note"><a className="text-link" href={downloadUrl}>Download AmirOS for Mac <Download size={15} /></a> if it is not already installed.</p> : null}
+    {(setupState === "setup_required" || setupState === "device_pending") ? <p className="activation-download-note"><a className="text-link" href={downloadUrl}>Download AmirOS for Mac <Download size={15} /></a> if it is not already installed.</p> : null}
   </article>;
 }
 
@@ -598,9 +634,9 @@ function AdminDashboard({ user, onNavigate, onSignOut }: { user?: ControlCenterU
   const content = section === "overview"
     ? <AdminOverviewPage activeCount={activeCount} applications={applications} users={users} tickets={tickets} attention={attention} currentVersion={currentVersion} onOpenSection={navigateSection} onOpenUser={openUser} />
     : section === "applicants"
-      ? <AdminApplicantsPage applications={applications} onState={setApplicationState} onInvite={approveAndInvite} onCreate={addManualApplicant} onEdit={editApplicant} onArchive={archiveApplicant} onRemoveIdentity={removeApplicantIdentity} invitingApplicationId={invitingApplicationId} />
+      ? <AdminApplicantsPage applications={applications} onState={setApplicationState} onInvite={approveAndInvite} onCreate={addManualApplicant} onEdit={editApplicant} onArchive={archiveApplicant} invitingApplicationId={invitingApplicationId} />
       : section === "testers"
-        ? <AdminTestersPage users={users} selected={selected} onSelect={setSelectedId} onStatus={setStatus} onProfile={setUserProfile} onReleaseChannel={setReleaseChannel} onToggleFeature={toggleFeature} onDeviceStatus={setDeviceStatus} onDelete={removeUser} />
+        ? <AdminTestersPage users={users} applications={applications} selected={selected} onSelect={setSelectedId} onStatus={setStatus} onProfile={setUserProfile} onReleaseChannel={setReleaseChannel} onToggleFeature={toggleFeature} onDeviceStatus={setDeviceStatus} onDelete={removeUser} onInvite={approveAndInvite} onRemovePendingIdentity={removeApplicantIdentity} invitingApplicationId={invitingApplicationId} />
         : section === "devices"
           ? <AdminDevicesPage users={users} onOpenUser={openUser} />
           : section === "rollouts"
@@ -699,22 +735,25 @@ function AdminOverviewPage({ activeCount, applications, users, tickets, attentio
   </>;
 }
 
-function AdminApplicantsPage({ applications, onState, onInvite, onCreate, onEdit, onArchive, onRemoveIdentity, invitingApplicationId }: {
+function AdminApplicantsPage({ applications, onState, onInvite, onCreate, onEdit, onArchive, invitingApplicationId }: {
   applications: BetaApplication[];
   onState: (applicationId: string, state: BetaApplicationState) => void;
   onInvite: (application: BetaApplication) => void;
   onCreate: (input: { firstName: string; lastName: string; email: string; internalNote?: string }) => Promise<unknown>;
   onEdit: (input: { applicationId: string; firstName: string; lastName: string; email: string; internalNote?: string }) => Promise<unknown>;
   onArchive: (applicationId: string, archived: boolean) => Promise<unknown>;
-  onRemoveIdentity: (application: BetaApplication) => void;
   invitingApplicationId?: string;
-}) { return <ApplicantPanel applications={applications} onState={onState} onInvite={onInvite} onCreate={onCreate} onEdit={onEdit} onArchive={onArchive} onRemoveIdentity={onRemoveIdentity} invitingApplicationId={invitingApplicationId} />; }
+}) { return <ApplicantPanel applications={applications} onState={onState} onInvite={onInvite} onCreate={onCreate} onEdit={onEdit} onArchive={onArchive} invitingApplicationId={invitingApplicationId} />; }
 
-function AdminTestersPage({ users, selected, onSelect, onStatus, onProfile, onReleaseChannel, onToggleFeature, onDeviceStatus, onDelete }: { users: AdminUser[]; selected?: AdminUser; onSelect: (id: string) => void; onStatus: (status: AccessStatus) => void; onProfile: (firstName: string, lastName: string) => void; onReleaseChannel: (channel: ReleaseChannel) => void; onToggleFeature: (featureId: string) => void; onDeviceStatus: (deviceId: string, status: AccessStatus) => void; onDelete: () => void }) {
+function AdminTestersPage({ users, applications, selected, onSelect, onStatus, onProfile, onReleaseChannel, onToggleFeature, onDeviceStatus, onDelete, onInvite, onRemovePendingIdentity, invitingApplicationId }: { users: AdminUser[]; applications: BetaApplication[]; selected?: AdminUser; onSelect: (id: string) => void; onStatus: (status: AccessStatus) => void; onProfile: (firstName: string, lastName: string) => void; onReleaseChannel: (channel: ReleaseChannel) => void; onToggleFeature: (featureId: string) => void; onDeviceStatus: (deviceId: string, status: AccessStatus) => void; onDelete: () => void; onInvite: (application: BetaApplication) => void; onRemovePendingIdentity: (application: BetaApplication) => void; invitingApplicationId?: string }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | AccessStatus>("all");
   const matchingUsers = useMemo(() => users.filter((user) => `${user.displayName} ${user.email}`.toLowerCase().includes(query.toLowerCase()) && (statusFilter === "all" || user.status === statusFilter)), [query, statusFilter, users]);
-  return <section className="admin-columns"><div className="user-panel"><div className="panel-heading"><div><h2>Testers</h2><p>Accounts, setup state, and release access—never personal AmirOS content.</p></div><div className="table-actions"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search testers" /></label><select className="compact-select" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "all" | AccessStatus)}><option value="all">All access</option><option value="active">Active</option><option value="paused">Paused</option><option value="revoked">Revoked</option></select></div></div><UserTable users={matchingUsers} selectedId={selected?.id} onSelect={onSelect} /><div className="table-footer"><span>Showing {matchingUsers.length} Control Center accounts</span><span>Operational metadata only.</span></div></div><aside className="user-detail">{selected ? <SelectedUser selected={selected} onStatus={onStatus} onProfile={onProfile} onReleaseChannel={onReleaseChannel} onToggleFeature={onToggleFeature} onDeviceStatus={onDeviceStatus} onDelete={onDelete} /> : <EmptyCopy text="Select a tester to review setup, device access, and feature assignments." />}</aside></section>;
+  const pendingTesters = applications.filter((application) => !application.accountId && (application.state === "approved" || application.state === "invited") && `${application.fullName} ${application.email}`.toLowerCase().includes(query.toLowerCase()));
+  return <div className="admin-page-stack">
+    {pendingTesters.length ? <section className="pending-testers-panel"><div className="panel-heading"><div><h2>Tester invitations</h2><p>Approved people move here while they are creating their Control Center account.</p></div></div><div className="applicant-list">{pendingTesters.map((application) => <article className="applicant-row" key={application.id}><div><span className="source-chip">{application.state === "approved" ? "Approval complete" : "Invite sent"}</span><strong>{application.fullName}</strong><span>{application.email} · {application.state === "approved" ? "Secure invitation still needs to be sent" : "Awaiting Control Center account creation"}</span></div><div className="applicant-actions">{application.state === "approved" ? <button className="button button-primary" type="button" disabled={invitingApplicationId === application.id} onClick={() => onInvite(application)}>{invitingApplicationId === application.id ? "Sending…" : "Send secure invite"}</button> : <><NetlifyInviteFallback email={application.email} /><button className="button button-secondary" type="button" onClick={() => onRemovePendingIdentity(application)}>Remove pending invite</button></>}</div></article>)}</div></section> : null}
+    <section className="admin-columns"><div className="user-panel"><div className="panel-heading"><div><h2>Testers</h2><p>Accounts, setup state, and release access—never personal AmirOS content.</p></div><div className="table-actions"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search testers" /></label><select className="compact-select" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "all" | AccessStatus)}><option value="all">All access</option><option value="active">Active</option><option value="paused">Paused</option><option value="revoked">Revoked</option></select></div></div><UserTable users={matchingUsers} selectedId={selected?.id} onSelect={onSelect} /><div className="table-footer"><span>Showing {matchingUsers.length} Control Center accounts</span><span>Operational metadata only.</span></div></div><aside className="user-detail">{selected ? <SelectedUser selected={selected} onStatus={onStatus} onProfile={onProfile} onReleaseChannel={onReleaseChannel} onToggleFeature={onToggleFeature} onDeviceStatus={onDeviceStatus} onDelete={onDelete} /> : <EmptyCopy text="Select a tester to review setup, device access, and feature assignments." />}</aside></section>
+  </div>;
 }
 
 function AdminDevicesPage({ users, onOpenUser }: { users: AdminUser[]; onOpenUser: (id: string, section?: AdminSection) => void }) {
@@ -809,18 +848,17 @@ function AdminCommunicationsPage({ users, applications }: { users: AdminUser[]; 
 
 function Metric({ label, value, detail, icon: Icon }: { label: string; value: string; detail: string; icon: typeof Users }) { return <article className="metric"><span className="metric-icon"><Icon size={20} /></span><p>{label}</p><strong>{value}</strong><small>{detail}</small></article>; }
 
-function ApplicantPanel({ applications, onState, onInvite, onCreate, onEdit, onArchive, onRemoveIdentity, invitingApplicationId }: {
+function ApplicantPanel({ applications, onState, onInvite, onCreate, onEdit, onArchive, invitingApplicationId }: {
   applications: BetaApplication[];
   onState: (applicationId: string, state: BetaApplicationState) => void;
   onInvite: (application: BetaApplication) => void;
   onCreate: (input: { firstName: string; lastName: string; email: string; internalNote?: string }) => Promise<unknown>;
   onEdit: (input: { applicationId: string; firstName: string; lastName: string; email: string; internalNote?: string }) => Promise<unknown>;
   onArchive: (applicationId: string, archived: boolean) => Promise<unknown>;
-  onRemoveIdentity: (application: BetaApplication) => void;
   invitingApplicationId?: string;
 }) {
   const [query, setQuery] = useState("");
-  const [stateFilter, setStateFilter] = useState<"active" | "all" | BetaApplicationState>("active");
+  const [stateFilter, setStateFilter] = useState<"needs_review" | "requested" | "reviewing" | "declined" | "archived">("needs_review");
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string>();
   const [firstName, setFirstName] = useState("");
@@ -832,11 +870,22 @@ function ApplicantPanel({ applications, onState, onInvite, onCreate, onEdit, onA
   const submit = async (event: React.FormEvent) => { event.preventDefault(); if (editingId) await onEdit({ applicationId: editingId, firstName, lastName, email, internalNote: internalNote || undefined }); else await onCreate({ firstName, lastName, email, internalNote: internalNote || undefined }); resetForm(); };
   const normalized = query.trim().toLowerCase();
   const visible = applications.filter((application) => {
-    const stateMatches = stateFilter === "all" ? true : stateFilter === "active" ? !application.archivedAt && application.state !== "declined" : application.state === stateFilter;
+    const stateMatches = stateFilter === "needs_review"
+      ? !application.archivedAt && (application.state === "requested" || application.state === "reviewing")
+      : stateFilter === "archived"
+        ? Boolean(application.archivedAt)
+        : !application.archivedAt && application.state === stateFilter;
     const textMatches = !normalized || `${application.fullName} ${application.email}`.toLowerCase().includes(normalized);
     return stateMatches && textMatches;
   });
-  return <section className="applicant-panel" id="applicants"><div className="panel-heading"><div><h2>Beta applicants</h2><p>Approve a request to send Netlify’s secure account invitation.</p></div><div className="table-actions"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search applicants" /></label><select className="compact-select" value={stateFilter} onChange={(event) => setStateFilter(event.target.value as typeof stateFilter)}><option value="active">Active queue</option><option value="all">All applicants</option><option value="requested">Requested</option><option value="reviewing">Reviewing</option><option value="approved">Approved</option><option value="invited">Invite sent</option><option value="declined">Declined</option></select><button className="button button-primary" type="button" onClick={() => { resetForm(); setAdding(true); }}>Add applicant</button></div></div>{(adding || editingId) ? <form className="applicant-form" onSubmit={submit}><label>First name<input value={firstName} onChange={(event) => setFirstName(event.target.value)} required maxLength={80} /></label><label>Last name<input value={lastName} onChange={(event) => setLastName(event.target.value)} required maxLength={80} /></label><label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required /></label><label>Internal note <span>(optional)</span><input value={internalNote} onChange={(event) => setInternalNote(event.target.value)} maxLength={1000} placeholder="Operational context only" /></label><div><button className="button button-primary" type="submit">{editingId ? "Save profile" : "Add applicant"}</button><button className="text-button" type="button" onClick={resetForm}>Cancel</button></div><p>Manual entries are labelled separately from landing requests. They do not create an account or send an invitation until you approve them.</p></form> : null}{visible.length ? <div className="applicant-list">{visible.map((application) => <article className="applicant-row" key={application.id}><div><span className="source-chip">{application.source === "manual" ? "Added manually" : "Landing request"}</span><strong>{application.fullName}</strong><span>{application.email} · {application.archivedAt ? "Archived" : applicationStateLabel(application.state)}</span>{application.interest ? <p>{application.interest}</p> : null}{application.internalNote ? <small>Internal note: {application.internalNote}</small> : null}</div><div className="applicant-actions"><button className="button button-secondary" type="button" onClick={() => beginEdit(application)} disabled={application.state === "invited" || application.state === "active" || application.state === "device_pending"}>Edit</button><ApplicantActions application={application} onState={onState} onInvite={onInvite} inviting={invitingApplicationId === application.id} />{application.state === "invited" ? <button className="button button-secondary" type="button" onClick={() => onRemoveIdentity(application)}>Remove Identity & invite</button> : null}{application.state === "declined" ? <button className="button button-secondary" type="button" onClick={() => { if (application.archivedAt || window.confirm(`Archive ${application.fullName}? You can restore the record later.`)) void onArchive(application.id, !application.archivedAt); }}>{application.archivedAt ? "Restore" : "Archive"}</button> : null}</div></article>)}</div> : <EmptyCopy text={applications.length ? "No applicants match these filters." : "New landing-page requests will appear here after the verified application intake is connected."} />}</section>;
+  const filters: Array<{ id: typeof stateFilter; label: string }> = [
+    { id: "needs_review", label: "Needs review" },
+    { id: "requested", label: "Requested" },
+    { id: "reviewing", label: "Reviewing" },
+    { id: "declined", label: "Declined" },
+    { id: "archived", label: "Archived" },
+  ];
+  return <section className="applicant-panel" id="applicants"><div className="panel-heading"><div><h2>Beta applicants</h2><p>Review incoming requests. Approved people move to Testers for invitation and follow-up.</p></div><div className="table-actions"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search applicants" /></label><div className="applicant-filter-buttons" role="group" aria-label="Filter applicants">{filters.map((filter) => <button className={stateFilter === filter.id ? "is-active" : ""} type="button" key={filter.id} aria-pressed={stateFilter === filter.id} onClick={() => setStateFilter(filter.id)}>{filter.label}</button>)}</div><button className="button button-primary" type="button" onClick={() => { resetForm(); setAdding(true); }}>Add applicant</button></div></div>{(adding || editingId) ? <form className="applicant-form" onSubmit={submit}><label>First name<input value={firstName} onChange={(event) => setFirstName(event.target.value)} required maxLength={80} /></label><label>Last name<input value={lastName} onChange={(event) => setLastName(event.target.value)} required maxLength={80} /></label><label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required /></label><label>Internal note <span>(optional)</span><input value={internalNote} onChange={(event) => setInternalNote(event.target.value)} maxLength={1000} placeholder="Operational context only" /></label><div><button className="button button-primary" type="submit">{editingId ? "Save profile" : "Add applicant"}</button><button className="text-button" type="button" onClick={resetForm}>Cancel</button></div><p>Manual entries are labelled separately from landing requests. They do not create an account or send an invitation until you approve them.</p></form> : null}{visible.length ? <div className="applicant-list">{visible.map((application) => <article className="applicant-row" key={application.id}><div><span className="source-chip">{application.source === "manual" ? "Added manually" : "Landing request"}</span><strong>{application.fullName}</strong><span>{application.email} · {application.archivedAt ? "Archived" : applicationStateLabel(application.state)}</span>{application.interest ? <p>{application.interest}</p> : null}{application.internalNote ? <small>Internal note: {application.internalNote}</small> : null}</div><div className="applicant-actions"><button className="button button-secondary" type="button" onClick={() => beginEdit(application)}>Edit</button><ApplicantActions application={application} onState={onState} onInvite={onInvite} inviting={invitingApplicationId === application.id} />{application.state === "declined" ? <button className="button button-secondary" type="button" onClick={() => { if (application.archivedAt || window.confirm(`Archive ${application.fullName}? You can restore the record later.`)) void onArchive(application.id, !application.archivedAt); }}>{application.archivedAt ? "Restore" : "Archive"}</button> : null}</div></article>)}</div> : <EmptyCopy text={applications.length ? "No applicants match this filter." : "New landing-page requests will appear here after the verified application intake is connected."} />}</section>;
 }
 
 function ApplicantActions({ application, onState, onInvite, inviting }: { application: BetaApplication; onState: (applicationId: string, state: BetaApplicationState) => void; onInvite: (application: BetaApplication) => void; inviting: boolean }) {

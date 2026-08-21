@@ -67,6 +67,29 @@ type FirstRunPeopleBuildDependencies = {
   onProgress: (completed: number, total: number) => void;
 };
 
+export type FirstRunPeopleBuildResult = {
+  selectedChatIds: string[];
+  profiledChatIds: string[];
+  shortConversationChatIds: string[];
+};
+
+/** Control Center receives this informational milestone only after a profile exists. */
+export function shouldReportFirstPeopleSelected(result: FirstRunPeopleBuildResult): boolean {
+  return result.profiledChatIds.length > 0;
+}
+
+/** These are informational checklist updates only; neither event grants access. */
+export function firstRunPeopleControlCenterEvents(
+  connectionStatus: "starting" | "qr" | "authenticated" | "ready" | "disconnected",
+  result: FirstRunPeopleBuildResult,
+): Array<"whatsapp_connected" | "first_people_selected"> {
+  const events: Array<"whatsapp_connected" | "first_people_selected"> = [];
+  if (connectionStatus !== "ready") return events;
+  events.push("whatsapp_connected");
+  if (shouldReportFirstPeopleSelected(result)) events.push("first_people_selected");
+  return events;
+}
+
 /**
  * Performs one intentional, bounded analysis per explicitly selected person.
  * The caller must obtain explicit consent before invoking this function and
@@ -75,8 +98,10 @@ type FirstRunPeopleBuildDependencies = {
 export async function buildFirstRunPeopleDirectory(
   chatIds: string[],
   dependencies: FirstRunPeopleBuildDependencies,
-) {
+): Promise<FirstRunPeopleBuildResult> {
   const selections = [...new Set(chatIds)].slice(0, FIRST_RUN_PEOPLE_SUGGESTION_LIMIT);
+  const profiledChatIds: string[] = [];
+  const shortConversationChatIds: string[] = [];
   for (const [index, chatId] of selections.entries()) {
     dependencies.onProgress(index, selections.length);
     const result = await dependencies.scanHistory(chatId, FIRST_RUN_PEOPLE_SCAN_LIMIT);
@@ -84,8 +109,12 @@ export async function buildFirstRunPeopleDirectory(
     // first profile, but remain selected for ongoing learning.
     if (result.messages.length >= 2) {
       await dependencies.analyzeRelationship(chatId, FIRST_RUN_PEOPLE_SCAN_LIMIT, true);
+      profiledChatIds.push(chatId);
+    } else {
+      shortConversationChatIds.push(chatId);
     }
     await dependencies.setKnowledgeTracking(chatId, dependencies.futureTracking);
     dependencies.onProgress(index + 1, selections.length);
   }
+  return { selectedChatIds: selections, profiledChatIds, shortConversationChatIds };
 }

@@ -13,6 +13,7 @@ const workDirectory = configuredWorkDirectory
   : resolve(projectDirectory, "work");
 const logPath = resolve(workDirectory, "bot.log");
 const pidPath = resolve(workDirectory, "amiros.pid");
+const watchdogLockPath = resolve(workDirectory, "amiros-watchdog.lock");
 const restartCommandPath = resolve(workDirectory, "backend-restart-request.json");
 const restartStatusPath = resolve(workDirectory, "backend-restart-status.json");
 const serverPath = configuredServerPath
@@ -60,6 +61,64 @@ const sessionTerminationGraceMs = positiveMilliseconds("AMIROS_WATCHDOG_SESSION_
 const sessionLockPollMs = positiveMilliseconds("AMIROS_WATCHDOG_SESSION_LOCK_POLL_MS", 150);
 
 mkdirSync(workDirectory, { recursive: true });
+
+function isThisProjectWatchdog(pid) {
+  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return false;
+  try {
+    const command = execFileSync(process.platform === "darwin" ? "/bin/ps" : "ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return command.includes(resolve(projectDirectory, "scripts", "amiros-watchdog.mjs"));
+  } catch {
+    return false;
+  }
+}
+
+function lockOwnerPid() {
+  try {
+    const pid = Number(readFileSync(watchdogLockPath, "utf8").trim());
+    return Number.isInteger(pid) ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function removeOwnWatchdogLock() {
+  try {
+    if (lockOwnerPid() === process.pid) unlinkSync(watchdogLockPath);
+  } catch {
+    // A replacement process may have already cleaned up a stale lock.
+  }
+}
+
+function acquireWatchdogLock() {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const descriptor = openSync(watchdogLockPath, "wx", 0o600);
+      try {
+        writeFileSync(descriptor, `${process.pid}\n`, { encoding: "utf8" });
+      } finally {
+        closeSync(descriptor);
+      }
+      return true;
+    } catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) throw error;
+      const owner = lockOwnerPid();
+      if (owner && isThisProjectWatchdog(owner)) return false;
+      try { unlinkSync(watchdogLockPath); } catch {}
+    }
+  }
+  return false;
+}
+
+if (!acquireWatchdogLock()) {
+  // The LaunchAgent can be asked to start more than once during an update or
+  // recovery. One watchdog owns each AmirOS folder; a second must never race
+  // it for the dashboard port or the WhatsApp browser session.
+  process.exit(0);
+}
+
 writeFileSync(pidPath, `${process.pid}\n`, { encoding: "utf8", mode: 0o600 });
 
 function removeOwnPidFile() {
@@ -348,6 +407,7 @@ async function startServer(reason, isRecovery = false) {
         clearInterval(restartCommandTimer);
         clearInterval(healthTimer);
         removeOwnPidFile();
+        removeOwnWatchdogLock();
         process.exitCode = 1;
         return;
       }
@@ -457,6 +517,7 @@ async function finishShutdown(exitCode = 0) {
   // rare leftover process without touching any WhatsApp session files.
   await releaseWhatsAppSessionBrowser();
   removeOwnPidFile();
+  removeOwnWatchdogLock();
   process.exit(exitCode);
 }
 

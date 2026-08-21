@@ -75,8 +75,8 @@ export function buildActivationChecklist(source: ActivationSource): ActivationCh
       ? {
           id: "connect_mac" as const,
           target: "control_center_connect" as const,
-          label: "Connect this Mac to finish setup",
-          description: "In AmirOS, open your username menu, choose Settings, then select Connect this Mac.",
+          label: "Download and connect this Mac",
+          description: "Download AmirOS, open it, then select Connect this Mac.",
         }
       : !whatsappConnectedAt
         ? {

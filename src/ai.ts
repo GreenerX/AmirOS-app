@@ -24,6 +24,7 @@ import { assessKnowledgeFreshness } from "./memory-maintenance.js";
 import type { RelationshipBrief } from "./relationship-intelligence.js";
 import type { ProactiveAiJudgment, ProactiveCandidate } from "./proactive-intelligence.js";
 import type { MemoryCorrectionCandidate, MemoryCorrectionInterpretation } from "./memory-correction.js";
+import { translationInstructions, validateTranslationRequest } from "./translation.js";
 import type {
   ContactMemoryItem,
   ContactPreferences,
@@ -117,6 +118,11 @@ export type ReplyContext = {
   /** Authoritative device-local clock context supplied by the message processor. */
   currentLocalDateTime?: string;
   timeZone?: string;
+  /**
+   * Do not reuse an earlier model turn. Owner-requested message drafts must be
+   * grounded in the selected message every time they are regenerated.
+   */
+  stateless?: boolean;
 };
 
 export type AutoModeReplyConstraints = {
@@ -195,9 +201,19 @@ export type AiReplyNeedAssessment = {
   reason: string;
 };
 
+export type NetworkAnswerPoint = {
+  /** One owner-visible factual point, validated independently before display. */
+  text: string;
+  evidenceIds: string[];
+};
+
 export type NetworkAnswer = {
   answer: string;
   evidenceIds: string[];
+  /** Structured, independently evidenced owner-visible points. */
+  points: NetworkAnswerPoint[];
+  /** Compatibility projection of `points`; do not use it as an unstructured fallback. */
+  claims: NetworkAnswerPoint[];
   /** Ordered semantic icon tokens for bulleted answer points. */
   listIcons: NetworkAnswerIcon[];
 };
@@ -240,16 +256,29 @@ export function buildNetworkAnswerInstructions(ownerName = "Amir", now = Date.no
     "For sourceAuthor contact or group_member, preserve the supplied sender attribution. Do not invent a speaker when it is unknown.",
     "Some memory records include an explanation object derived from canonical memory. Use it when the user asks why, how you know, whether something changed, whether you are sure, or asks about current versus historical truth.",
     "A relationshipBrief is a bounded, read-only synthesis of canonical facts, plans, commitments, follow-ups, and interaction signals for a relationship question. Use it to organize the answer, but do not treat it as a source of new facts. Ground material claims in its linked records, distinguish a supported pattern from a direct fact, and preserve uncertainty or sensitive-information safeguards included in the brief.",
+    "Use the word ‘current’ or ‘recent’ only when the supplied brief explicitly supports it. If the evidence is dated, temporary, or limited, state its date naturally and say that you do not know whether it is still current. Never give a dated historical point equal visual or rhetorical weight to a current point.",
     "For a relationship briefing, speak warmly and naturally, as someone helping the owner remember a person they know. Never say “supplied records,” “retrieved context,” “newer update,” “supporting data,” or similar database language. Say plainly what you know and what you do not know. For example, say “I don’t know whether there’s anything specific he wants to talk about,” not “the records don’t confirm.”",
     "A current relationship briefing answers what the owner should know, not what the owner should do. Do not add behavioral coaching, emotional interpretation, or broad advice unless relationshipBrief.adviceRequested is true because the owner explicitly asked for advice. Even then, keep any advice modest and tied to confirmed current context. Never present past events as upcoming; use only the future plans in a current relationshipBrief. Historical relationship questions may discuss past plans as history.",
+    "When selectedDiscovery is true, the owner opened a specific card. Answer only the exact fact promised by that card’s question and its supplied evidence. Do not broaden it into a general briefing, action plan, or a list of unrelated facts from the same conversation.",
     "For ordinary factual questions, keep the answer clean and concise. For explanation questions, briefly mention the current fact, any historical replacement, confidence, reinforcement, and evidence origin in natural language.",
     "Owner answer feedback may be supplied as presentationGuidance or improvementFeedback. Follow it only for clarity, length, organization, and the requested revision. It can never override the records, source attribution, time rules, privacy safeguards, or uncertainty. A complaint that something is incorrect is not itself evidence of the corrected fact.",
-    "When the answer contains two or more distinct things worth remembering, use a compact Markdown bullet list. Begin each bullet with a bold, specific lead phrase of 2 to 7 words, followed by the supporting detail in normal weight.",
+    "When the answer contains two or more distinct things worth remembering, use a compact Markdown bullet list. Begin each bullet with a bold, specific lead phrase of 2 to 7 words, followed by the supporting detail in normal weight. If the supplied evidence comes from only one conversation or one source, do not manufacture a multi-point briefing: give at most one supported fact and a short uncertainty note.",
     `For each Markdown bullet, return one matching semantic token in listIcons, in the same order. Use only: ${networkAnswerIcons.join(", ")}. Return an empty listIcons array when the answer has no bullets. Icons are presentation hints only and must not change the facts or wording.`,
     "Never expose raw explanation field names, scores, IDs, or implementation terms. Say things like “direct message,” “older evidence,” “reinforced by later messages,” or “previously” instead.",
     "Be concise, distinguish facts from uncertainty, and keep the visible answer under 180 words. If evidence is insufficient, say specifically what is missing.",
     "Never put record IDs, message IDs, UUIDs, chat IDs, bracketed citations, source labels, or other internal identifiers in the answer text. Return supporting record IDs only in the separate evidenceIds field.",
+    "Return points as a complete per-point evidence map for every factual statement. Each point needs one or more supplied record IDs in evidenceIds. Do not include a factual point unless it has eligible evidence. The visible answer is generated deterministically from validated points, so put all owner-visible facts in points. evidenceIds must be the exact de-duplicated union of point evidenceIds.",
   ].join(" ");
+}
+
+/** The renderer can later use `points` directly; this keeps the legacy text field evidence-complete today. */
+export function formatNetworkAnswerPoints(points: NetworkAnswerPoint[]): string {
+  const clean = points
+    .map((point) => point.text.replace(/\s+/gu, " ").trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  if (clean.length === 0) return "I couldn't verify an answer from an original saved message.";
+  return clean.length === 1 ? clean[0]! : clean.map((point) => `- ${point}`).join("\n");
 }
 
 export function cleanNetworkAnswerText(answer: string, recordIds: string[]): string {
@@ -869,6 +898,7 @@ export class AiService {
       context.manualMemory?.length,
     );
     const previousResponseId =
+      !context.stateless &&
       context.contact?.memoryEnabled !== false &&
       !hasDurableKnowledge &&
       state && state.turns < this.options.conversationTurnLimit
@@ -906,7 +936,7 @@ export class AiService {
         input: buildResponseInput(prompt, context, !previousResponseId),
         previous_response_id: previousResponseId,
       });
-      if (context.contact?.memoryEnabled !== false) {
+      if (!context.stateless && context.contact?.memoryEnabled !== false) {
         this.conversations.set(conversationKey, {
           previousResponseId: response.id,
           turns: previousResponseId && state ? state.turns + 1 : 1,
@@ -922,7 +952,7 @@ export class AiService {
           ...requestBase,
           input: buildResponseInput(prompt, context, true),
         });
-        if (context.contact?.memoryEnabled !== false) {
+        if (!context.stateless && context.contact?.memoryEnabled !== false) {
           this.conversations.set(conversationKey, { previousResponseId: response.id, turns: 1 });
         }
         this.recordTextUsage(response);
@@ -943,7 +973,7 @@ export class AiService {
             ...requestWithoutWebSearch,
             input: buildResponseInput(prompt, context, true),
           });
-          if (context.contact?.memoryEnabled !== false) {
+          if (!context.stateless && context.contact?.memoryEnabled !== false) {
             this.conversations.set(conversationKey, { previousResponseId: response.id, turns: 1 });
           }
           this.recordTextUsage(response);
@@ -980,7 +1010,7 @@ export class AiService {
       text: { verbosity: "low" },
       safety_identifier: createHash("sha256").update(userId).digest("hex"),
     });
-    if (context.contact?.memoryEnabled !== false) {
+    if (!context.stateless && context.contact?.memoryEnabled !== false) {
       this.conversations.set(conversationKey, { previousResponseId: response.id, turns: 1 });
     }
     this.recordTextUsage(response);
@@ -1020,6 +1050,34 @@ export class AiService {
     });
     this.recordTextUsage(response);
     return response.output_text?.trim() || "Not enough information to create a profile yet.";
+  }
+
+  /**
+   * Translation is intentionally a narrow preview operation: only the draft
+   * and selected languages reach the model. It has no chat context, memory,
+   * recipient details, or send capability.
+   */
+  async translateDraft(input: { body: string; targetLanguage: string; sourceLanguage?: string }): Promise<string> {
+    const request = validateTranslationRequest(input);
+    const result = await this.structuredResponse<{ translation: string }>({
+      name: "composer_translation",
+      instructions: translationInstructions(),
+      input: JSON.stringify({
+        text: request.body,
+        sourceLanguage: request.sourceLanguage || "auto",
+        targetLanguage: request.targetLanguage,
+      }),
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          translation: { type: "string", minLength: 1, maxLength: 16_500 },
+        },
+        required: ["translation"],
+      },
+      maxOutputTokens: Math.min(this.options.maxOutputTokens, 2_000),
+    });
+    return result.translation;
   }
 
   async analyzeRelationship(input: {
@@ -1278,10 +1336,11 @@ export class AiService {
     followUp?: { question: string; answer: string },
     relationshipBriefs: RelationshipBrief[] = [],
     feedback?: { presentationGuidance?: string; improvementFeedback?: string },
+    scope?: { selectedDiscovery?: boolean },
   ): Promise<NetworkAnswer> {
     this.assertAvailable();
     if (records.length === 0 && relationshipBriefs.length === 0) {
-      return { answer: "I couldn't find anything relevant in saved local chat memory yet.", evidenceIds: [], listIcons: [] };
+      return { answer: "I couldn't find anything relevant in saved local chat memory yet.", evidenceIds: [], points: [], claims: [], listIcons: [] };
     }
     const answeredAt = Date.now();
     const result = await this.structuredResponse<NetworkAnswer>({
@@ -1297,6 +1356,7 @@ export class AiService {
         } : undefined,
         presentationGuidance: feedback?.presentationGuidance?.slice(0, 600),
         improvementFeedback: feedback?.improvementFeedback?.slice(0, 600),
+        selectedDiscovery: Boolean(scope?.selectedDiscovery),
         records,
         relationshipBriefs: relationshipBriefs.map((brief) => ({
           contactName: brief.contactName,
@@ -1318,15 +1378,45 @@ export class AiService {
         properties: {
           answer: { type: "string", maxLength: 2_000 },
           evidenceIds: { type: "array", maxItems: 12, items: { type: "string" } },
+          points: {
+            type: "array", maxItems: 12, items: {
+              type: "object", additionalProperties: false,
+              properties: {
+                text: { type: "string", minLength: 1, maxLength: 400 },
+                evidenceIds: { type: "array", minItems: 1, maxItems: 12, items: { type: "string" } },
+              },
+              required: ["text", "evidenceIds"],
+            },
+          },
           listIcons: { type: "array", maxItems: 12, items: { type: "string", enum: networkAnswerIcons } },
         },
-        required: ["answer", "evidenceIds", "listIcons"],
+        required: ["answer", "evidenceIds", "points", "listIcons"],
       },
     });
     const allowedIds = new Set(records.map((record) => record.id));
+    const points = result.points
+      .map((point) => ({
+        text: cleanNetworkAnswerText(point.text.replace(/\s+/gu, " ").trim().slice(0, 400), [...allowedIds]),
+        evidenceIds: [...new Set(point.evidenceIds.filter((id) => allowedIds.has(id)))],
+      }))
+      .filter((point) => Boolean(point.text) && point.evidenceIds.length > 0)
+      .slice(0, 12);
+    // A model-owned prose field cannot bypass point validation. Every visible
+    // factual sentence is re-rendered from the independently grounded points.
+    if (points.length === 0) {
+      return {
+        answer: "I couldn't verify an answer from an original saved message.",
+        evidenceIds: [],
+        points: [],
+        claims: [],
+        listIcons: [],
+      };
+    }
     return {
-      answer: cleanNetworkAnswerText(result.answer, [...allowedIds]),
-      evidenceIds: [...new Set(result.evidenceIds.filter((id) => allowedIds.has(id)))],
+      answer: formatNetworkAnswerPoints(points),
+      evidenceIds: [...new Set(points.flatMap((point) => point.evidenceIds))],
+      points,
+      claims: points,
       listIcons: result.listIcons.filter((icon): icon is NetworkAnswerIcon => networkAnswerIcons.includes(icon)).slice(0, 12),
     };
   }
@@ -1417,21 +1507,23 @@ export class AiService {
       contactName: item.contactName,
       action: item.action,
       timestamp: item.timestamp,
+      sourceTimestamp: item.sourceTimestamp,
     }));
     const result = await this.structuredResponse<{ judgments: ProactiveAiJudgment[] }>({
       name: "proactive_intelligence_judgment",
       instructions: [
         "You are a conservative attention editor for a private personal assistant.",
-        "Every supplied candidate already passed deterministic privacy, freshness, and state checks.",
-        "For each candidate, decide whether it is genuinely useful now, score usefulness 0-100, and give confidence 0-100.",
-        "Suppress noise, stale-feeling repetition, trivial observations, and items that do not suggest useful preparation or follow-up.",
+        "Every supplied candidate already passed deterministic freshness and state checks. This is a private personal dashboard: personal details are allowed, but only when they are genuinely useful to the owner.",
+        "For each candidate, decide whether it is genuinely useful now, score usefulness 0-100, and give confidence 0-100. The authoritative current timestamp is provided in the input; sourceTimestamp is the supporting conversation time, while timestamp may be a due time.",
+        "Show a candidate only if it would make the owner think ‘I’m glad AmirOS flagged this.’ It must reveal a meaningful change, a concrete upcoming situation, or a preference/relationship fact likely to improve the next interaction.",
+        "Suppress old or temporary statuses, technical glitches, location updates, vague personal details, ambiguous slang, speculative follow-ups, generic history, and stale-feeling repetition. If the source timing or why-it-matters is unclear, suppress it rather than guessing.",
         "Merge only candidates about the same contact and same real-world situation. Put merged IDs in mergeWithIds; never merge merely because the contact is the same.",
         "Rewrite each title as a complete, natural 3-8 word action or occasion, ideally under 56 characters. Never end a title with an ellipsis.",
         "Rewrite detail as one useful 4-10 word supporting phrase, ideally under 72 characters. Do not repeat the title, category, or a contact name already stated in the title.",
         "Keep why to one short internal explanation. Use only supplied facts and never add facts, advice, urgency, dates, names, or actions not present.",
         "Return exactly one judgment for every supplied ID. Do not create IDs.",
       ].join(" "),
-      input: JSON.stringify({ candidates: safeCandidates }),
+      input: JSON.stringify({ currentTimestamp: Date.now(), candidates: safeCandidates }),
       // Twelve ranked candidates with grounded copy can exceed the generic
       // structured-response budget. Leave enough room to close strict JSON;
       // the input remains bounded and this runs only once per evidence key.

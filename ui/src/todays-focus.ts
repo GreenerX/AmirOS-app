@@ -1,5 +1,6 @@
 import { buildProactiveReminders } from "./proactive-reminders.js";
 import type { IntelligenceChat, IntelligenceData, ProactiveIntelligenceItem } from "./types.js";
+import { intelligenceCardDedupeKey, isTrustworthyIntelligenceCard } from "../../shared/intelligence-card-eligibility";
 
 export type TodaysFocusItem = {
   id: string;
@@ -119,10 +120,32 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
 
   const items: TodaysFocusItem[] = [];
   const seen = new Set<string>();
+  const seenThemes = new Set<string>();
+  const retainedMessageIdsByChat = new Map(data.chats.map((chat) => [chat.chatId, chat.retainedMessageIds || []]));
   const proactiveSourceIds = new Set((data.proactive || []).flatMap((item) => item.sourceIds));
+  const eligible = (
+    chatId: string,
+    title: string,
+    detail: string,
+    sourceIds: string[],
+    evidence: { messageId?: string; timestamp?: number }[],
+    options: { dueAt?: number; openFollowUp?: boolean } = {},
+  ) => isTrustworthyIntelligenceCard({
+    chatId,
+    title,
+    detail,
+    sourceIds,
+    evidence,
+    retainedMessageIds: retainedMessageIdsByChat.get(chatId),
+    dueAt: options.dueAt,
+    openFollowUp: options.openFollowUp,
+    now: now.getTime(),
+  });
   const add = (item: TodaysFocusItem) => {
-    if (seen.has(item.id)) return;
+    const theme = intelligenceCardDedupeKey(item.chatId, item.title, []);
+    if (seen.has(item.id) || seenThemes.has(theme)) return;
     seen.add(item.id);
+    seenThemes.add(theme);
     items.push(item);
   };
 
@@ -130,7 +153,10 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
     if (proactiveSourceIds.has(commitment.id)) continue;
     if (commitment.owner !== "me" || commitment.status !== "open" || typeof commitment.dueAt !== "number") continue;
     const priority = duePriority(commitment.dueAt, now);
-    if (priority === undefined) continue;
+    if (priority === undefined || !eligible(
+      commitment.chatId, commitment.content, priority === 0 ? "Overdue commitment" : "Due today", [commitment.id], [commitment.evidence],
+      { dueAt: toMilliseconds(commitment.dueAt), openFollowUp: true },
+    )) continue;
     add({
       id: `commitment:${commitment.chatId}:${commitment.id}`,
       type: "commitment",
@@ -151,7 +177,10 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
     if (proactiveSourceIds.has(todo.id)) continue;
     if (todo.status !== "open" || typeof todo.dueAt !== "number") continue;
     const priority = duePriority(todo.dueAt, now);
-    if (priority === undefined) continue;
+    if (priority === undefined || !eligible(
+      todo.chatId, todo.title, priority === 0 ? "Overdue task" : "Due today", [todo.id], [todo.evidence],
+      { dueAt: toMilliseconds(todo.dueAt) },
+    )) continue;
     add({
       id: `todo:${todo.chatId}:${todo.id}`,
       type: "todo",
@@ -177,7 +206,8 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
     const recentlyPassed = !event.allDay
       && startAt < now.getTime()
       && now.getTime() - startAt <= RECENTLY_PASSED_EVENT_WINDOW_MS;
-    if (event.status !== "confirmed" || (!recentlyPassed && startAt < now.getTime()) || startAt >= dayAfterTomorrow) continue;
+    if (event.status !== "confirmed" || (!recentlyPassed && startAt < now.getTime()) || startAt >= dayAfterTomorrow
+      || !eligible(event.chatId, event.title, recentlyPassed ? "Just started" : startAt < tomorrow ? "Happening today" : "Happening tomorrow", [event.id], [event.evidence], { dueAt: startAt })) continue;
     add({
       id: `calendar:${event.chatId}:${event.id}`,
       type: "calendar",
@@ -201,7 +231,10 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
 
   for (const chat of data.needsReply) {
     if (chat.lastIncoming?.messageId && proactiveSourceIds.has(chat.lastIncoming.messageId)) continue;
-    if (!chat.needsReply) continue;
+    if (!chat.needsReply || !eligible(
+      chat.chatId, `Reply to ${chat.contactName}`, "A message is waiting", [chat.lastIncoming?.messageId || "latest"],
+      [chat.lastIncoming || {}], { openFollowUp: true },
+    )) continue;
     add({
       id: `reply:${chat.chatId}:${chat.lastIncoming?.messageId || "latest"}`,
       type: "reply",
@@ -220,6 +253,11 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
 
   for (const reminder of buildProactiveReminders(data, now)) {
     if (seen.has(reminder.id) || proactiveSourceIds.has(reminder.recordId)) continue;
+    if (!eligible(
+      reminder.chatId, reminder.title, reminder.detail, [reminder.recordId],
+      [{ messageId: reminder.messageId, timestamp: reminder.sourceTimestamp }],
+      { dueAt: reminder.timestamp, openFollowUp: reminder.type === "commitment" },
+    )) continue;
     add({
       id: reminder.id,
       type: reminder.type,
@@ -239,6 +277,11 @@ export function buildTodaysFocus(data: IntelligenceData | undefined, now = new D
 
   for (const proactive of data.proactive || []) {
     if (seen.has(proactive.id)) continue;
+    if (!eligible(
+      proactive.chatId, proactive.title, proactive.detail, proactive.sourceIds,
+      [{ messageId: proactive.messageId, timestamp: proactive.sourceTimestamp }],
+      { dueAt: proactive.hasExplicitDueAt ? proactive.timestamp : undefined, openFollowUp: proactive.kind === "commitment" || proactive.kind === "reply" },
+    )) continue;
     add({
       id: proactive.id,
       type: proactive.kind === "todo" ? "todo" : proactive.kind === "reply" ? "reply" : "commitment",

@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, ExternalLink, Laptop, LifeBuoy } from "lucide-react";
+import { AlertTriangle, Check, ExternalLink, Laptop, LifeBuoy, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   addContactMemory,
@@ -49,6 +49,11 @@ import {
   reportControlCenterOnboardingProgress,
   submitReplySuggestionFeedback,
   submitIntelligenceAnswerFeedback,
+  translateComposerDraft,
+  getScheduledMessages,
+  scheduleMessage,
+  updateScheduledMessage,
+  cancelScheduledMessage,
 } from "./api";
 import { InboxView } from "./components/InboxView";
 import { IntelligenceView } from "./components/IntelligenceView";
@@ -59,9 +64,11 @@ import { TerminalView } from "./components/TerminalView";
 import { CalendarView } from "./components/CalendarView";
 import { FloatingAssistant } from "./components/FloatingAssistant";
 import { ReleaseExperience } from "./components/ReleaseExperience";
+import { PeopleGettingStarted } from "./components/PeopleGettingStarted";
 import { BetaSupportExperience } from "./components/BetaSupportExperience";
 import { UpdatePrompt } from "./components/UpdatePrompt";
-import { buildFirstRunPeopleDirectory } from "./onboarding-people";
+import { buildFirstRunPeopleDirectory, firstRunPeopleControlCenterEvents } from "./onboarding-people";
+import { hasLegacyCompletedOnboarding } from "./release-visibility";
 import { useAppInstall } from "./pwa-install";
 import { requiresControlCenterActivation } from "./control-center-access";
 import {
@@ -96,6 +103,7 @@ import type {
   AmirOSUpdateStatus,
   ViewName,
   WritingStyleProfile,
+  ScheduledMessage,
 } from "./types";
 import { useTimeFormat } from "./TimeFormatProvider";
 
@@ -266,6 +274,8 @@ export function App() {
   const [view, setView] = useState<ViewName>("overview");
   const [dashboard, setDashboard] = useState<DashboardData>();
   const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [hasMoreChats, setHasMoreChats] = useState(false);
+  const [loadingMoreChats, setLoadingMoreChats] = useState(false);
   const [selectedChatId, setSelectedChatId] = useState<string>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [memory, setMemory] = useState<ChatMemoryEntry[]>([]);
@@ -280,11 +290,12 @@ export function App() {
   const [loadingIntelligence, setLoadingIntelligence] = useState(false);
   const [incomingMessageCount, setIncomingMessageCount] = useState(0);
   const [contact, setContact] = useState<ContactPreferences>();
+  const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([]);
   const [loadedChatId, setLoadedChatId] = useState<string>();
   const [loadingChat, setLoadingChat] = useState(false);
   const [error, setError] = useState<string>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("amiros-sidebar") === "collapsed");
-  const [inboxInitialFilter, setInboxInitialFilter] = useState<"all" | "unread">("all");
+  const [inboxInitialFilter, setInboxInitialFilter] = useState<"all" | "unread" | "priority">("unread");
   const [inboxContactSettingsTab, setInboxContactSettingsTab] = useState<"configure" | "knowledge">("configure");
   const [highlightedMessageId, setHighlightedMessageId] = useState<string>();
   const [intelligenceNavigationRequest, setIntelligenceNavigationRequest] = useState<{
@@ -294,6 +305,9 @@ export function App() {
   }>();
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [betaSupportOpen, setBetaSupportOpen] = useState(false);
+  const [peopleGuideEpoch, setPeopleGuideEpoch] = useState(0);
+  const [peoplePickerOpen, setPeoplePickerOpen] = useState(false);
+  const [productTourStep, setProductTourStep] = useState<number>();
   const whatsappChecklistReported = useRef(false);
   const hydratedTimeFormat = useRef(false);
   // Setup-only dashboards deliberately omit private settings until the Mac is
@@ -325,14 +339,23 @@ export function App() {
       if (versionAtStart === mutationVersion.current) setDashboard(nextDashboard);
       if (requiresControlCenterActivation(nextDashboard.controlCenter)) {
         setChats([]);
+        setHasMoreChats(false);
         setSelectedChatId(undefined);
         setError(undefined);
         return;
       }
       try {
         const nextChats = await getChats();
-        setChats(nextChats);
-        setSelectedChatId((current) => current || nextChats[0]?.id);
+        setChats((current) => {
+          // Refresh the recent page without discarding older pages the user has
+          // already loaded while scrolling the Inbox.
+          const refreshedIds = new Set(nextChats.chats.map((chat) => chat.id));
+          return current.length > nextChats.chats.length
+            ? [...nextChats.chats, ...current.filter((chat) => !refreshedIds.has(chat.id))]
+            : nextChats.chats;
+        });
+        setHasMoreChats(nextChats.hasMore);
+        setSelectedChatId((current) => current || nextChats.chats[0]?.id);
         setError(undefined);
       } catch (chatError) {
         // Chat loading can fail transiently while WhatsApp Web reconnects. The
@@ -345,6 +368,23 @@ export function App() {
       setError(refreshError instanceof Error ? refreshError.message : "Could not connect to AmirOS");
     }
   }, []);
+
+  const loadMoreChats = async () => {
+    if (loadingMoreChats || !hasMoreChats) return;
+    setLoadingMoreChats(true);
+    try {
+      const page = await getChats(chats.length);
+      setChats((current) => {
+        const existing = new Set(current.map((chat) => chat.id));
+        return [...current, ...page.chats.filter((chat) => !existing.has(chat.id))];
+      });
+      setHasMoreChats(page.hasMore);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not load older conversations");
+    } finally {
+      setLoadingMoreChats(false);
+    }
+  };
 
   useEffect(() => {
     void refresh();
@@ -496,7 +536,7 @@ export function App() {
       setError("Calendar views are currently turned off for this AmirOS account.");
       return;
     }
-    if (nextView === "inbox") { setInboxInitialFilter("all"); setInboxContactSettingsTab("configure"); setHighlightedMessageId(undefined); }
+    if (nextView === "inbox") { setInboxInitialFilter("unread"); setInboxContactSettingsTab("configure"); setHighlightedMessageId(undefined); }
     if (nextView === "intelligence") setIntelligenceNavigationRequest(undefined);
     if (nextView === "inbox" && window.matchMedia("(max-width: 720px)").matches) {
       setSelectedChatId(undefined);
@@ -517,6 +557,12 @@ export function App() {
     setHighlightedMessageId(messageId);
     setView("inbox");
   };
+  const openPeopleProfile = (chatId: string) => {
+    setSelectedChatId(chatId);
+    setInboxContactSettingsTab("knowledge");
+    setHighlightedMessageId(undefined);
+    setView("inbox");
+  };
   const selectInboxChat = (chatId: string | undefined) => {
     setHighlightedMessageId(undefined);
     setSelectedChatId(chatId);
@@ -535,6 +581,28 @@ export function App() {
   const visibleMemory = selectedChatId === loadedChatId ? memory : [];
   const visibleManualMemory = selectedChatId === loadedChatId ? manualMemory : [];
   const visibleProfile = selectedChatId === loadedChatId ? profile : undefined;
+
+  useEffect(() => {
+    if (!selectedChatId || view !== "inbox") {
+      setScheduledMessages([]);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const next = await getScheduledMessages(selectedChatId);
+        if (!cancelled) setScheduledMessages(next);
+      } catch {
+        // Keep an existing scheduled list visible during a transient local sync gap.
+      }
+    };
+    void load();
+    const interval = window.setInterval(() => void load(), 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [selectedChatId, view]);
 
   const changeMode = async (chatId: string, mode: ReplyMode) => {
     try {
@@ -805,6 +873,24 @@ export function App() {
     ]);
   };
 
+  const schedule = async (chatId: string, input: { body: string; scheduledAt: number; timezone: string }) => {
+    const scheduled = await scheduleMessage(chatId, input);
+    setScheduledMessages((current) => [...current.filter((item) => item.id !== scheduled.id), scheduled]);
+    return scheduled;
+  };
+
+  const updateScheduled = async (id: string, patch: { body?: string; scheduledAt?: number; timezone?: string }) => {
+    const scheduled = await updateScheduledMessage(id, patch);
+    setScheduledMessages((current) => current.map((item) => item.id === scheduled.id ? scheduled : item));
+    return scheduled;
+  };
+
+  const cancelScheduled = async (id: string) => {
+    const scheduled = await cancelScheduledMessage(id);
+    setScheduledMessages((current) => current.map((item) => item.id === scheduled.id ? scheduled : item));
+    return scheduled;
+  };
+
   const sendChatMedia = async (chatId: string, file: File, caption: string, voiceNote = false) => {
     const data = await mediaPayload(file);
     const mimetype = file.type || "application/octet-stream";
@@ -825,8 +911,7 @@ export function App() {
 
   const generateChatImage = async (chatId: string, prompt: string) => {
     try {
-      const generated = await generateImageForChat(chatId, prompt);
-      setMessages((current) => [...current, generated]);
+      return await generateImageForChat(chatId, prompt);
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "Could not generate this image");
       throw actionError;
@@ -945,7 +1030,7 @@ export function App() {
     futureTracking: KnowledgeTrackingStatus,
     onProgress: (completed: number, total: number) => void,
   ) => {
-    await buildFirstRunPeopleDirectory(chatIds, {
+    const result = await buildFirstRunPeopleDirectory(chatIds, {
       onProgress,
       futureTracking,
       setKnowledgeTracking: async (chatId, status) => { await updateContact(chatId, { knowledgeTracking: status }); },
@@ -954,16 +1039,14 @@ export function App() {
         await analyzeContactIntelligence(chatId, messageLimit, advanceLearningCursor);
       },
     });
-    await reportControlCenterOnboardingProgress("whatsapp_connected").catch(() => {
-      // The endpoint is idempotent. Reasserting the already-ready WhatsApp
-      // milestone here prevents a fast People setup from racing its first
-      // background checklist update.
-    });
-    await reportControlCenterOnboardingProgress("first_people_selected").catch(() => {
-      // People setup succeeded locally. A Control Center outage must not make
-      // the user repeat message analysis or incorrectly report local failure.
-    });
+    for (const event of firstRunPeopleControlCenterEvents(dashboard?.connection.status || "disconnected", result)) {
+      await reportControlCenterOnboardingProgress(event).catch(() => {
+        // The updates are idempotent and informational. A Control Center outage
+        // never makes the person repeat local message analysis.
+      });
+    }
     await Promise.all([refresh(), refreshIntelligence()]);
+    return result;
   };
 
   const deleteQuestion = async (id: string) => {
@@ -1041,24 +1124,33 @@ export function App() {
   }
 
   const unreadCount = chats.reduce((total, chat) => total + Math.max(0, chat.unreadCount), 0);
+  const peopleGuideActive = window.localStorage.getItem("amiros.onboarding.completed") === "true"
+    || hasLegacyCompletedOnboarding(dashboard.settings.ownerProfile.displayName, dashboard.settings.apiKeyConfigured);
+  const peopleGuide = peoplePickerOpen ? <div className="people-picker-backdrop" role="presentation">
+    <section className="people-picker-modal" role="dialog" aria-modal="true" aria-labelledby="people-picker-title">
+      <header><div><small>YOUR PEOPLE</small><h2 id="people-picker-title">Choose people to get started</h2><p>Select only the conversations you want AmirOS to use for an initial profile.</p></div><button type="button" className="icon-button" aria-label="Close people chooser" onClick={() => setPeoplePickerOpen(false)}><X size={18} /></button></header>
+      <PeopleGettingStarted key={peopleGuideEpoch} active={peopleGuideActive} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} chats={chats} ownerName={dashboard.settings.ownerProfile.displayName} onRefresh={refresh} onBuild={setupFirstRunPeopleDirectory} onOpenProfile={(chatId) => { setPeoplePickerOpen(false); openPeopleProfile(chatId); }} onOpenHelp={() => { setPeoplePickerOpen(false); setBetaSupportOpen(true); }} onDeferred={() => setPeoplePickerOpen(false)} startSelecting />
+    </section>
+  </div> : null;
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`} data-time-format={timeFormat}>
+    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`} data-time-format={timeFormat} data-product-tour-step={productTourStep}>
       <Sidebar current={view} onNavigate={navigate} unreadCount={unreadCount} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => { localStorage.setItem("amiros-sidebar", value ? "expanded" : "collapsed"); return !value; })} profile={dashboard.settings.ownerProfile} version={dashboard.release.version} updateAvailable={updateStatus?.status === "available"} connection={dashboard.connection} onOpenReleaseNotes={() => setReleaseNotesOpen(true)} onOpenBetaSupport={() => setBetaSupportOpen(true)} canInstallApp={appInstall.canInstall} installingApp={appInstall.installing} onInstallApp={() => void appInstall.install()} calendarViewsEnabled={calendarViewsEnabled} />
       <div className="app-body">
         {dashboard.settings.aiServiceAttention ? <div className="error-banner ai-service-attention" role="alert"><AlertTriangle size={17} /><span><strong>AI needs attention.</strong> {dashboard.settings.aiServiceAttention.message}</span><button onClick={() => navigate("settings")}>Open Settings</button></div> : null}
         {error ? <div className="error-banner"><AlertTriangle size={17} />{error}<button onClick={() => setError(undefined)}>Dismiss</button></div> : null}
+        {peopleGuide}
 {view === "overview" ? <Overview data={dashboard} chats={chats} intelligence={intelligence} onNavigate={navigate} onTrackingDecision={decideKnowledgeTracking} onOpenTrackingChat={(chatId) => openChat(chatId)} onOpenNextBestAction={openChat} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onCalendarStatus={changeCalendarStatus} onRegenerateCalendarTitle={regenerateEventTitle} onReplyToMessage={reply} onReplySuggestionFeedback={saveReplySuggestionFeedback} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onDismissNextBestAction={dismissNextBestAction} onProactiveDecision={decideProactiveIntelligence} /> : null}
         {view === "intelligence" ? <IntelligenceView data={intelligence} chats={chats} contacts={dashboard.settings.contacts} ownerName={dashboard.settings.ownerProfile.displayName} loading={loadingIntelligence} onRefresh={refreshIntelligence} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onContactChange={changeContact} onGenerateSummary={(chatId, isGroup) => isGroup ? summarizeSelectedGroup(chatId) : generateProfile(chatId)} onCalendarStatus={changeCalendarStatus} onRegenerateCalendarTitle={regenerateEventTitle} onInsightStatus={(chatId, insightId, status) => changeInsight(chatId, insightId, { status })} onCommitmentStatus={changeCommitmentStatus} onTodoStatus={changeTodoStatus} onTodoUpdate={changeTodoTask} onDeleteQuestion={deleteQuestion} navigationRequest={intelligenceNavigationRequest} /> : null}
-        {view === "calendar" ? <CalendarView data={intelligence} onOpenChat={openChat} onStatus={changeCalendarStatus} onRegenerateTitle={regenerateEventTitle} /> : null}
-        {view === "inbox" ? <InboxView chats={chats} unreadCount={unreadCount} initialFilter={inboxInitialFilter} initialContactSettingsTab={inboxContactSettingsTab} selectedChatId={selectedChatId} highlightedMessageId={highlightedMessageId} messages={visibleMessages} memory={visibleMemory} manualMemory={visibleManualMemory} profile={visibleProfile} insights={insights} styleProfile={styleProfile} groupSummary={groupSummary} groupDescription={groupDescription} composerDraft={assistantComposerDraft?.chatId === selectedChatId ? assistantComposerDraft?.body : undefined} onComposerDraftConsumed={() => setAssistantComposerDraft(undefined)} incomingMessageCount={incomingMessageCount} contact={visibleContact} drafts={dashboard.drafts} loading={loadingChat} onSelectChat={selectInboxChat} onMarkRead={readChat} onModeChange={changeMode} autoModeEnabled={autoModeEnabled} deletedMessageArchiveEnabled={deletedMessageArchiveEnabled} onContactChange={changeContact} onAddMemory={addMemory} onRemoveMemory={removeMemory} onGenerateProfile={generateProfile} onAnalyzeIntelligence={analyzeIntelligence} onInsightChange={changeInsight} onGenerateWritingStyle={learnWritingStyle} onGenerateGroupSummary={summarizeSelectedGroup} onApproveDraft={approve} onDismissDraft={dismiss} onSend={send} onSendMedia={sendChatMedia} onGenerateImage={generateChatImage} onReact={react} onReply={reply} onForward={forward} onScanHistory={scanHistory} onRevealDeletedMessage={revealDeletedMessage} onHideDeletedMessage={hideDeletedMessage} /> : null}
+        {view === "calendar" ? <CalendarView data={intelligence} contacts={dashboard.settings.contacts} onOpenChat={openChat} onStatus={changeCalendarStatus} onRegenerateTitle={regenerateEventTitle} /> : null}
+        {view === "inbox" ? <InboxView chats={chats} hasMoreChats={hasMoreChats} loadingMoreChats={loadingMoreChats} onLoadMoreChats={loadMoreChats} unreadCount={unreadCount} initialFilter={inboxInitialFilter} initialContactSettingsTab={inboxContactSettingsTab} selectedChatId={selectedChatId} highlightedMessageId={highlightedMessageId} messages={visibleMessages} memory={visibleMemory} manualMemory={visibleManualMemory} profile={visibleProfile} insights={insights} styleProfile={styleProfile} groupSummary={groupSummary} groupDescription={groupDescription} composerDraft={assistantComposerDraft?.chatId === selectedChatId ? assistantComposerDraft?.body : undefined} onComposerDraftConsumed={() => setAssistantComposerDraft(undefined)} incomingMessageCount={incomingMessageCount} contact={visibleContact} drafts={dashboard.drafts} scheduledMessages={scheduledMessages} loading={loadingChat} onSelectChat={selectInboxChat} onMarkRead={readChat} onModeChange={changeMode} autoModeEnabled={autoModeEnabled} deletedMessageArchiveEnabled={deletedMessageArchiveEnabled} onContactChange={changeContact} onAddMemory={addMemory} onRemoveMemory={removeMemory} onGenerateProfile={generateProfile} onAnalyzeIntelligence={analyzeIntelligence} onInsightChange={changeInsight} onGenerateWritingStyle={learnWritingStyle} onGenerateGroupSummary={summarizeSelectedGroup} onApproveDraft={approve} onDismissDraft={dismiss} onSend={send} onSchedule={schedule} onUpdateScheduled={updateScheduled} onCancelScheduled={cancelScheduled} onTranslate={translateComposerDraft} onSendMedia={sendChatMedia} onGenerateImage={generateChatImage} onReact={react} onReply={reply} onForward={forward} onScanHistory={scanHistory} onRevealDeletedMessage={revealDeletedMessage} onHideDeletedMessage={hideDeletedMessage} /> : null}
         {view === "contacts" ? <ContactsView chats={chats} onModeChange={changeMode} onOpenChat={openChat} autoModeEnabled={autoModeEnabled} /> : null}
         {view === "automations" ? <AutomationsView data={dashboard} onSave={saveQuietHours} /> : null}
         {view === "usage" ? <UsageView data={dashboard} onPreset={choosePreset} /> : null}
         {view === "terminal" ? <TerminalView connection={dashboard.connection} loadLog={getTerminalLog} subscribeLog={subscribeTerminalLog} /> : null}
         {view === "settings" ? <SettingsView data={dashboard} deletedMessageArchiveEnabled={deletedMessageArchiveEnabled} onSave={saveSettings} onSaveApiKey={saveApiKey} onRelink={async () => { await relink(); }} onPause={togglePaused} onClearDeletedMessageArchive={clearDeletedMessageArchive} /> : null}
-        <FloatingAssistant data={intelligence} chats={chats} ownerProfile={dashboard.settings.ownerProfile} loading={loadingIntelligence} onRefresh={refreshIntelligence} onAsk={askRelationships} onAnswerFeedback={submitIntelligenceAnswerFeedback} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onSaveKnowledge={addMemory} onInsertReply={(chatId, body) => { setAssistantComposerDraft({ chatId, body }); openChat(chatId); }} />
-        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} theme={dashboard.settings.theme} ownerProfile={dashboard.settings.ownerProfile} chats={chats} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onFinishOnboarding={async (choice, theme) => { await saveSettings({ knowledgeTrackingDefault: choice, theme }); }} onBuildPeopleDirectory={setupFirstRunPeopleDirectory} onSaveOwnerProfile={async (ownerProfile) => { await saveSettings({ ownerProfile }); }} update={updateStatus} onStartUpdate={startDashboardUpdate} onOpenControlCenter={() => setView("settings")} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
+        <FloatingAssistant data={intelligence} chats={chats} ownerProfile={dashboard.settings.ownerProfile} loading={loadingIntelligence} onRefresh={refreshIntelligence} onAsk={askRelationships} onAnswerFeedback={submitIntelligenceAnswerFeedback} onOpenChat={openChat} onOpenCalendar={() => navigate("calendar")} onSaveKnowledge={addMemory} onInsertReply={(chatId, body) => { setAssistantComposerDraft({ chatId, body }); openChat(chatId); }} tourDemo={productTourStep === 4} />
+        <ReleaseExperience release={dashboard.release} knowledgeTrackingDefault={dashboard.settings.knowledgeTrackingDefault} theme={dashboard.settings.theme} ownerProfile={dashboard.settings.ownerProfile} apiKeyConfigured={dashboard.settings.apiKeyConfigured} connection={dashboard.connection} onSaveApiKey={saveApiKey} onRelinkWhatsApp={relink} onFinishOnboarding={async (choice, theme) => { await saveSettings({ knowledgeTrackingDefault: choice, theme }); }} onSaveOwnerProfile={async (ownerProfile) => { await saveSettings({ ownerProfile }); }} onOnboardingFinished={() => setPeopleGuideEpoch((current) => current + 1)} onOpenPeopleSetup={() => { setProductTourStep(undefined); setPeopleGuideEpoch((current) => current + 1); setPeoplePickerOpen(true); }} onWalkthroughStepChange={(step) => { setProductTourStep(step); navigate(step === 2 || step === 3 ? "inbox" : "overview"); }} onWalkthroughClosed={() => setProductTourStep(undefined)} update={updateStatus} onStartUpdate={startDashboardUpdate} forceReleaseOpen={releaseNotesOpen} onReleaseNotesClosed={() => setReleaseNotesOpen(false)} />
         <BetaSupportExperience open={betaSupportOpen} onClose={() => setBetaSupportOpen(false)} destination={dashboard.betaSupport ?? {}} version={dashboard.release.version} connection={dashboard.connection} currentView={view} />
         <UpdatePrompt update={updateStatus} onStartUpdate={startDashboardUpdate} />
       </div>

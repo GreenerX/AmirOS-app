@@ -174,6 +174,7 @@ describe("People experience", () => {
     expect(people).toContain("people-relationship-picker");
     expect(people).toContain("label=\"Favorites\"");
     expect(people).toContain("people-card-visibility");
+    expect(people).toContain('className="page-header compact-header people-page-header"');
     expect(people).toContain("Generate summary");
     expect(people).toContain("filter === \"hidden\"");
     expect(people).toContain("interactionTimestamp");
@@ -203,6 +204,8 @@ describe("People experience", () => {
     expect(styles).toContain(".relationship-evidence");
     expect(styles).toContain(".memory-explanation");
     expect(styles).toContain(".floating-ai-memory-explanation");
+    expect(styles).toContain("Shared functional-page rhythm");
+    expect(styles).toContain("font-size: 34px");
     expect(dashboard).toContain('commitment.status === "open" || commitment.status === "needs_review"');
     expect(intelligence).toContain('if (activeTab === "people") return <PeopleExperience');
     expect(sidebar).toContain('label: "People"');

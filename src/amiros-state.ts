@@ -25,6 +25,8 @@ import {
   type ProactiveCandidateKind,
   type ProactiveDeliveryDecision,
 } from "./proactive-intelligence.js";
+import { buildIntelligenceCandidatePool, type IntelligenceCandidate } from "./intelligence-candidate-pool.js";
+import { normalizeTranslationLanguage } from "./translation.js";
 
 export type ReplyMode = "off" | "suggest" | "auto";
 export const AUTO_REPLY_INITIAL_DELAY_SECONDS = [15, 30, 45, 60, 90] as const;
@@ -54,6 +56,18 @@ export type ConnectionStatus =
  */
 export type ContactPronouns = "unspecified" | "she/her" | "he/him" | "they/them";
 
+/**
+ * An owner-confirmed composer convenience. It is intentionally separate from
+ * detected contact language, automatic replies, relationship learning, and
+ * inbound translation.
+ */
+export type ComposerTranslationPreference = {
+  targetLanguage: string;
+  direction: "outgoing_to_target";
+  confirmedAt: number;
+  source: "user_confirmed";
+};
+
 export type ContactPreferences = {
   mode: ReplyMode;
   /** The intentional pause before the first automatic reply after Auto Mode is enabled. */
@@ -67,6 +81,10 @@ export type ContactPreferences = {
   hidden: boolean;
   tone: string;
   language: string;
+  /** Owner-confirmed contact location. Never inferred from conversation content. */
+  location?: string;
+  timezone?: string;
+  composerTranslationPreference: ComposerTranslationPreference | null;
   pronouns: ContactPronouns;
   memoryEnabled: boolean;
   /** Controls automatic intelligence suggestions. Conversation context remains local. */
@@ -74,6 +92,27 @@ export type ContactPreferences = {
   customInstructions: string;
   ownerTriggerAccess: OwnerTriggerAccess[];
   contactTriggerAccess: OwnerTriggerAccess[];
+};
+
+export type ScheduledMessageStatus = "pending" | "sending" | "sent" | "failed" | "cancelled";
+
+/** A durable, immutable text snapshot queued only after an owner confirms a send time. */
+export type ScheduledMessage = {
+  id: string;
+  chatId: string;
+  body: string;
+  scheduledAt: number;
+  timezone: string;
+  status: ScheduledMessageStatus;
+  createdAt: number;
+  updatedAt: number;
+  attemptCount: number;
+  idempotencyKey: string;
+  source: "owner";
+  sentAt?: number;
+  failedAt?: number;
+  cancelledAt?: number;
+  error?: string;
 };
 
 export type ConversationMemoryEntry = {
@@ -296,6 +335,10 @@ export type IntelligenceQuestionHistoryItem = {
   question: string;
   answer: string;
   sources: IntelligenceSearchRecord[];
+  /** Preserves the source linkage used to validate the original Ask answer. */
+  claims?: Array<{ text: string; evidenceIds: string[] }>;
+  /** Structured answer envelope retained locally for deterministic future rendering. */
+  points?: Array<{ text: string; evidenceIds: string[] }>;
   createdAt: number;
 };
 
@@ -325,6 +368,23 @@ export type IntelligenceAnswerFeedback = {
     chatId?: string;
   };
   createdAt: number;
+};
+
+export type IntelligenceFeedbackReviewStatus = "open" | "acknowledged" | "resolved";
+
+/** Local workflow state for reviewing trust feedback; it never changes memory. */
+export type IntelligenceFeedbackReview = {
+  feedbackId: string;
+  status: IntelligenceFeedbackReviewStatus;
+  updatedAt: number;
+};
+
+export type IntelligenceFeedbackReviewQueueItem = Pick<
+  IntelligenceAnswerFeedback,
+  "id" | "answerId" | "rating" | "reasons" | "createdAt" | "resolvedContactId" | "suggestion" | "sourceRefs"
+> & {
+  status: IntelligenceFeedbackReviewStatus;
+  reviewedAt?: number;
 };
 
 export type MemoryCorrection = {
@@ -421,6 +481,24 @@ export type IntelligenceSearchRecord = {
   chatId: string;
   contactName?: string;
   kind: "message" | "memory" | "insight" | "commitment" | "todo" | "profile" | "calendar_event";
+  /** Original saved message behind a derived record; used for evidence review. */
+  sourceContent?: string;
+  sourceTimestamp?: number;
+  /**
+   * Canonical, inspectable source evidence for an Ask answer. A missing value
+   * means this record is useful retrieval context but is not eligible to prove
+   * a factual owner-facing claim.
+   */
+  evidence?: {
+    messageId: string;
+    chatId: string;
+    conversationName?: string;
+    authorName?: string;
+    timestamp: number;
+    originalText: string;
+    /** The Inbox can navigate to this exact retained WhatsApp message. */
+    exactMessageAvailable: true;
+  };
   content: string;
   senderName?: string;
   sourceAuthor?: "owner" | "contact" | "group_member";
@@ -452,6 +530,8 @@ function cleanRelationshipName(value: string | undefined): string | undefined {
 
 export type IntelligenceChatSnapshot = {
   chatId: string;
+  /** Exact local messages still retained and eligible to ground a card. */
+  retainedMessageIds: string[];
   insights: ContactInsight[];
   commitments: RelationshipCommitment[];
   events: CalendarEvent[];
@@ -569,6 +649,7 @@ type PersistedState = {
   knowledgeTrackingDefault: KnowledgeTrackingDefault;
   chatNames: Record<string, string>;
   contacts: Record<string, ContactPreferences>;
+  scheduledMessages: ScheduledMessage[];
   memories: Record<string, ConversationMemory>;
   /** AI decisions for only ambiguous reply cases; keyed by one chat and a context fingerprint. */
   replyAssessments: Record<string, CachedReplyAssessment>;
@@ -584,6 +665,8 @@ type PersistedState = {
   intelligenceHistory: IntelligenceQuestionHistoryItem[];
   /** Private Ask feedback. Excluded from dashboard settings and reply personalization. */
   intelligenceAnswerFeedback: IntelligenceAnswerFeedback[];
+  /** Local-only review workflow for Ask feedback; excluded from all settings/control-center payloads. */
+  intelligenceFeedbackReviews: Record<string, IntelligenceFeedbackReview>;
   /** Durable owner corrections prevent reviewed knowledge from resurfacing unchanged. */
   memoryCorrections: MemoryCorrection[];
   quietHours: {
@@ -609,7 +692,7 @@ type PersistedState = {
 };
 
 /** The settings-safe subset sent to the local dashboard. Archive entries stay local-only. */
-export type DashboardSettings = Omit<PersistedState, "deletedMessageArchive" | "intelligenceAnswerFeedback"> & {
+export type DashboardSettings = Omit<PersistedState, "deletedMessageArchive" | "intelligenceAnswerFeedback" | "intelligenceFeedbackReviews"> & {
   deletedMessageArchive: DeletedMessageArchiveSettings;
 };
 
@@ -622,6 +705,7 @@ const DEFAULT_CONTACT: ContactPreferences = {
   hidden: false,
   tone: "Warm & concise",
   language: "Automatic",
+  composerTranslationPreference: null,
   pronouns: "unspecified",
   memoryEnabled: true,
   knowledgeTracking: "pending",
@@ -658,6 +742,68 @@ function normalizeContactPronouns(value: unknown): ContactPronouns {
   return value === "she/her" || value === "he/him" || value === "they/them"
     ? value
     : "unspecified";
+}
+
+function normalizeComposerTranslationPreference(value: unknown): ComposerTranslationPreference | null {
+  if (!value || typeof value !== "object") return null;
+  const preference = value as Partial<ComposerTranslationPreference>;
+  const targetLanguage = normalizeTranslationLanguage(preference.targetLanguage);
+  if (!targetLanguage || preference.direction !== "outgoing_to_target" || preference.source !== "user_confirmed") return null;
+  return {
+    targetLanguage,
+    direction: "outgoing_to_target",
+    source: "user_confirmed",
+    confirmedAt: Number.isFinite(preference.confirmedAt) ? Number(preference.confirmedAt) : Date.now(),
+  };
+}
+
+function normalizeTimeZone(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim() || value.length > 100) return undefined;
+  try {
+    return new Intl.DateTimeFormat(undefined, { timeZone: value.trim() }).resolvedOptions().timeZone;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeScheduledMessage(value: unknown): ScheduledMessage | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const message = value as Partial<ScheduledMessage>;
+  const body = typeof message.body === "string" ? message.body.trim().slice(0, 4_000) : "";
+  const chatId = typeof message.chatId === "string" ? message.chatId.trim().slice(0, 240) : "";
+  const timezone = normalizeTimeZone(message.timezone);
+  if (!body || !chatId || !timezone || !Number.isFinite(message.scheduledAt)) return undefined;
+  const knownStatus: ScheduledMessageStatus[] = ["pending", "sending", "sent", "failed", "cancelled"];
+  const originalStatus = knownStatus.includes(message.status as ScheduledMessageStatus)
+    ? message.status as ScheduledMessageStatus
+    : "failed";
+  // A process restart after claiming a job cannot tell whether WhatsApp
+  // accepted it. Fail closed rather than risking a duplicate send.
+  const status: ScheduledMessageStatus = originalStatus === "sending" ? "failed" : originalStatus;
+  const now = Date.now();
+  return {
+    id: typeof message.id === "string" && message.id.trim() ? message.id.trim().slice(0, 120) : randomUUID(),
+    chatId,
+    body,
+    scheduledAt: Number(message.scheduledAt),
+    timezone,
+    status,
+    createdAt: Number.isFinite(message.createdAt) ? Number(message.createdAt) : now,
+    updatedAt: Number.isFinite(message.updatedAt) ? Number(message.updatedAt) : now,
+    attemptCount: Number.isFinite(message.attemptCount) ? Math.max(0, Math.min(20, Math.floor(Number(message.attemptCount)))) : 0,
+    idempotencyKey: typeof message.idempotencyKey === "string" && message.idempotencyKey.trim()
+      ? message.idempotencyKey.trim().slice(0, 160)
+      : randomUUID(),
+    source: "owner",
+    sentAt: Number.isFinite(message.sentAt) ? Number(message.sentAt) : undefined,
+    failedAt: status === "failed" ? (Number.isFinite(message.failedAt) ? Number(message.failedAt) : now) : undefined,
+    cancelledAt: status === "cancelled" && Number.isFinite(message.cancelledAt) ? Number(message.cancelledAt) : undefined,
+    error: status === "failed"
+      ? (originalStatus === "sending"
+        ? "AmirOS restarted before delivery was confirmed. Review and reschedule to avoid a duplicate."
+        : typeof message.error === "string" ? message.error.replace(/\s+/gu, " ").trim().slice(0, 300) || undefined : undefined)
+      : undefined,
+  };
 }
 
 function normalizeReplySuggestionFeedback(value: unknown): ReplySuggestionFeedback[] {
@@ -715,6 +861,7 @@ const DEFAULT_STATE: PersistedState = {
   knowledgeTrackingDefault: "ask",
   chatNames: {},
   contacts: {},
+  scheduledMessages: [],
   memories: {},
   replyAssessments: {},
   replySuggestionFeedback: {},
@@ -722,6 +869,7 @@ const DEFAULT_STATE: PersistedState = {
   aiServiceAttention: undefined,
   intelligenceHistory: [],
   intelligenceAnswerFeedback: [],
+  intelligenceFeedbackReviews: {},
   memoryCorrections: [],
   quietHours: { enabled: false, start: "23:00", end: "07:00" },
   monthlyBudgetUsd: 20,
@@ -1155,12 +1303,22 @@ export class AmirosState {
               contactTriggerAccess: normalizeContactTriggerAccess(
                 (contact as Partial<ContactPreferences>).contactTriggerAccess,
               ),
+              composerTranslationPreference: normalizeComposerTranslationPreference(
+                (contact as Partial<ContactPreferences>).composerTranslationPreference,
+              ),
               pronouns: normalizeContactPronouns(
                 (contact as Partial<ContactPreferences>).pronouns,
               ),
             } satisfies ContactPreferences];
           }),
         ),
+        scheduledMessages: (Array.isArray(parsed.scheduledMessages) ? parsed.scheduledMessages : [])
+          .flatMap((message) => {
+            const normalized = normalizeScheduledMessage(message);
+            return normalized ? [normalized] : [];
+          })
+          .sort((left, right) => right.updatedAt - left.updatedAt)
+          .slice(0, 1_000),
         memories: Object.fromEntries(
           Object.entries(parsed.memories || {}).flatMap(([chatId, memory]) => {
             if (!memory) return [];
@@ -1541,6 +1699,24 @@ export class AmirosState {
             question: item.question.replace(/\s+/g, " ").trim().slice(0, 500),
             answer: item.answer.trim().slice(0, 8_000),
             sources: (Array.isArray(item.sources) ? item.sources : []).slice(0, 12),
+            claims: (Array.isArray(item.claims) ? item.claims : [])
+              .flatMap((claim) => {
+                if (!claim || typeof claim !== "object" || typeof claim.text !== "string") return [];
+                const evidenceIds = Array.isArray(claim.evidenceIds)
+                  ? [...new Set(claim.evidenceIds.filter((id): id is string => typeof id === "string" && Boolean(id.trim())))].slice(0, 12)
+                  : [];
+                return evidenceIds.length ? [{ text: claim.text.trim().slice(0, 2_000), evidenceIds }] : [];
+              })
+              .filter((claim) => claim.text),
+            points: (Array.isArray(item.points) ? item.points : Array.isArray(item.claims) ? item.claims : [])
+              .flatMap((point) => {
+                if (!point || typeof point !== "object" || typeof point.text !== "string") return [];
+                const evidenceIds = Array.isArray(point.evidenceIds)
+                  ? [...new Set(point.evidenceIds.filter((id): id is string => typeof id === "string" && Boolean(id.trim())))].slice(0, 12)
+                  : [];
+                return evidenceIds.length ? [{ text: point.text.trim().slice(0, 2_000), evidenceIds }] : [];
+              })
+              .filter((point) => point.text),
             createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
           }))
           .filter((item) => item.question && item.answer),
@@ -1575,6 +1751,17 @@ export class AmirosState {
             } : undefined,
             createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
           })),
+        intelligenceFeedbackReviews: Object.fromEntries(
+          Object.entries(parsed.intelligenceFeedbackReviews || {}).flatMap(([feedbackId, value]) => {
+            const review = value as Partial<IntelligenceFeedbackReview> | undefined;
+            if (!review || !["open", "acknowledged", "resolved"].includes(review.status || "")) return [];
+            return [[feedbackId.slice(0, 120), {
+              feedbackId: feedbackId.slice(0, 120),
+              status: review.status as IntelligenceFeedbackReviewStatus,
+              updatedAt: Number.isFinite(review.updatedAt) ? review.updatedAt! : Date.now(),
+            } satisfies IntelligenceFeedbackReview]];
+          }).slice(-200),
+        ),
         memoryCorrections: (Array.isArray(parsed.memoryCorrections) ? parsed.memoryCorrections : [])
           .filter((item): item is MemoryCorrection => Boolean(item) && typeof item.chatId === "string" && typeof item.targetInsightId === "string" && typeof item.targetContent === "string")
           .slice(-500)
@@ -1813,6 +2000,7 @@ export class AmirosState {
       contactTriggerAccess: normalizeContactTriggerAccess(
         stored?.contactTriggerAccess ?? DEFAULT_CONTACT.contactTriggerAccess,
       ),
+      composerTranslationPreference: normalizeComposerTranslationPreference(stored?.composerTranslationPreference),
       pronouns: normalizeContactPronouns(stored?.pronouns),
     };
   }
@@ -1856,6 +2044,116 @@ export class AmirosState {
     return [...(this.persisted.outgoingMediaCaptions[chatId] || [])];
   }
 
+  listScheduledMessages(chatId?: string): ScheduledMessage[] {
+    return this.persisted.scheduledMessages
+      .filter((message) => !chatId || message.chatId === chatId)
+      .sort((left, right) => left.scheduledAt - right.scheduledAt || left.createdAt - right.createdAt)
+      .map((message) => structuredClone(message));
+  }
+
+  scheduleMessage(input: Pick<ScheduledMessage, "chatId" | "body" | "scheduledAt" | "timezone">): ScheduledMessage {
+    const body = input.body.trim().slice(0, 4_000);
+    const chatId = input.chatId.trim().slice(0, 240);
+    const timezone = normalizeTimeZone(input.timezone);
+    if (!body || !chatId || !timezone || !Number.isFinite(input.scheduledAt)) {
+      throw new Error("Choose a message, delivery time, and valid timezone");
+    }
+    const now = Date.now();
+    const message: ScheduledMessage = {
+      id: randomUUID(),
+      chatId,
+      body,
+      scheduledAt: Number(input.scheduledAt),
+      timezone,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+      attemptCount: 0,
+      idempotencyKey: randomUUID(),
+      source: "owner",
+    };
+    this.persisted.scheduledMessages.unshift(message);
+    this.persisted.scheduledMessages = this.persisted.scheduledMessages.slice(0, 1_000);
+    this.save();
+    return structuredClone(message);
+  }
+
+  updateScheduledMessage(id: string, patch: Pick<Partial<ScheduledMessage>, "body" | "scheduledAt" | "timezone">): ScheduledMessage | undefined {
+    const message = this.persisted.scheduledMessages.find((item) => item.id === id);
+    if (!message || message.status !== "pending") return undefined;
+    const body = patch.body === undefined ? message.body : patch.body.trim().slice(0, 4_000);
+    const timezone = patch.timezone === undefined ? message.timezone : normalizeTimeZone(patch.timezone);
+    const scheduledAt = patch.scheduledAt === undefined ? message.scheduledAt : Number(patch.scheduledAt);
+    if (!body || !timezone || !Number.isFinite(scheduledAt)) throw new Error("Enter a valid scheduled message");
+    Object.assign(message, { body, timezone, scheduledAt, updatedAt: Date.now() });
+    this.save();
+    return structuredClone(message);
+  }
+
+  cancelScheduledMessage(id: string): ScheduledMessage | undefined {
+    const message = this.persisted.scheduledMessages.find((item) => item.id === id);
+    if (!message || (message.status !== "pending" && message.status !== "failed")) return undefined;
+    const now = Date.now();
+    Object.assign(message, { status: "cancelled" as const, cancelledAt: now, updatedAt: now, error: undefined });
+    this.save();
+    return structuredClone(message);
+  }
+
+  retryScheduledMessage(id: string, scheduledAt: number): ScheduledMessage | undefined {
+    const message = this.persisted.scheduledMessages.find((item) => item.id === id);
+    if (!message || message.status !== "failed" || !Number.isFinite(scheduledAt)) return undefined;
+    Object.assign(message, {
+      status: "pending" as const,
+      scheduledAt,
+      updatedAt: Date.now(),
+      failedAt: undefined,
+      error: undefined,
+      // Each explicit retry receives a new transport key. The old attempt is
+      // still retained in the local record and is never replayed automatically.
+      idempotencyKey: randomUUID(),
+    });
+    this.save();
+    return structuredClone(message);
+  }
+
+  claimDueScheduledMessages(now = Date.now()): ScheduledMessage[] {
+    const due = this.persisted.scheduledMessages.filter((message) => (
+      message.status === "pending" && message.scheduledAt <= now
+    ));
+    if (due.length === 0) return [];
+    for (const message of due) {
+      Object.assign(message, {
+        status: "sending" as const,
+        attemptCount: message.attemptCount + 1,
+        updatedAt: now,
+      });
+    }
+    this.save();
+    return due.map((message) => structuredClone(message));
+  }
+
+  markScheduledMessageSent(id: string, now = Date.now()): ScheduledMessage | undefined {
+    const message = this.persisted.scheduledMessages.find((item) => item.id === id);
+    if (!message || message.status !== "sending") return undefined;
+    Object.assign(message, { status: "sent" as const, sentAt: now, updatedAt: now, error: undefined });
+    this.save();
+    return structuredClone(message);
+  }
+
+  markScheduledMessageFailed(id: string, error: unknown, now = Date.now()): ScheduledMessage | undefined {
+    const message = this.persisted.scheduledMessages.find((item) => item.id === id);
+    if (!message || message.status !== "sending") return undefined;
+    const detail = error instanceof Error ? error.message : String(error || "Delivery failed");
+    Object.assign(message, {
+      status: "failed" as const,
+      failedAt: now,
+      updatedAt: now,
+      error: detail.replace(/\s+/gu, " ").trim().slice(0, 300) || "Delivery failed",
+    });
+    this.save();
+    return structuredClone(message);
+  }
+
   updateContact(
     chatId: string,
     patch: Partial<ContactPreferences>,
@@ -1880,6 +2178,9 @@ export class AmirosState {
       contactTriggerAccess: patch.contactTriggerAccess === undefined
         ? current.contactTriggerAccess
         : normalizeContactTriggerAccess(patch.contactTriggerAccess),
+      composerTranslationPreference: patch.composerTranslationPreference === undefined
+        ? current.composerTranslationPreference
+        : normalizeComposerTranslationPreference(patch.composerTranslationPreference),
       knowledgeTracking: patch.knowledgeTracking === undefined
         ? current.knowledgeTracking
         : normalizeKnowledgeTracking(patch.knowledgeTracking),
@@ -2734,6 +3035,46 @@ export class AmirosState {
     return structuredClone(this.persisted.intelligenceAnswerFeedback.slice(-safeLimit).reverse());
   }
 
+  /**
+   * Local-only review workflow. It exposes categories and stable references,
+   * never message bodies or archived/deleted content, and never mutates
+   * canonical knowledge as a side effect of feedback.
+   */
+  intelligenceFeedbackReviewQueue(limit = 50): IntelligenceFeedbackReviewQueueItem[] {
+    const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+    return this.persisted.intelligenceAnswerFeedback
+      .slice(-safeLimit)
+      .reverse()
+      .map((feedback) => {
+        const review = this.persisted.intelligenceFeedbackReviews[feedback.id];
+        return {
+          id: feedback.id,
+          answerId: feedback.answerId,
+          rating: feedback.rating,
+          reasons: [...feedback.reasons],
+          createdAt: feedback.createdAt,
+          resolvedContactId: feedback.resolvedContactId,
+          suggestion: feedback.suggestion ? { ...feedback.suggestion } : undefined,
+          sourceRefs: feedback.sourceRefs.map((source) => ({ ...source })),
+          status: review?.status || "open",
+          reviewedAt: review?.updatedAt,
+        } satisfies IntelligenceFeedbackReviewQueueItem;
+      });
+  }
+
+  reviewIntelligenceFeedback(feedbackId: string, status: IntelligenceFeedbackReviewStatus): IntelligenceFeedbackReview | undefined {
+    const cleanId = feedbackId.trim().slice(0, 120);
+    if (!cleanId || !this.persisted.intelligenceAnswerFeedback.some((feedback) => feedback.id === cleanId)) return undefined;
+    const review: IntelligenceFeedbackReview = { feedbackId: cleanId, status, updatedAt: Date.now() };
+    this.persisted.intelligenceFeedbackReviews[cleanId] = review;
+    const retained = Object.values(this.persisted.intelligenceFeedbackReviews)
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, 200);
+    this.persisted.intelligenceFeedbackReviews = Object.fromEntries(retained.map((item) => [item.feedbackId, item]));
+    this.save();
+    return structuredClone(review);
+  }
+
   recordIntelligenceAnswerFeedback(
     answerId: string,
     input: {
@@ -2819,18 +3160,37 @@ export class AmirosState {
     answer: string,
     sources: IntelligenceSearchRecord[],
     parentAnswerId?: string,
+    claims: Array<{ text: string; evidenceIds: string[] }> = [],
   ): IntelligenceQuestionHistoryItem {
-    const historySources = sources.slice(0, 12).map((source) => {
+    const historySources = sources
+      .filter((source) => source.evidence?.exactMessageAvailable === true)
+      .slice(0, 12)
+      .map((source) => {
       const historySource = { ...source };
       delete historySource.explanation;
       return historySource;
-    });
+      });
+    const sourceIds = new Set(historySources.map((source) => source.id));
     const item = {
       id: randomUUID(),
       parentAnswerId: parentAnswerId?.slice(0, 120),
       question: question.replace(/\s+/g, " ").trim().slice(0, 500),
       answer: answer.trim().slice(0, 8_000),
       sources: structuredClone(historySources),
+      claims: claims
+        .map((claim) => ({
+          text: claim.text.replace(/\s+/gu, " ").trim().slice(0, 400),
+          evidenceIds: [...new Set(claim.evidenceIds.filter((id) => sourceIds.has(id)))].slice(0, 12),
+        }))
+        .filter((claim) => Boolean(claim.text) && claim.evidenceIds.length > 0)
+        .slice(0, 12),
+      points: claims
+        .map((point) => ({
+          text: point.text.replace(/\s+/gu, " ").trim().slice(0, 400),
+          evidenceIds: [...new Set(point.evidenceIds.filter((id) => sourceIds.has(id)))].slice(0, 12),
+        }))
+        .filter((point) => Boolean(point.text) && point.evidenceIds.length > 0)
+        .slice(0, 12),
       createdAt: Date.now(),
     };
     this.persisted.intelligenceHistory.push(item);
@@ -3037,6 +3397,7 @@ export class AmirosState {
         });
         return {
           chatId,
+          retainedMessageIds: [...new Set(memory.entries.map((entry) => entry.messageId).filter((id): id is string => Boolean(id)))],
           insights: structuredClone((memory.insights || []).map((item) => ({
             ...item,
             freshness: assessKnowledgeFreshness(item, now).state,
@@ -3055,6 +3416,51 @@ export class AmirosState {
         };
       })
       .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /**
+   * Read-only, evidence-first candidate pool shared by Ask and proactive
+   * surfaces. It deliberately resolves every derived record to its original
+   * retained message before a card can exist.
+   */
+  intelligenceCandidatePool(now = Date.now()): IntelligenceCandidate[] {
+    const snapshots = new Map(this.intelligenceSnapshot(now).map((item) => [item.chatId, item]));
+    const ownerName = this.persisted.ownerProfile.displayName.replace(/\s+/gu, " ").trim().toLocaleLowerCase();
+    return buildIntelligenceCandidatePool(Object.entries(this.persisted.memories).flatMap(([chatId, memory]) => {
+      const snapshot = snapshots.get(chatId);
+      const contactName = (memory.chatName || this.persisted.chatNames[chatId] || "").replace(/\s+/gu, " ").trim();
+      if (!snapshot || !contactName) return [];
+      return [{
+        chatId,
+        contactName,
+        isGroup: chatId.endsWith("@g.us"),
+        isOwner: Boolean(ownerName && contactName.toLocaleLowerCase() === ownerName),
+        retainedMessageIds: snapshot.retainedMessageIds,
+        insights: snapshot.insights,
+        commitments: snapshot.commitments,
+        events: snapshot.events,
+        todos: snapshot.todos,
+        needsReply: snapshot.needsReply,
+        lastIncoming: snapshot.lastIncoming,
+        lastInteraction: snapshot.lastInteraction,
+        exactEvidenceFor: (evidence: MemoryEvidence) => {
+          if (!evidence.messageId || !snapshot.retainedMessageIds.includes(evidence.messageId)) return undefined;
+          const entry = memory.entries.find((item) => item.messageId === evidence.messageId);
+          if (!entry) return undefined;
+          return {
+            messageId: entry.messageId!,
+            chatId,
+            conversationName: contactName,
+            authorName: entry.author === "owner"
+              ? this.persisted.ownerProfile.displayName
+              : entry.senderName || contactName,
+            timestamp: entry.timestamp,
+            originalText: entry.content,
+            exactMessageAvailable: true as const,
+          };
+        },
+      }];
+    }), now);
   }
 
   /**
@@ -3402,6 +3808,20 @@ export class AmirosState {
     const records: IntelligenceSearchRecord[] = [];
     for (const [chatId, memory] of Object.entries(this.persisted.memories)) {
       if (excludedChatIds.has(chatId)) continue;
+      const evidenceForEntry = (entry: ConversationMemoryEntry | undefined): IntelligenceSearchRecord["evidence"] => {
+        if (!entry?.messageId) return undefined;
+        return {
+          messageId: entry.messageId,
+          chatId,
+          conversationName: memory.chatName,
+          authorName: entry.author === "owner"
+            ? this.persisted.ownerProfile.displayName
+            : entry.senderName || memory.chatName,
+          timestamp: entry.timestamp,
+          originalText: entry.content,
+          exactMessageAvailable: true,
+        };
+      };
       const push = (record: Omit<IntelligenceSearchRecord, "score">, boost = 0, temporalTimestamp?: number) => {
         if (temporalRange && !isWithinTemporalRange(temporalTimestamp, temporalRange)) return;
         const haystack = `${memory.chatName || ""} ${record.senderName || ""} ${record.content}`.toLocaleLowerCase();
@@ -3428,7 +3848,11 @@ export class AmirosState {
         if (isQuestion) return;
         push({
           id: entry.messageId || `${chatId}-message-${index}`, chatId, kind: "message",
-          content: entry.content, senderName: entry.senderName, sourceAuthor, timestamp: entry.timestamp,
+          content: entry.content, senderName: entry.senderName, sourceAuthor,
+          sourceContent: entry.content,
+          sourceTimestamp: entry.timestamp,
+          evidence: evidenceForEntry(entry),
+          timestamp: entry.timestamp,
         }, sourceAuthor === "owner" ? 12 : 6, entry.timestamp);
       });
       memory.manualItems.forEach((item) => push({
@@ -3442,6 +3866,9 @@ export class AmirosState {
       }, 18, item.createdAt));
       memory.insights.filter((item) => item.status !== "outdated" && (historicalIntent || (item.validity || "current") !== "historical")).forEach((item) => {
         const freshness = assessKnowledgeFreshness(item, now);
+        const sourceEntry = item.evidence.messageId
+          ? memory.entries.find((entry) => entry.messageId === item.evidence.messageId)
+          : undefined;
         const baseBoost = (item.validity || "current") === "historical"
           ? historicalIntent ? 18 : 1
           : item.status === "confirmed"
@@ -3451,6 +3878,9 @@ export class AmirosState {
           id: item.id,
           chatId,
           kind: "insight",
+          sourceContent: sourceEntry?.content || item.evidence.excerpt,
+          sourceTimestamp: item.evidence.timestamp,
+          evidence: evidenceForEntry(sourceEntry),
           content: item.content,
           senderName: item.evidence.senderName,
           status: item.status,
@@ -3462,7 +3892,22 @@ export class AmirosState {
         }, Math.max(0, baseBoost * freshness.scoreMultiplier), item.evidence.timestamp);
       });
       memory.commitments.filter((item) => item.status === "open").forEach((item) => push(
-        { id: item.id, chatId, kind: "commitment", content: item.content, senderName: item.assigneeName, status: item.status, timestamp: item.updatedAt },
+        {
+          id: item.id,
+          chatId,
+          kind: "commitment",
+          sourceContent: item.evidence.messageId
+            ? memory.entries.find((entry) => entry.messageId === item.evidence.messageId)?.content || item.evidence.excerpt
+            : item.evidence.excerpt,
+          sourceTimestamp: item.evidence.timestamp,
+          evidence: evidenceForEntry(item.evidence.messageId
+            ? memory.entries.find((entry) => entry.messageId === item.evidence.messageId)
+            : undefined),
+          content: item.content,
+          senderName: item.assigneeName,
+          status: item.status,
+          timestamp: item.updatedAt,
+        },
         0,
         dueDateQuery && item.dueAt ? item.dueAt : item.evidence.timestamp,
       ));
@@ -3472,6 +3917,13 @@ export class AmirosState {
           id: item.id,
           chatId,
           kind: "todo",
+          sourceContent: item.evidence.messageId
+            ? memory.entries.find((entry) => entry.messageId === item.evidence.messageId)?.content || item.evidence.excerpt
+            : item.evidence.excerpt,
+          sourceTimestamp: item.evidence.timestamp,
+          evidence: evidenceForEntry(item.evidence.messageId
+            ? memory.entries.find((entry) => entry.messageId === item.evidence.messageId)
+            : undefined),
           content: `${item.title}${item.dueAt ? ` — due ${new Date(item.dueAt).toLocaleString()}` : ""}`,
           senderName: item.evidence.senderName,
           status: item.status,
@@ -3483,6 +3935,13 @@ export class AmirosState {
           id: item.id,
           chatId,
           kind: "calendar_event",
+          sourceContent: item.evidence.messageId
+            ? memory.entries.find((entry) => entry.messageId === item.evidence.messageId)?.content || item.evidence.excerpt
+            : item.evidence.excerpt,
+          sourceTimestamp: item.evidence.timestamp,
+          evidence: evidenceForEntry(item.evidence.messageId
+            ? memory.entries.find((entry) => entry.messageId === item.evidence.messageId)
+            : undefined),
           content: `${item.title} — ${new Date(item.startAt).toLocaleString()}${item.location ? ` — ${item.location}` : ""}`,
           senderName: item.evidence.senderName,
           status: item.status,
@@ -3520,16 +3979,58 @@ export class AmirosState {
       const memory = this.persisted.memories[reference.chatId];
       if (!memory) continue;
       const contactName = memory.chatName;
+      const evidenceForEntry = (entry: ConversationMemoryEntry | undefined): IntelligenceSearchRecord["evidence"] => {
+        if (!entry?.messageId) return undefined;
+        return {
+          messageId: entry.messageId,
+          chatId: reference.chatId,
+          conversationName: contactName,
+          authorName: entry.author === "owner"
+            ? this.persisted.ownerProfile.displayName
+            : entry.senderName || contactName,
+          timestamp: entry.timestamp,
+          originalText: entry.content,
+          exactMessageAvailable: true,
+        };
+      };
+
+      // A reply-context candidate anchors directly to one retained message,
+      // rather than pretending that a derived task or summary is its source.
+      // This remains fail-closed: no entry, no record, no Ask answer.
+      const exactMessage = memory.entries.find((entry) => entry.messageId === reference.id);
+      if (exactMessage?.messageId) {
+        records.push({
+          id: exactMessage.messageId,
+          chatId: reference.chatId,
+          contactName,
+          kind: "message",
+          sourceContent: exactMessage.content,
+          sourceTimestamp: exactMessage.timestamp,
+          evidence: evidenceForEntry(exactMessage),
+          content: exactMessage.content,
+          senderName: exactMessage.senderName,
+          sourceAuthor: exactMessage.author === "assistant" ? undefined : exactMessage.author,
+          timestamp: toMilliseconds(exactMessage.timestamp),
+          score: 100,
+        });
+        continue;
+      }
 
       const insight = memory.insights.find((item) => item.id === reference.id);
       if (insight && insight.status === "confirmed" && insight.validity !== "historical") {
         const freshness = assessKnowledgeFreshness(insight, now);
         if (freshness.state !== "stale" && freshness.state !== "historical" && !freshness.qualify) {
+          const sourceEntry = insight.evidence.messageId
+            ? memory.entries.find((entry) => entry.messageId === insight.evidence.messageId)
+            : undefined;
           records.push({
             id: insight.id,
             chatId: reference.chatId,
             contactName,
             kind: "insight",
+            sourceContent: sourceEntry?.content || insight.evidence.excerpt,
+            sourceTimestamp: insight.evidence.timestamp,
+            evidence: evidenceForEntry(sourceEntry),
             content: insight.content,
             senderName: insight.evidence.senderName,
             status: insight.status,
@@ -3553,6 +4054,13 @@ export class AmirosState {
             chatId: reference.chatId,
             contactName,
             kind: "calendar_event",
+            sourceContent: event.evidence.messageId
+              ? memory.entries.find((entry) => entry.messageId === event.evidence.messageId)?.content || event.evidence.excerpt
+              : event.evidence.excerpt,
+            sourceTimestamp: event.evidence.timestamp,
+            evidence: evidenceForEntry(event.evidence.messageId
+              ? memory.entries.find((entry) => entry.messageId === event.evidence.messageId)
+              : undefined),
             content: `${event.title} — ${new Date(startAt).toLocaleString()}${event.location ? ` — ${event.location}` : ""}`,
             senderName: event.evidence.senderName,
             status: event.status,
@@ -3571,6 +4079,13 @@ export class AmirosState {
           chatId: reference.chatId,
           contactName,
           kind: "todo",
+          sourceContent: todo.evidence.messageId
+            ? memory.entries.find((entry) => entry.messageId === todo.evidence.messageId)?.content || todo.evidence.excerpt
+            : todo.evidence.excerpt,
+          sourceTimestamp: todo.evidence.timestamp,
+          evidence: evidenceForEntry(todo.evidence.messageId
+            ? memory.entries.find((entry) => entry.messageId === todo.evidence.messageId)
+            : undefined),
           content: `${todo.title} — due ${new Date(dueAt).toLocaleString()}${todo.note ? ` — ${todo.note}` : ""}`,
           senderName: todo.evidence.senderName,
           status: todo.status,
@@ -3587,6 +4102,13 @@ export class AmirosState {
           chatId: reference.chatId,
           contactName,
           kind: "commitment",
+          sourceContent: commitment.evidence.messageId
+            ? memory.entries.find((entry) => entry.messageId === commitment.evidence.messageId)?.content || commitment.evidence.excerpt
+            : commitment.evidence.excerpt,
+          sourceTimestamp: commitment.evidence.timestamp,
+          evidence: evidenceForEntry(commitment.evidence.messageId
+            ? memory.entries.find((entry) => entry.messageId === commitment.evidence.messageId)
+            : undefined),
           content: `${commitment.content}${commitment.dueAt ? ` — due ${new Date(toMilliseconds(commitment.dueAt)).toLocaleString()}` : ""}`,
           senderName: commitment.assigneeName,
           status: commitment.status,
@@ -5296,6 +5818,7 @@ export class AmirosState {
     settings.memories = {};
     settings.intelligenceHistory = [];
     settings.intelligenceAnswerFeedback = [];
+    settings.intelligenceFeedbackReviews = {};
     settings.activities = [];
     settings.replySuggestionFeedback = {};
     settings.deletedMessageArchive.messages = {};
@@ -5308,7 +5831,12 @@ export class AmirosState {
    * flat shape the UI owns.
    */
   getDashboardSettings(): DashboardSettings {
-    const { deletedMessageArchive: _archive, intelligenceAnswerFeedback: _askFeedback, ...settings } = this.getSettings();
+    const {
+      deletedMessageArchive: _archive,
+      intelligenceAnswerFeedback: _askFeedback,
+      intelligenceFeedbackReviews: _askFeedbackReviews,
+      ...settings
+    } = this.getSettings();
     return {
       ...settings,
       deletedMessageArchive: this.getDeletedMessageArchiveSettings(),

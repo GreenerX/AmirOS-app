@@ -29,12 +29,12 @@ export const AMIROS_VERSION = packageVersion();
 
 export const CURRENT_RELEASE: AmirOSRelease = {
   version: AMIROS_VERSION,
-  releasedAt: "2026-08-20",
-  headline: "A more natural, trustworthy AmirOS",
+  releasedAt: "2026-08-21",
+  headline: "More grounded intelligence and a more capable Inbox",
   notes: [
     {
-      title: "Ask AmirOS makes clearer discoveries",
-      detail: "Ask AmirOS now starts with timely, directly supported relationship discoveries, makes its answers easier to follow, and lets you improve future answers with private feedback.",
+      title: "Ask AmirOS shows the evidence behind a discovery",
+      detail: "Ask begins with a discovery only when current, direct conversation evidence supports it. Answers make their source easier to review, and private feedback helps improve future answers.",
     },
     {
       title: "Replies stay in your voice",
@@ -48,6 +48,18 @@ export const CURRENT_RELEASE: AmirOSRelease = {
       title: "A calmer daily workspace",
       detail: "Today’s Focus, empty states, and the daily overview now fit together more cleanly and make the next useful thing easier to spot.",
     },
+    {
+      title: "Schedule a message in their local time",
+      detail: "Set a contact’s city, then choose Contact time or My time when you schedule a message. You can edit or cancel it before delivery; an interrupted delivery is held for review rather than sent later without you knowing.",
+    },
+    {
+      title: "Review translations and images before sending",
+      detail: "Translations stay as a reviewable draft and never send automatically. Generated images are added as an attachment only — choose Send when you are ready to share either one.",
+    },
+    {
+      title: "Find older conversations when you need them",
+      detail: "Inbox can load more of your chat list, so a useful conversation does not disappear just because it is not among the most recent chats.",
+    },
   ],
 };
 
@@ -57,6 +69,29 @@ export const CURRENT_RELEASE: AmirOSRelease = {
  */
 export const RELEASE_HISTORY: AmirOSRelease[] = [
   CURRENT_RELEASE,
+  {
+    version: "0.10.14",
+    releasedAt: "2026-08-20",
+    headline: "A more natural, trustworthy AmirOS",
+    notes: [
+      {
+        title: "Ask AmirOS makes clearer discoveries",
+        detail: "Ask AmirOS now starts with timely, directly supported relationship discoveries, makes its answers easier to follow, and lets you improve future answers with private feedback.",
+      },
+      {
+        title: "Replies stay in your voice",
+        detail: "Auto Mode now understands a short burst of messages together, sends one natural reply in your voice, and more reliably respects each chat’s preferences.",
+      },
+      {
+        title: "Deleted messages stay private and recoverable",
+        detail: "When you opt in, AmirOS can keep a local copy of deleted WhatsApp text and available media, clearly mark it in Inbox, and let you reveal it only when you choose.",
+      },
+      {
+        title: "A calmer daily workspace",
+        detail: "Today’s Focus, empty states, and the daily overview now fit together more cleanly and make the next useful thing easier to spot.",
+      },
+    ],
+  },
   {
     version: "0.10.12",
     releasedAt: "2026-08-18",

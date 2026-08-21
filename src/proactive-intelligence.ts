@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isTrustworthyIntelligenceCard, type CardEvidence } from "../shared/intelligence-card-eligibility.js";
 import type {
   CalendarEvent,
   ContactInsight,
@@ -45,6 +46,8 @@ export type ProactiveSource = {
   chatId: string;
   contactName: string;
   isGroup: boolean;
+  /** Exact local messages available to prove a card's promise. */
+  retainedMessageIds?: string[];
   isOwner?: boolean;
   insights: ContactInsight[];
   commitments: RelationshipCommitment[];
@@ -84,7 +87,7 @@ export type ProactiveAiJudgmentBatch = {
   judgments: ProactiveAiJudgment[];
 };
 
-export const PROACTIVE_AI_POLICY_VERSION = "proactive-judgment-v2";
+export const PROACTIVE_AI_POLICY_VERSION = "proactive-judgment-v3";
 
 export type ProactiveCandidateOptions = {
   /** Defaults to off: normal dashboard refreshes should not create relationship anxiety. */
@@ -107,15 +110,9 @@ function compact(value: string, max = 170): string {
   return `${cut.slice(0, boundary > max / 2 ? boundary : max).trimEnd()}…`;
 }
 
-/** Proactive surfacing has a deliberately higher privacy bar than on-demand retrieval. */
-export function isSensitiveProactiveContent(value: string): boolean {
-  return /\b(?:health\w*|medical\w*|diagnos\w*|depress\w*|anxious\w*|therapy\w*|mental\w*|pregnan\w*|sexual\w*|gay|lesbian|religion\w*|jewish|muslim|christian|politic\w*|election\w*|debt\w*|salary|income|bankrupt\w*|abuse\w*|divorce\w*|conflict\w*|fight\w*)\b|(?:בריאות|רפוא|דיכא|חרד|טיפול|הריון|מיני|דת|פוליט|חוב|שכר|גירוש|ריב)/iu.test(value);
-}
-
 function evidenceTimestamp(insight: ContactInsight): number {
+  // Re-indexing or AI maintenance must not make an old message look new.
   return Math.max(
-    toMilliseconds(insight.updatedAt),
-    toMilliseconds(insight.lastReinforcedAt || 0),
     toMilliseconds(insight.evidence.timestamp),
     ...(insight.evidenceHistory || []).map((item) => toMilliseconds(item.timestamp)),
   );
@@ -123,7 +120,6 @@ function evidenceTimestamp(insight: ContactInsight): number {
 
 function usableInsight(insight: ContactInsight, now: number): boolean {
   if (insight.status !== "confirmed" || insight.validity === "historical" || insight.confidence < .9) return false;
-  if (isSensitiveProactiveContent(`${insight.topicTitle || ""} ${insight.content}`)) return false;
   const freshness = assessKnowledgeFreshness(insight, now);
   return freshness.state !== "stale" && !freshness.qualify;
 }
@@ -133,6 +129,24 @@ function stableFingerprint(kind: ProactiveCandidateKind, sourceIds: string[], va
     .update(JSON.stringify([kind, [...sourceIds].sort(), ...values]))
     .digest("hex")
     .slice(0, 24);
+}
+
+function hasRetainedEvidence(source: ProactiveSource, evidence: CardEvidence): boolean {
+  return Boolean(evidence.messageId && source.retainedMessageIds?.includes(evidence.messageId));
+}
+
+function eligibleCandidate(
+  source: ProactiveSource,
+  input: Omit<Parameters<typeof isTrustworthyIntelligenceCard>[0], "chatId" | "isGroup" | "retainedMessageIds" | "now">,
+  now: number,
+): boolean {
+  return isTrustworthyIntelligenceCard({
+    ...input,
+    chatId: source.chatId,
+    isGroup: source.isGroup,
+    retainedMessageIds: source.retainedMessageIds,
+    now,
+  });
 }
 
 function addCandidate(
@@ -178,23 +192,31 @@ export function buildProactiveCandidates(
       const insight = nextRelevantInsight(source, now);
       if (insight) {
         const startAt = toMilliseconds(upcomingEvent.startAt);
-        addCandidate(candidates, {
-          id: `proactive:upcoming:${source.chatId}:${upcomingEvent.id}:${insight.id}`,
-          kind: "upcoming_context",
-          priority: 10,
-          title: `Before ${upcomingEvent.title}`,
-          detail: compact(insight.content),
-          why: `${upcomingEvent.title} is coming up soon, and this is recent, confirmed context about ${source.contactName}.`,
-          chatId: source.chatId,
-          contactName: source.contactName,
-          sourceIds: [upcomingEvent.id, insight.id],
-          messageId: insight.evidence.messageId || upcomingEvent.evidence.messageId,
-          action: "chat",
-          timestamp: startAt,
-          sourceTimestamp: evidenceTimestamp(insight),
-          fingerprintValues: [startAt, insight.updatedAt, insight.lastReinforcedAt],
-        });
-        upcomingContextAdded = true;
+        const title = `Before ${upcomingEvent.title}`;
+        const detail = compact(insight.content);
+        if (hasRetainedEvidence(source, insight.evidence) && hasRetainedEvidence(source, upcomingEvent.evidence)
+          && eligibleCandidate(source, {
+            title, detail, sourceIds: [upcomingEvent.id, insight.id],
+            evidence: [insight.evidence, upcomingEvent.evidence], currentClaim: true, dueAt: startAt,
+          }, now)) {
+          addCandidate(candidates, {
+            id: `proactive:upcoming:${source.chatId}:${upcomingEvent.id}:${insight.id}`,
+            kind: "upcoming_context",
+            priority: 10,
+            title,
+            detail,
+            why: `${upcomingEvent.title} is coming up soon, and this is recent, confirmed context about ${source.contactName}.`,
+            chatId: source.chatId,
+            contactName: source.contactName,
+            sourceIds: [upcomingEvent.id, insight.id],
+            messageId: insight.evidence.messageId || upcomingEvent.evidence.messageId,
+            action: "chat",
+            timestamp: startAt,
+            sourceTimestamp: evidenceTimestamp(insight),
+            fingerprintValues: [startAt, insight.updatedAt, insight.lastReinforcedAt],
+          });
+          upcomingContextAdded = true;
+        }
       }
     }
 
@@ -203,7 +225,11 @@ export function buildProactiveCandidates(
       const dueAt = typeof commitment.dueAt === "number" ? toMilliseconds(commitment.dueAt) : undefined;
       const evidenceAt = toMilliseconds(commitment.evidence.timestamp);
       const timely = dueAt ? dueAt <= now + DAY_MS : now - evidenceAt <= FOLLOW_UP_WINDOW_MS;
-      if (!timely || isSensitiveProactiveContent(commitment.content)) continue;
+      if (!timely || !hasRetainedEvidence(source, commitment.evidence)
+        || !eligibleCandidate(source, {
+          title: compact(commitment.content, 100), detail: `Your commitment to ${source.contactName}`,
+          sourceIds: [commitment.id], evidence: [commitment.evidence], openFollowUp: true, dueAt,
+        }, now)) continue;
       addCandidate(candidates, {
         id: `proactive:commitment:${source.chatId}:${commitment.id}`,
         kind: "commitment",
@@ -228,7 +254,11 @@ export function buildProactiveCandidates(
     for (const todo of source.todos) {
       if (todo.status !== "open" || typeof todo.dueAt !== "number") continue;
       const dueAt = toMilliseconds(todo.dueAt);
-      if (dueAt > now + DAY_MS || isSensitiveProactiveContent(`${todo.title} ${todo.note || ""}`)) continue;
+      if (dueAt > now + DAY_MS || !hasRetainedEvidence(source, todo.evidence)
+        || !eligibleCandidate(source, {
+          title: compact(todo.title, 100), detail: "This to-do is due within a day",
+          sourceIds: [todo.id], evidence: [todo.evidence], dueAt,
+        }, now)) continue;
       addCandidate(candidates, {
         id: `proactive:todo:${source.chatId}:${todo.id}`,
         kind: "todo",
@@ -252,14 +282,19 @@ export function buildProactiveCandidates(
     const incomingAt = source.lastIncoming ? toMilliseconds(source.lastIncoming.timestamp) : 0;
     if (
       source.needsReply && assessment?.needsReply && assessment.confidence >= 95 && incomingAt >= now - 7 * DAY_MS &&
-      source.lastIncoming && !isSensitiveProactiveContent(source.lastIncoming.content)
+      source.lastIncoming && hasRetainedEvidence(source, source.lastIncoming)
     ) {
-      addCandidate(candidates, {
+      const title = `${source.contactName} may need your reply`;
+      const detail = compact(source.lastIncoming.content, 130);
+      if (eligibleCandidate(source, {
+        title, detail, sourceIds: [source.lastIncoming.messageId || `message-${incomingAt}`],
+        evidence: [source.lastIncoming], openFollowUp: true,
+      }, now)) addCandidate(candidates, {
         id: `proactive:reply:${source.chatId}:${source.lastIncoming.messageId || incomingAt}`,
         kind: "reply",
         priority: 18,
-        title: `${source.contactName} may need your reply`,
-        detail: compact(source.lastIncoming.content, 130),
+        title,
+        detail,
         why: assessment.reason === "direct_question"
           ? `${source.contactName} asked you a direct question and no later reply from you is saved.`
           : `${source.contactName} made a direct request and no later reply from you is saved.`,
@@ -283,12 +318,18 @@ export function buildProactiveCandidates(
       const changedAt = evidenceTimestamp(meaningfulChange);
       const lastInteractionAt = source.lastInteraction ? toMilliseconds(source.lastInteraction.timestamp) : 0;
       if (source.lastInteraction?.author === "owner" && lastInteractionAt > changedAt) continue;
+      const title = compact(meaningfulChange.discoveryTitle || meaningfulChange.topicTitle || meaningfulChange.content, 100);
+      const detail = compact(meaningfulChange.content);
+      if (!hasRetainedEvidence(source, meaningfulChange.evidence)
+        || !eligibleCandidate(source, {
+          title, detail, sourceIds: [meaningfulChange.id], evidence: [meaningfulChange.evidence], currentClaim: true,
+        }, now)) continue;
       addCandidate(candidates, {
         id: `proactive:change:${source.chatId}:${meaningfulChange.id}`,
         kind: "meaningful_change",
         priority: 30,
-        title: `Something changed with ${source.contactName}`,
-        detail: compact(meaningfulChange.content),
+        title,
+        detail,
         why: `This is recent, confirmed relationship knowledge backed by saved evidence about ${source.contactName}.`,
         chatId: source.chatId,
         contactName: source.contactName,

@@ -14,7 +14,7 @@ import {
 } from "../calendar-preferences";
 import { downloadIcs, googleCalendarUrl } from "../calendar-export";
 import { formatDateTime, formatTime } from "../format";
-import type { CalendarEvent, IntelligenceData } from "../types";
+import type { CalendarEvent, ContactPreferences, IntelligenceData } from "../types";
 import { CalendarEventForm, type CalendarEventDraft } from "./CalendarEventForm";
 
 type EnrichedEvent = CalendarEvent & { chatId: string; contactName: string };
@@ -30,6 +30,7 @@ type CalendarPatch = {
 
 type CalendarViewProps = {
   data?: IntelligenceData;
+  contacts: Record<string, ContactPreferences>;
   onOpenChat: (chatId: string) => void;
   onStatus: (chatId: string, eventId: string, patch: CalendarPatch) => Promise<void>;
   onRegenerateTitle: (chatId: string, eventId: string) => Promise<string>;
@@ -46,9 +47,32 @@ function shortTime(timestamp: number) {
   return formatTime(timestamp);
 }
 
-function localDateTime(timestamp: number) {
-  const date = new Date(timestamp);
-  return new Date(timestamp - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+function ownerTimeZone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function timeZoneParts(timestamp: number, timeZone: string) {
+  const values = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(timestamp));
+  return Object.fromEntries(values.filter((value) => value.type !== "literal").map((value) => [value.type, value.value]));
+}
+
+function dateTimeInTimeZone(timestamp: number, timeZone: string) {
+  const parts = timeZoneParts(timestamp, timeZone);
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
+function timeZoneOffsetMinutes(timestamp: number, timeZone: string) {
+  const parts = timeZoneParts(timestamp, timeZone);
+  return (Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute)) - timestamp) / 60_000;
+}
+
+function dateTimeInTimeZoneToTimestamp(value: string, timeZone: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return undefined;
+  const guess = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]));
+  let timestamp = guess - timeZoneOffsetMinutes(guess, timeZone) * 60_000;
+  timestamp = guess - timeZoneOffsetMinutes(timestamp, timeZone) * 60_000;
+  return dateTimeInTimeZone(timestamp, timeZone) === value ? timestamp : undefined;
 }
 
 function atStartOfDay(value: Date) {
@@ -78,7 +102,7 @@ function eventEnd(event: CalendarEvent) {
   return event.endAt && event.endAt > event.startAt ? event.endAt : event.startAt + 60 * 60 * 1_000;
 }
 
-export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: CalendarViewProps) {
+export function CalendarView({ data, contacts, onOpenChat, onStatus, onRegenerateTitle }: CalendarViewProps) {
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [dates, setDates] = useState<Record<string, string>>({});
   const [displayMode, setDisplayMode] = useState<CalendarDisplayMode>(readCalendarDisplayMode);
@@ -168,21 +192,26 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
 
   const beginEdit = (event: EnrichedEvent) => {
     setActionError("");
+    const contactTimezone = contacts[event.chatId]?.timezone;
+    const timezone = contactTimezone || ownerTimeZone();
     setEditDraft({
       title: event.title,
-      startAt: localDateTime(event.startAt),
-      endAt: localDateTime(eventEnd(event)),
+      startAt: dateTimeInTimeZone(event.startAt, timezone),
+      endAt: dateTimeInTimeZone(eventEnd(event), timezone),
       location: event.location || "",
+      timezone,
+      timeBasis: contactTimezone ? "contact" : "owner",
     });
   };
 
   const saveEdit = async () => {
     if (!selectedEvent || !editDraft) return;
     const title = editDraft.title.replace(/\s+/g, " ").trim();
-    const startAt = new Date(editDraft.startAt).getTime();
-    const endAt = new Date(editDraft.endAt).getTime();
+    const timezone = editDraft.timezone || ownerTimeZone();
+    const startAt = dateTimeInTimeZoneToTimestamp(editDraft.startAt, timezone);
+    const endAt = dateTimeInTimeZoneToTimestamp(editDraft.endAt, timezone);
     if (!title) { setActionError("Add an event title before saving."); return; }
-    if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt <= startAt) {
+    if (startAt === undefined || endAt === undefined || endAt <= startAt) {
       setActionError("The event end time must be after its start time.");
       return;
     }
@@ -198,6 +227,25 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
     } finally {
       setSaving(false);
     }
+  };
+
+  const changeEditTimeBasis = (timeBasis: NonNullable<CalendarEventDraft["timeBasis"]>) => {
+    if (!selectedEvent) return;
+    const timezone = timeBasis === "contact" ? contacts[selectedEvent.chatId]?.timezone : ownerTimeZone();
+    if (!timezone) return;
+    setEditDraft((current) => {
+      if (!current || current.timezone === timezone) return current ? { ...current, timeBasis } : current;
+      const currentTimezone = current.timezone || ownerTimeZone();
+      const startAt = dateTimeInTimeZoneToTimestamp(current.startAt, currentTimezone);
+      const endAt = dateTimeInTimeZoneToTimestamp(current.endAt, currentTimezone);
+      return {
+        ...current,
+        timezone,
+        timeBasis,
+        startAt: startAt ? dateTimeInTimeZone(startAt, timezone) : current.startAt,
+        endAt: endAt ? dateTimeInTimeZone(endAt, timezone) : current.endAt,
+      };
+    });
   };
 
   const regenerateEditTitle = async () => {
@@ -273,7 +321,7 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
     <header className="page-header compact-header"><div><h1>Calendar</h1><p>Plans discovered in conversations, with evidence attached.</p></div><div className="calendar-view-switcher" role="group" aria-label="Calendar view"><button className={displayMode === "day" ? "active" : ""} type="button" aria-pressed={displayMode === "day"} onClick={() => selectDisplayMode("day")}>Day</button><button className={displayMode === "week" ? "active" : ""} type="button" aria-pressed={displayMode === "week"} onClick={() => selectDisplayMode("week")}>Week</button><button className={displayMode === "month" ? "active" : ""} type="button" aria-pressed={displayMode === "month"} onClick={() => selectDisplayMode("month")}>Month</button></div></header>
 
     {suggestions.length > 0 ? <section className="panel calendar-suggestions calendar-suggestions-top"><div className="panel-heading"><h2>Suggested from messages</h2><small>{suggestions.length} awaiting review</small></div>
-      <div className="calendar-agenda">{suggestions.map((event) => { const title = titles[event.id] ?? event.title; const dateValue = dates[event.id] ?? localDateTime(event.startAt); const startAt = new Date(dateValue).getTime(); return <article key={event.id}>
+      <div className="calendar-agenda">{suggestions.map((event) => { const title = titles[event.id] ?? event.title; const dateValue = dates[event.id] ?? dateTimeInTimeZone(event.startAt, ownerTimeZone()); const startAt = new Date(dateValue).getTime(); return <article key={event.id}>
         <span className="agenda-date suggestion"><strong>{new Date(event.startAt).getDate()}</strong><small>{new Intl.DateTimeFormat(undefined, { month: "short" }).format(new Date(event.startAt))}</small><time>{Number.isFinite(startAt) ? shortTime(startAt) : "—"}</time></span>
         <div className="agenda-edit-copy"><label><PencilLine size={13} /><input aria-label={`Edit event title for ${event.contactName}`} value={title} onChange={(change) => setTitles((current) => ({ ...current, [event.id]: change.target.value }))} /><button type="button" aria-label="Regenerate event title" onClick={() => void onRegenerateTitle(event.chatId, event.id).then((next) => setTitles((current) => ({ ...current, [event.id]: next })))}><RefreshCw size={14} /></button></label><input className="event-datetime-input" type="datetime-local" value={dateValue} aria-label={`Date and time for ${title}`} onChange={(change) => setDates((current) => ({ ...current, [event.id]: change.target.value }))} /><button disabled={!Number.isFinite(startAt)} onClick={() => openEvent({ ...event, title, startAt, allDay: false })}><span>{event.evidence.senderName || event.contactName}: {event.evidence.excerpt}</span></button></div>
         <span className="agenda-actions"><button aria-label="Accept calendar suggestion" disabled={!title.trim() || !Number.isFinite(startAt)} onClick={() => void onStatus(event.chatId, event.id, { status: "confirmed", title: title.trim(), startAt, allDay: false })}><Check size={15} /></button><button aria-label="Dismiss calendar suggestion" onClick={() => void onStatus(event.chatId, event.id, { status: "dismissed" })}><X size={15} /></button></span>
@@ -304,7 +352,7 @@ export function CalendarView({ data, onOpenChat, onStatus, onRegenerateTitle }: 
     {selectedEvent ? <div className="event-detail-backdrop" role="presentation" onClick={() => { setSelectedEvent(undefined); setEditDraft(undefined); }}>
       <section className={`event-detail-bubble ${editDraft ? "editing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="calendar-event-title" onClick={(event) => event.stopPropagation()}>
         <header><span className="event-detail-icon"><CalendarDays size={22} /></span><span><small>{editDraft ? "Editing event" : selectedEvent.status === "confirmed" ? "Confirmed event" : "Suggested event"}</small><h2 id="calendar-event-title">{selectedEvent.title}</h2></span><button className="icon-button" aria-label="Close event details" onClick={() => { setSelectedEvent(undefined); setEditDraft(undefined); }}><X size={17} /></button></header>
-        {editDraft ? <CalendarEventForm draft={editDraft} error={actionError} saving={saving} regeneratingTitle={regeneratingTitle} submitLabel="Save event" onChange={setEditDraft} onCancel={() => { setEditDraft(undefined); setActionError(""); }} onSubmit={() => void saveEdit()} onRegenerateTitle={() => void regenerateEditTitle()} /> : <>
+        {editDraft ? <CalendarEventForm draft={editDraft} error={actionError} saving={saving} regeneratingTitle={regeneratingTitle} submitLabel="Save event" onChange={setEditDraft} onCancel={() => { setEditDraft(undefined); setActionError(""); }} onSubmit={() => void saveEdit()} onRegenerateTitle={() => void regenerateEditTitle()} contactTimezone={contacts[selectedEvent.chatId]?.timezone} onTimeBasisChange={changeEditTimeBasis} /> : <>
           <dl><div><dt>Date &amp; time</dt><dd>{longDate(selectedEvent.startAt)}</dd></div><div><dt>Duration</dt><dd>{Math.max(1, Math.round((eventEnd(selectedEvent) - selectedEvent.startAt) / 60_000))} minutes</dd></div>{selectedEvent.location ? <div><dt>Location</dt><dd>{selectedEvent.location}</dd></div> : null}<div><dt>Conversation</dt><dd>{selectedEvent.contactName}</dd></div></dl>
           <blockquote><MessageSquareText size={16} /><span><strong>{selectedEvent.evidence.senderName || selectedEvent.contactName}</strong>{selectedEvent.evidence.excerpt}</span></blockquote>
           {actionError ? <p className="event-action-error">{actionError}</p> : null}

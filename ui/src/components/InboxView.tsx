@@ -5,17 +5,21 @@ import {
   CalendarDays,
   Check,
   Download,
+  ExternalLink,
   Image,
   Languages,
   LockKeyhole,
+  Mail,
   MemoryStick,
   MessageSquareText,
+  MapPin,
   Mic,
   Phone,
   PhoneMissed,
   Paperclip,
   PencilLine,
   Plus,
+  Power,
   RefreshCw,
   Search,
   Send,
@@ -29,6 +33,8 @@ import {
   ChevronDown,
   Copy,
   Clock3,
+  CalendarClock,
+  MoreHorizontal,
   Forward,
   Reply,
   Smile,
@@ -37,16 +43,25 @@ import {
   X,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { formatDateTime, formatTime } from "../format";
-import { contactProfilePdfUrl } from "../api";
+import { contactProfilePdfUrl, searchTimeZoneCities } from "../api";
 import { FIRST_RUN_PEOPLE_SCAN_LIMIT } from "../onboarding-people";
 import { WhatsAppIcon } from "./BrandIcons";
 import { ContactAvatar } from "./ContactAvatar";
 import { ChatMedia } from "./ChatMedia";
 import { callEventPresentation, mergedMessageReactions } from "../inbox-message-presentation";
 import { isNearChatBottom, shouldFollowNewMessages, shouldShowNewMessageJump } from "../inbox-scroll";
+import {
+  createInboxFilterPreference,
+  DEFAULT_INBOX_FILTER,
+  readInboxFilterPreference,
+  type InboxFilter,
+} from "../inbox-filter-preference";
+import { messageTimestamp, orderChatsByRecency, orderMessagesChronologically } from "../message-order";
 import { textDirection } from "../text-direction";
+import { suggestReplyForMessage } from "../api";
+import type { TimeZoneCity } from "../timezone-weather";
 import type {
   ChatMessage,
   ChatMemoryEntry,
@@ -62,10 +77,14 @@ import type {
   OwnerTriggerAccess,
   ReplyMode,
   WritingStyleProfile,
+  ScheduledMessage,
 } from "../types";
 
 type InboxViewProps = {
   chats: ChatSummary[];
+  hasMoreChats: boolean;
+  loadingMoreChats: boolean;
+  onLoadMoreChats: () => Promise<void>;
   unreadCount: number;
   initialFilter?: Filter;
   initialContactSettingsTab?: "configure" | "knowledge";
@@ -84,6 +103,7 @@ type InboxViewProps = {
   incomingMessageCount: number;
   contact?: ContactPreferences;
   drafts: Draft[];
+  scheduledMessages: ScheduledMessage[];
   loading: boolean;
   onSelectChat: (chatId: string | undefined) => void;
   onMarkRead: (chatId: string) => Promise<void>;
@@ -104,8 +124,12 @@ type InboxViewProps = {
   onApproveDraft: (draft: Draft, body: string) => Promise<void>;
   onDismissDraft: (draft: Draft) => Promise<void>;
   onSend: (chatId: string, body: string) => Promise<void>;
+  onSchedule: (chatId: string, input: { body: string; scheduledAt: number; timezone: string }) => Promise<ScheduledMessage>;
+  onUpdateScheduled: (id: string, patch: { body?: string; scheduledAt?: number; timezone?: string }) => Promise<ScheduledMessage>;
+  onCancelScheduled: (id: string) => Promise<ScheduledMessage>;
+  onTranslate: (input: { body: string; targetLanguage: string; sourceLanguage?: string }) => Promise<{ body: string; targetLanguage: string }>;
   onSendMedia: (chatId: string, file: File, caption: string, voiceNote?: boolean) => Promise<void>;
-  onGenerateImage: (chatId: string, prompt: string) => Promise<void>;
+  onGenerateImage: (chatId: string, prompt: string) => Promise<{ data: string; mimetype: string; filename: string; prompt: string }>;
   onReact: (chatId: string, messageId: string, emoji: string) => Promise<void>;
   onReply: (chatId: string, messageId: string, body: string) => Promise<void>;
   onForward: (chatId: string, messageId: string, targetChatId: string) => Promise<void>;
@@ -114,7 +138,30 @@ type InboxViewProps = {
   onHideDeletedMessage: (chatId: string, archiveId: string) => void;
 };
 
-type Filter = "all" | "unread" | "review" | "auto";
+type Filter = InboxFilter;
+
+const INBOX_FILTER_PREFERENCE_KEY = "amiros-inbox-filter-preference";
+
+type TranslationPreview = {
+  original: string;
+  body: string;
+  targetLanguage: string;
+  stale: boolean;
+};
+
+type TranslatedMessage = {
+  body: string;
+  targetLanguage: string;
+};
+
+type ScheduleEditor = {
+  body: string;
+  scheduledAt: string;
+  timezone: string;
+  timeBasis: "contact" | "owner";
+  id?: string;
+  composerBeforeEditing?: string;
+};
 
 const NEXT_REPLY_MODE: Record<ReplyMode, ReplyMode> = {
   off: "suggest",
@@ -193,8 +240,129 @@ const PRONOUN_OPTIONS: Array<{ value: ContactPronouns; label: string }> = [
 ];
 
 const REACTIONS = ["❤️", "👍", "😂", "😮", "😢", "🙏"];
-const COMPOSER_EMOJIS = ["😊", "😂", "❤️", "👍", "🙏", "🎉", "✨", "🔥", "🤔", "🙌"];
+const COMPOSER_EMOJI_CATEGORIES = [
+  { id: "smileys", label: "Smileys", icon: "😀", emojis: ["😀", "😃", "😄", "😁", "😆", "😅", "😂", "🥹", "😊", "🙂", "😉", "😍", "😘", "😎", "🤔", "😴", "😭", "😤", "😮", "🙃"] },
+  { id: "gestures", label: "Gestures", icon: "👍", emojis: ["👍", "👎", "👏", "🙌", "🙏", "🤝", "💪", "👋", "🤞", "✌️", "🤙", "👌", "👀", "🫶", "🤗", "🤷", "🙋", "🫡", "✍️", "💅"] },
+  { id: "hearts", label: "Hearts", icon: "❤️", emojis: ["❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "💔", "💕", "💖", "💯", "🔥", "✨", "🎉", "✅", "⭐", "🌟", "💫", "☀️"] },
+  { id: "objects", label: "Objects", icon: "💬", emojis: ["💬", "📞", "📅", "📍", "🎁", "🎵", "📷", "💡", "💻", "📎", "📝", "📌", "🔗", "⏰", "🚀", "☕", "🍀", "🌈", "🎈", "🎯"] },
+  { id: "travel", label: "Places", icon: "🌍", emojis: ["🌍", "🏠", "🏢", "✈️", "🚗", "🚕", "🚆", "🏖️", "🌆", "🌄", "🌞", "🌙", "🌧️", "❄️", "🍕", "🎂", "⚽", "🎮", "🐶", "🌸"] },
+] as const;
 const PARTICIPANT_COLORS = ["#0f766e", "#7c3aed", "#c2410c", "#0369a1", "#a21caf", "#4d7c0f", "#be123c", "#8a5a16"];
+const TRANSLATION_LANGUAGE_OPTIONS = [
+  ["ar", "Arabic"],
+  ["de", "German"],
+  ["en", "English"],
+  ["es", "Spanish"],
+  ["fr", "French"],
+  ["he", "Hebrew"],
+  ["it", "Italian"],
+  ["ja", "Japanese"],
+  ["pt", "Portuguese"],
+  ["ru", "Russian"],
+  ["uz", "Uzbek"],
+] as const;
+const INCOMING_TRANSLATION_TARGET_KEY = "amiros-incoming-translation-target";
+const URL_PATTERN = /(https?:\/\/[^\s<>"']+)/giu;
+
+function languageLabel(tag: string): string {
+  return new Intl.DisplayNames(undefined, { type: "language" }).of(tag) || tag;
+}
+
+function defaultIncomingTranslationTarget(): string {
+  const supported = new Set<string>(TRANSLATION_LANGUAGE_OPTIONS.map(([value]) => value));
+  if (typeof window === "undefined") return "en";
+  try {
+    const saved = window.localStorage.getItem(INCOMING_TRANSLATION_TARGET_KEY);
+    if (saved && supported.has(saved)) return saved;
+  } catch {
+    // Use the browser language when private browsing prevents local storage.
+  }
+  const browserLanguage = window.navigator.language?.split("-")[0]?.toLowerCase();
+  return browserLanguage && supported.has(browserLanguage) ? browserLanguage : "en";
+}
+
+function priorityReason(chat: ChatSummary, drafts: Draft[]): string | undefined {
+  if (drafts.some((draft) => draft.chatId === chat.id)) return "Draft ready";
+  if (/\?|\b(?:please|can you|could you|would you|need|help)\b/iu.test(chat.preview)) return "Direct question";
+  if (/\b(?:urgent|asap|today|tomorrow|deadline|time-sensitive)\b/iu.test(chat.preview)) return "Time-sensitive";
+  return undefined;
+}
+
+function messageTextWithLinks(value: string): ReactNode {
+  return value.split(URL_PATTERN).map((part, index) => {
+    if (!part) return null;
+    if (/^https?:\/\//iu.test(part)) {
+      return <a key={`${part}-${index}`} href={part} target="_blank" rel="noreferrer">{part}</a>;
+    }
+    return <Fragment key={`${part}-${index}`}>{part}</Fragment>;
+  });
+}
+
+function LinkCard({ value }: { value: string }) {
+  const firstUrl = value.match(URL_PATTERN)?.[0];
+  if (!firstUrl) return null;
+  try {
+    const url = new URL(firstUrl);
+    const destination = `${url.hostname.replace(/^www\./iu, "")}${url.pathname === "/" ? "" : url.pathname}`;
+    return <a className="message-link-card" href={url.toString()} target="_blank" rel="noreferrer">
+      <span className="message-link-icon"><ExternalLink size={17} /></span>
+      <span><strong>{url.hostname.replace(/^www\./iu, "")}</strong><small>{destination}</small></span>
+      <ExternalLink className="message-link-open" size={14} />
+    </a>;
+  } catch {
+    return null;
+  }
+}
+
+function ownerTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function timeZoneParts(timestamp: number, timeZone: string) {
+  const values = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(timestamp));
+  return Object.fromEntries(values.filter(({ type }) => type !== "literal").map(({ type, value }) => [type, value]));
+}
+
+function dateTimeValueInTimeZone(timestamp: number, timeZone: string): string {
+  const parts = timeZoneParts(timestamp, timeZone);
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
+function dateTimeLocalValue(timestamp: number): string {
+  return dateTimeValueInTimeZone(timestamp, ownerTimeZone());
+}
+
+function timeZoneOffsetMinutes(timestamp: number, timeZone: string): number {
+  const parts = timeZoneParts(timestamp, timeZone);
+  const displayedAsUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute));
+  return Math.round((displayedAsUtc - timestamp) / 60_000);
+}
+
+function dateTimeInTimeZoneToTimestamp(value: string, timeZone: string): number | undefined {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return undefined;
+  const [, year, month, day, hour, minute] = match;
+  const guess = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
+  let timestamp = guess - timeZoneOffsetMinutes(guess, timeZone) * 60_000;
+  timestamp = guess - timeZoneOffsetMinutes(timestamp, timeZone) * 60_000;
+  return dateTimeValueInTimeZone(timestamp, timeZone) === value ? timestamp : undefined;
+}
+
+function quickScheduleValue(timeZone: string, option: "later" | "morning" | "afternoon"): string {
+  if (option === "later") return dateTimeValueInTimeZone(Date.now() + 2 * 60 * 60_000, timeZone);
+  const parts = timeZoneParts(Date.now(), timeZone);
+  const tomorrow = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) + 1));
+  const date = tomorrow.toISOString().slice(0, 10);
+  return `${date}T${option === "morning" ? "09:00" : "14:00"}`;
+}
 
 function participantColor(message: ChatMessage): string {
   const key = message.senderId || message.senderName || message.id;
@@ -205,6 +373,11 @@ function participantColor(message: ChatMessage): string {
 
 function filePreview(file: File): string | undefined {
   return file.type.startsWith("image/") || file.type.startsWith("video/") ? URL.createObjectURL(file) : undefined;
+}
+
+function fileFromBase64(data: string, filename: string, mimetype: string): File {
+  const bytes = Uint8Array.from(atob(data), (character) => character.charCodeAt(0));
+  return new File([bytes], filename, { type: mimetype });
 }
 
 function sourceMessageMatches(messageId: string, sourceMessageId: string) {
@@ -228,14 +401,13 @@ function messageDateLabel(timestamp: number): string {
   }).format(date);
 }
 
-function messageTimestamp(timestamp: number): number {
-  return timestamp > 0 && timestamp < 10_000_000_000 ? timestamp * 1_000 : timestamp;
-}
-
 export function InboxView({
   chats,
+  hasMoreChats,
+  loadingMoreChats,
+  onLoadMoreChats,
   unreadCount,
-  initialFilter = "all",
+  initialFilter = DEFAULT_INBOX_FILTER,
   initialContactSettingsTab = "configure",
   selectedChatId,
   highlightedMessageId,
@@ -252,6 +424,7 @@ export function InboxView({
   incomingMessageCount,
   contact,
   drafts,
+  scheduledMessages,
   loading,
   onSelectChat,
   onMarkRead,
@@ -269,6 +442,10 @@ export function InboxView({
   onApproveDraft,
   onDismissDraft,
   onSend,
+  onSchedule,
+  onUpdateScheduled,
+  onCancelScheduled,
+  onTranslate,
   onSendMedia,
   onGenerateImage,
   onReact,
@@ -279,37 +456,145 @@ export function InboxView({
   onHideDeletedMessage,
 }: InboxViewProps) {
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<Filter>(initialFilter);
+  const [filterState, setFilterState] = useState(() => {
+    const preference = readInboxFilterPreference(localStorage.getItem(INBOX_FILTER_PREFERENCE_KEY));
+    // When there is nothing unread, opening to an empty work queue is not useful.
+    if (unreadCount === 0) return { filter: "all" as Filter, expiresAt: undefined };
+    return { filter: preference?.filter ?? initialFilter ?? DEFAULT_INBOX_FILTER, expiresAt: preference?.expiresAt };
+  });
+  const filter = filterState.filter;
   const [composer, setComposer] = useState("");
+  const [translationTarget, setTranslationTarget] = useState("es");
+  const [translationPreview, setTranslationPreview] = useState<TranslationPreview>();
+  const [translating, setTranslating] = useState(false);
+  const [incomingTranslationTarget, setIncomingTranslationTarget] = useState(defaultIncomingTranslationTarget);
+  const [incomingTranslationMenuOpen, setIncomingTranslationMenuOpen] = useState(false);
+  const [autoReplyDelayMenuOpen, setAutoReplyDelayMenuOpen] = useState(false);
+  const [locationPickerOpen, setLocationPickerOpen] = useState(false);
+  const [composerTranslationMenuOpen, setComposerTranslationMenuOpen] = useState(false);
+  const [translatedMessages, setTranslatedMessages] = useState<Record<string, TranslatedMessage>>({});
+  const [translatingMessageId, setTranslatingMessageId] = useState<string>();
+  const [messageMoreFor, setMessageMoreFor] = useState<string>();
+  const [draftingReplyFor, setDraftingReplyFor] = useState<string>();
+  const [scheduleEditor, setScheduleEditor] = useState<ScheduleEditor>();
+  const [scheduledMessageMenuOpen, setScheduledMessageMenuOpen] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
   const [attachment, setAttachment] = useState<{ file: File; preview?: string }>();
   const [replyingTo, setReplyingTo] = useState<ChatMessage>();
   const [forwarding, setForwarding] = useState<ChatMessage>();
   const [reactionFor, setReactionFor] = useState<string>();
   const [revealingDeletedMessageIds, setRevealingDeletedMessageIds] = useState<Set<string>>(() => new Set());
   const [composerEmojiOpen, setComposerEmojiOpen] = useState(false);
-  const [composerMode, setComposerMode] = useState<"message" | "image">("message");
+  const [composerEmojiCategory, setComposerEmojiCategory] = useState<(typeof COMPOSER_EMOJI_CATEGORIES)[number]["id"]>("smileys");
+  const [composerAttachmentMenuOpen, setComposerAttachmentMenuOpen] = useState(false);
+  const [imagePromptOpen, setImagePromptOpen] = useState(false);
+  const [imagePrompt, setImagePrompt] = useState("");
+  const [generatingImage, setGeneratingImage] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [insertedDraftId, setInsertedDraftId] = useState<string>();
   const [chatRailCollapsed, setChatRailCollapsed] = useState(() => localStorage.getItem("amiros-chat-rail") === "collapsed");
-  const [contactRailCollapsed, setContactRailCollapsed] = useState(() => localStorage.getItem("amiros-contact-rail") === "collapsed");
+  const [contactRailCollapsed, setContactRailCollapsed] = useState(() => localStorage.getItem("amiros-contact-rail") !== "expanded");
   const [contactSettingsTab, setContactSettingsTab] = useState<"configure" | "knowledge">(initialContactSettingsTab);
   const [openContactSection, setOpenContactSection] = useState<string | undefined>("relationship");
   const [scanState, setScanState] = useState<"idle" | "scanning" | string>("idle");
+  const [contactCityQuery, setContactCityQuery] = useState("");
+  const [contactCityResults, setContactCityResults] = useState<TimeZoneCity[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const incomingTranslationRef = useRef<HTMLDivElement>(null);
+  const autoReplyDelayRef = useRef<HTMLDivElement>(null);
+  const locationPickerRef = useRef<HTMLDivElement>(null);
+  const composerTranslationRef = useRef<HTMLDivElement>(null);
+  const composerAttachmentRef = useRef<HTMLDivElement>(null);
+  const composerEmojiRef = useRef<HTMLDivElement>(null);
+  const imagePromptRef = useRef<HTMLFormElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<number | null>(null);
   const selectedChat = chats.find((chat) => chat.id === selectedChatId) || chats[0];
   const chronologicalMessages = useMemo(
-    () => [...messages].sort((left, right) => messageTimestamp(left.timestamp) - messageTimestamp(right.timestamp) || left.id.localeCompare(right.id)),
+    () => orderMessagesChronologically(messages),
     [messages],
   );
   const highlightedMessage = highlightedMessageId
     ? chronologicalMessages.find((message) => sourceMessageMatches(message.id, highlightedMessageId))
     : undefined;
   const activeDraft = drafts.find((draft) => draft.chatId === selectedChat?.id);
+
+  useEffect(() => {
+    if (!filterState.expiresAt) return;
+    const remainingMs = filterState.expiresAt - Date.now();
+    const restoreUnread = () => {
+      setFilterState((current) => current.expiresAt === filterState.expiresAt
+        ? { filter: DEFAULT_INBOX_FILTER, expiresAt: undefined }
+        : current);
+      localStorage.removeItem(INBOX_FILTER_PREFERENCE_KEY);
+    };
+    if (remainingMs <= 0) {
+      restoreUnread();
+      return;
+    }
+    const timeout = window.setTimeout(restoreUnread, remainingMs);
+    return () => window.clearTimeout(timeout);
+  }, [filterState.expiresAt]);
+
+  useEffect(() => {
+    if (unreadCount > 0 || filterState.filter !== "unread") return;
+    localStorage.removeItem(INBOX_FILTER_PREFERENCE_KEY);
+    setFilterState({ filter: "all", expiresAt: undefined });
+  }, [filterState.filter, unreadCount]);
+
+  useEffect(() => {
+    if (!incomingTranslationMenuOpen && !autoReplyDelayMenuOpen && !locationPickerOpen && !composerTranslationMenuOpen && !composerAttachmentMenuOpen) return;
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!incomingTranslationRef.current?.contains(target)) setIncomingTranslationMenuOpen(false);
+      if (!autoReplyDelayRef.current?.contains(target)) setAutoReplyDelayMenuOpen(false);
+      if (!locationPickerRef.current?.contains(target)) setLocationPickerOpen(false);
+      if (!composerTranslationRef.current?.contains(target)) setComposerTranslationMenuOpen(false);
+      if (!composerAttachmentRef.current?.contains(target)) setComposerAttachmentMenuOpen(false);
+      if (!composerEmojiRef.current?.contains(target)) setComposerEmojiOpen(false);
+      if (!imagePromptRef.current?.contains(target)) setImagePromptOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIncomingTranslationMenuOpen(false);
+        setAutoReplyDelayMenuOpen(false);
+        setLocationPickerOpen(false);
+        setComposerTranslationMenuOpen(false);
+        setComposerAttachmentMenuOpen(false);
+        setComposerEmojiOpen(false);
+        setImagePromptOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePress);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePress);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [incomingTranslationMenuOpen, composerTranslationMenuOpen, composerAttachmentMenuOpen, composerEmojiOpen, imagePromptOpen]);
+
+  useEffect(() => {
+    const query = contactCityQuery.trim();
+    if (query.length < 2) { setContactCityResults([]); return; }
+    const timer = window.setTimeout(() => {
+      void searchTimeZoneCities(query).then(setContactCityResults).catch(() => setContactCityResults([]));
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [contactCityQuery]);
+
+  const selectFilter = (nextFilter: Filter) => {
+    if (nextFilter === "unread") {
+      localStorage.removeItem(INBOX_FILTER_PREFERENCE_KEY);
+      setFilterState({ filter: DEFAULT_INBOX_FILTER, expiresAt: undefined });
+      return;
+    }
+    const preference = createInboxFilterPreference(nextFilter);
+    localStorage.setItem(INBOX_FILTER_PREFERENCE_KEY, JSON.stringify(preference));
+    setFilterState(preference);
+  };
 
   const [draftBody, setDraftBody] = useState(activeDraft?.body || "");
   const [ownerTriggerAccess, setOwnerTriggerAccess] = useState<OwnerTriggerAccess[]>(
@@ -341,12 +626,29 @@ export function InboxView({
   const nearChatBottomRef = useRef(true);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const pendingInsights = insights.filter((item) => item.status === "inferred");
+  const actionableScheduledMessages = scheduledMessages
+    .filter((message) => message.status === "pending" || message.status === "failed")
+    .sort((left, right) => left.scheduledAt - right.scheduledAt);
+  const shouldManageScheduledMessages = actionableScheduledMessages.length > 0 && (!composer.trim() || Boolean(translationPreview?.stale));
 
   useEffect(() => setDraftBody(activeDraft?.body || ""), [activeDraft?.id, activeDraft?.body]);
   useEffect(() => {
+    setTranslationTarget(contact?.composerTranslationPreference?.targetLanguage || "es");
+    setTranslationPreview(undefined);
+    setTranslatedMessages({});
+    setMessageMoreFor(undefined);
+    setScheduleEditor(undefined);
+    setScheduledMessageMenuOpen(false);
+  }, [selectedChat?.id]);
+  useEffect(() => {
+    const rememberedTarget = contact?.composerTranslationPreference?.targetLanguage || "es";
+    setTranslationTarget(rememberedTarget);
+    setTranslationPreview((current) => current && current.targetLanguage !== rememberedTarget ? { ...current, stale: true } : current);
+  }, [contact?.composerTranslationPreference?.targetLanguage]);
+  useEffect(() => {
     if (!composerDraft) return;
     setComposer(composerDraft);
-    setComposerMode("message");
+    setImagePromptOpen(false);
     onComposerDraftConsumed();
     window.requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus());
   }, [composerDraft, onComposerDraftConsumed]);
@@ -626,13 +928,22 @@ export function InboxView({
 
   const visibleChats = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return chats.filter((chat) => {
-      if (filter === "unread" && chat.unreadCount <= 0) return false;
-      if (filter === "review" && !drafts.some((draft) => draft.chatId === chat.id)) return false;
-      if (filter === "auto" && chat.mode !== "auto") return false;
-      return !query || `${chat.name} ${chat.preview}`.toLowerCase().includes(query);
-    });
+    return orderChatsByRecency(
+      chats.filter((chat) => {
+        if (filter === "unread" && chat.unreadCount <= 0) return false;
+        if (filter === "priority" && !priorityReason(chat, drafts)) return false;
+        if (filter === "auto" && chat.mode !== "auto") return false;
+        return !query || `${chat.name} ${chat.preview}`.toLowerCase().includes(query);
+      }),
+    );
   }, [chats, drafts, filter, search]);
+
+  const filterCounts = useMemo(() => ({
+    all: chats.length,
+    priority: chats.filter((chat) => Boolean(priorityReason(chat, drafts))).length,
+    unread: chats.reduce((total, chat) => total + chat.unreadCount, 0),
+    auto: chats.filter((chat) => chat.mode === "auto").length,
+  }), [chats, drafts]);
 
   const chooseAttachment = (file?: File) => {
     if (!file) return;
@@ -646,8 +957,154 @@ export function InboxView({
     });
   };
 
+  const generateImageAttachment = async () => {
+    if (!selectedChat || !imagePrompt.trim() || generatingImage) return;
+    setGeneratingImage(true);
+    try {
+      const generated = await onGenerateImage(selectedChat.id, imagePrompt.trim());
+      chooseAttachment(fileFromBase64(generated.data, generated.filename, generated.mimetype));
+      setImagePrompt("");
+      setImagePromptOpen(false);
+      setScanState("Image added as an attachment — review it, then send when ready");
+    } catch (error) {
+      setScanState(error instanceof Error ? error.message : "Image could not be generated");
+    } finally {
+      setGeneratingImage(false);
+    }
+  };
+
   const stopVoiceRecording = () => {
     if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
+  };
+
+  const translateComposer = async (requestedTarget = translationTarget) => {
+    const original = composer.trim();
+    if (!original || translating) return;
+    setTranslating(true);
+    try {
+      const result = await onTranslate({ body: original, targetLanguage: requestedTarget });
+      setComposer(result.body);
+      setTranslationTarget(result.targetLanguage);
+      setTranslationPreview({ original, body: result.body, targetLanguage: result.targetLanguage, stale: false });
+      setScanState(`Translation ready · review before sending`);
+    } catch (error) {
+      setScanState(error instanceof Error ? error.message : "Translation could not be prepared");
+    } finally {
+      setTranslating(false);
+    }
+  };
+
+  const translateIncomingMessage = async (message: ChatMessage) => {
+    if (translatingMessageId) return;
+    const body = (message.fullBody || message.body).trim();
+    if (!body) return;
+    setTranslatingMessageId(message.id);
+    try {
+      // Incoming translation is intentionally independent from the owner's
+      // remembered outgoing composer preference.
+      const result = await onTranslate({ body, targetLanguage: incomingTranslationTarget });
+      setTranslatedMessages((current) => ({ ...current, [message.id]: { body: result.body, targetLanguage: result.targetLanguage } }));
+    } catch (error) {
+      setScanState(error instanceof Error ? error.message : "Message could not be translated");
+    } finally {
+      setTranslatingMessageId(undefined);
+    }
+  };
+
+  const changeIncomingTranslationTarget = (targetLanguage: string) => {
+    setIncomingTranslationTarget(targetLanguage);
+    try {
+      window.localStorage.setItem(INCOMING_TRANSLATION_TARGET_KEY, targetLanguage);
+    } catch {
+      // Translation still uses the selected language for this session.
+    }
+  };
+
+  const prepareDraftReply = async (message: ChatMessage) => {
+    if (!selectedChat || draftingReplyFor) return;
+    setDraftingReplyFor(message.id);
+    try {
+      const result = await suggestReplyForMessage(selectedChat.id, message.id);
+      setComposer(result.body);
+      setReplyingTo(message);
+      setTranslationPreview(undefined);
+      window.requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus());
+    } catch (error) {
+      setScanState(error instanceof Error ? error.message : "Reply draft could not be prepared");
+    } finally {
+      setDraftingReplyFor(undefined);
+    }
+  };
+
+  const persistTranslationTarget = async (targetLanguage: string) => {
+    setTranslationTarget(targetLanguage);
+    setTranslationPreview((current) => current && current.targetLanguage !== targetLanguage ? { ...current, stale: true } : current);
+    if (!selectedChat) return;
+    const saved = await onContactChange(selectedChat.id, {
+      composerTranslationPreference: {
+        targetLanguage,
+        direction: "outgoing_to_target",
+        source: "user_confirmed",
+        confirmedAt: Date.now(),
+      },
+    });
+    if (!saved) setScanState("Could not save this translation preference");
+  };
+
+  const openScheduleEditor = (message?: ScheduledMessage) => {
+    setScheduledMessageMenuOpen(false);
+    const timestamp = message?.scheduledAt || Date.now() + 60 * 60_000;
+    const contactTimeZone = contact?.timezone;
+    const timezone = message?.timezone || contactTimeZone || ownerTimeZone();
+    const timeBasis = contactTimeZone && timezone === contactTimeZone ? "contact" : "owner";
+    if (message) {
+      setComposer(message.body);
+      setTranslationPreview(undefined);
+    }
+    setScheduleEditor({
+      id: message?.id,
+      body: message?.body || composer.trim(),
+      scheduledAt: dateTimeValueInTimeZone(timestamp, timezone),
+      timezone,
+      timeBasis,
+      composerBeforeEditing: message ? composer : undefined,
+    });
+  };
+
+  const dismissScheduleEditor = () => {
+    if (scheduleEditor?.id && composer.trim() === scheduleEditor.body.trim()) setComposer(scheduleEditor.composerBeforeEditing || "");
+    setScheduleEditor(undefined);
+  };
+
+  const saveScheduledMessage = async () => {
+    if (!selectedChat || !scheduleEditor || scheduling) return;
+    if (translationPreview?.stale) {
+      setScanState("Translate the changed draft again or restore the original before scheduling it.");
+      return;
+    }
+    const scheduledAt = dateTimeInTimeZoneToTimestamp(scheduleEditor.scheduledAt, scheduleEditor.timezone);
+    if (!scheduleEditor.body.trim() || scheduledAt === undefined || scheduledAt < Date.now() + 10_000) {
+      setScanState("Choose a message and a delivery time at least a few seconds from now");
+      return;
+    }
+    setScheduling(true);
+    try {
+      const timezone = scheduleEditor.timezone;
+      if (scheduleEditor.id) {
+        await onUpdateScheduled(scheduleEditor.id, { body: scheduleEditor.body.trim(), scheduledAt, timezone });
+        if (composer.trim() === scheduleEditor.body.trim()) setComposer(scheduleEditor.composerBeforeEditing || "");
+      } else {
+        await onSchedule(selectedChat.id, { body: scheduleEditor.body.trim(), scheduledAt, timezone });
+        if (scheduleEditor.body.trim() === composer.trim()) setComposer("");
+      }
+      setScheduleEditor(undefined);
+      setTranslationPreview(undefined);
+      setScanState("Message scheduled — you can edit or cancel it before delivery");
+    } catch (error) {
+      setScanState(error instanceof Error ? error.message : "Message could not be scheduled");
+    } finally {
+      setScheduling(false);
+    }
   };
 
   const startVoiceRecording = async () => {
@@ -695,22 +1152,29 @@ export function InboxView({
 
   const submitMessage = async () => {
     if (!selectedChat || sending || (!composer.trim() && !attachment)) return;
+    if (translationPreview?.stale) {
+      setScanState("The draft changed after translation. Translate again or restore the original before sending.");
+      return;
+    }
     const message = composer.trim();
+    const sentTranslation = translationPreview && !translationPreview.stale ? translationPreview : undefined;
     setSending(true);
     try {
       if (attachment) {
         await onSendMedia(selectedChat.id, attachment.file, message);
         if (attachment.preview) URL.revokeObjectURL(attachment.preview);
         setAttachment(undefined);
-      } else if (composerMode === "image") {
-        await onGenerateImage(selectedChat.id, message);
       } else if (replyingTo) {
         await onReply(selectedChat.id, replyingTo.id, message);
       } else {
         await onSend(selectedChat.id, message);
       }
       setComposer("");
-      setComposerMode("message");
+      if (sentTranslation) {
+        window.setTimeout(() => setTranslationPreview((current) => current?.original === sentTranslation.original && current.body === sentTranslation.body ? undefined : current), 5_000);
+      } else {
+        setTranslationPreview(undefined);
+      }
       if (insertedDraftId && activeDraft?.id === insertedDraftId) {
         await onDismissDraft(activeDraft);
         setInsertedDraftId(undefined);
@@ -770,6 +1234,7 @@ export function InboxView({
   const savedReplyMode = contact?.mode || selectedChat.mode;
   const activeReplyMode: ReplyMode = savedReplyMode === "auto" && !autoModeEnabled ? "suggest" : savedReplyMode;
   const nextReplyMode = autoModeEnabled ? NEXT_REPLY_MODE[activeReplyMode] : activeReplyMode === "off" ? "suggest" : "off";
+  const rtlChatIdentity = textDirection(selectedChat.name) === "rtl" || Boolean(selectedChat.isGroup && groupDescription && textDirection(groupDescription) === "rtl");
   const replyModes = autoModeEnabled ? (["off", "suggest", "auto"] as const) : (["off", "suggest"] as const);
   const autoReplyInitialDelay = contact?.autoReplyInitialDelaySeconds || 30;
   const changeAutoReplyInitialDelay = (value: string) => {
@@ -779,44 +1244,71 @@ export function InboxView({
   };
 
   return (
-    <main className={`inbox-page ${selectedChatId ? "mobile-chat" : "mobile-list"} ${chatRailCollapsed ? "chat-rail-collapsed" : ""} ${contactRailCollapsed ? "contact-rail-collapsed" : ""}`}>
+    <main className={`inbox-page ${selectedChatId ? "mobile-chat" : "mobile-list"} ${chatRailCollapsed ? "chat-rail-collapsed" : ""} ${contactRailCollapsed ? "contact-rail-collapsed" : ""}`} onPointerDownCapture={(event) => {
+      if (composerEmojiOpen && !composerEmojiRef.current?.contains(event.target as Node)) setComposerEmojiOpen(false);
+    }}>
       <section className="conversation-list-panel">
-        <div className="inbox-title-row"><h1>Inbox</h1><span aria-label={`${unreadCount} unread messages`} title={`${unreadCount} unread messages`}>{unreadCount}</span><button className="rail-collapse-button" aria-label={chatRailCollapsed ? "Expand conversation list" : "Collapse conversation list"} onClick={toggleChatRail}>{chatRailCollapsed ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}</button></div>
+        <div className="inbox-title-row">
+          <div className="inbox-page-heading">
+            <h1>Inbox</h1>
+            {unreadCount > 0 ? (
+              <p className="inbox-unread-summary" aria-label={`${unreadCount} unread messages`}>
+                <Mail size={15} aria-hidden="true" />
+                <span>{unreadCount} unread {unreadCount === 1 ? "message" : "messages"}</span>
+              </p>
+            ) : null}
+            <p className="inbox-page-subtitle">Your conversations, in context.</p>
+          </div>
+          <button className="rail-collapse-button" aria-label={chatRailCollapsed ? "Expand conversation list" : "Collapse conversation list"} onClick={toggleChatRail}>{chatRailCollapsed ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}</button>
+        </div>
         <label className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search conversations" /></label>
         <div className="filter-tabs" aria-label="Conversation filters">
-          <button className={filter === "all" ? "active" : ""} aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All</button>
-          <button className={filter === "unread" ? "active" : ""} aria-pressed={filter === "unread"} onClick={() => setFilter("unread")}>Unread</button>
-          <button className={filter === "review" ? "active" : ""} aria-label="Needs review" aria-pressed={filter === "review"} onClick={() => setFilter("review")}>Review</button>
-          <button className={filter === "auto" ? "active" : ""} aria-pressed={filter === "auto"} onClick={() => setFilter("auto")}><Bot size={14} /> Auto</button>
+          <button className={filter === "all" ? "active" : ""} aria-pressed={filter === "all"} onClick={() => selectFilter("all")}>All <span>{filterCounts.all}</span></button>
+          <button className={filter === "priority" ? "active" : ""} aria-pressed={filter === "priority"} title="Direct questions, time-sensitive requests, and chats with a draft ready" onClick={() => selectFilter("priority")}>Priority <span>{filterCounts.priority}</span></button>
+          <button className={filter === "unread" ? "active" : ""} aria-pressed={filter === "unread"} onClick={() => selectFilter("unread")}>Unread <span>{filterCounts.unread}</span></button>
+          <button className={filter === "auto" ? "active" : ""} aria-pressed={filter === "auto"} onClick={() => selectFilter("auto")}>Auto <span>{filterCounts.auto}</span></button>
         </div>
-        <div className="conversation-list">
+        <div className="conversation-list" onScroll={(event) => {
+          const list = event.currentTarget;
+          if (hasMoreChats && !loadingMoreChats && list.scrollTop + list.clientHeight >= list.scrollHeight - 120) void onLoadMoreChats();
+        }}>
           {visibleChats.map((chat, index) => (
             <button key={chat.id} className={selectedChat.id === chat.id ? "conversation-row selected" : "conversation-row"} onClick={() => onSelectChat(chat.id)}>
               <ContactAvatar name={chat.name} src={chat.avatarUrl} tone={index} />
               <span className="conversation-copy">
                 <span><strong dir="auto">{chat.name}</strong><time>{formatTime(chat.timestamp)}</time></span>
                 <small dir={textDirection(chat.preview)}>{chat.preview}</small>
-                <span className={`mode-label ${chat.mode}`}>{chat.mode === "auto" ? <Bot size={13} /> : chat.mode === "suggest" ? <PencilLine size={13} /> : <LockKeyhole size={13} />}<span className="capitalize">{chat.mode}</span></span>
+                {priorityReason(chat, drafts) ? <span className="priority-reason">{priorityReason(chat, drafts)}</span> : <span className={`mode-label ${chat.mode}`}>{chat.mode === "auto" ? <Bot size={13} /> : chat.mode === "suggest" ? <PencilLine size={13} /> : <LockKeyhole size={13} />}<span className="capitalize">{chat.mode}</span></span>}
               </span>
               {chat.unreadCount > 0 ? <span className="unread-count">{chat.unreadCount}</span> : null}
             </button>
           ))}
           {visibleChats.length === 0 ? (
-            <div className="conversation-empty">{filter === "unread" && !search.trim() ? "You’re all caught up — no unread conversations." : "No conversations match this filter."}</div>
+            <div className="conversation-empty">{filter === "auto" && !search.trim() ? "No conversations are in Auto Mode." : (filter === "unread" || filter === "priority") && !search.trim() ? "You’re all caught up — nothing needs your attention." : "No conversations match this filter."}</div>
           ) : null}
+          {hasMoreChats && filter === "all" && !search.trim() ? <button className="load-more-chats" disabled={loadingMoreChats} onClick={() => void onLoadMoreChats()}>{loadingMoreChats ? "Loading older conversations…" : "Load older conversations"}</button> : null}
         </div>
       </section>
 
       <section className="chat-panel">
-        <header className="chat-header">
+        <header className={`chat-header ${rtlChatIdentity ? "rtl-chat-identity" : ""}`}>
           <button className="icon-button mobile-back-button" aria-label="Back to conversations" onClick={() => onSelectChat(undefined)}><ArrowLeft size={20} /></button>
           <ContactAvatar name={selectedChat.name} src={selectedChat.avatarUrl} />
-          <span className="chat-person"><strong dir="auto">{selectedChat.name}</strong>{selectedChat.isGroup && groupDescription ? <small className="group-description" dir="auto">{groupDescription}</small> : null}<small><WhatsAppIcon size={13} /> Live sync · WhatsApp conversation</small></span>
+          <span className={`chat-person ${selectedChat.isGroup && groupDescription && textDirection(groupDescription) === "rtl" ? "rtl-group-identity" : ""}`}><strong dir="auto">{selectedChat.name}</strong>{selectedChat.isGroup && groupDescription ? <small className={`group-description ${textDirection(groupDescription) === "rtl" ? "rtl" : "ltr"}`} dir={textDirection(groupDescription)}>{groupDescription}</small> : null}{contact?.timezone ? <small className="contact-local-time">{contact.location ? `${contact.location} · ` : ""}{new Intl.DateTimeFormat(undefined, { timeZone: contact.timezone, hour: "numeric", minute: "2-digit" }).format(new Date())}</small> : null}<small><WhatsAppIcon size={13} /> Live sync · WhatsApp conversation</small></span>
           <div className="auto-reply-header-control">
-            <button className={`mode-select ${activeReplyMode}`} aria-label={`${activeReplyMode} mode. Switch to ${nextReplyMode} mode`} title={`Switch to ${nextReplyMode} mode`} onClick={() => onModeChange(selectedChat.id, nextReplyMode)}>{activeReplyMode === "off" ? <LockKeyhole size={16} /> : activeReplyMode === "suggest" ? <PencilLine size={16} /> : <Bot size={16} />}<span className="capitalize">{activeReplyMode} mode</span></button>
-            {activeReplyMode === "auto" ? <label className="auto-reply-delay-select"><Clock3 size={14} /><span>First reply</span><select aria-label="First automatic reply delay" value={autoReplyInitialDelay} onChange={(event) => changeAutoReplyInitialDelay(event.target.value)}>{AUTO_REPLY_DELAY_OPTIONS.map((seconds) => <option key={seconds} value={seconds}>{seconds}s</option>)}</select></label> : null}
+            {activeReplyMode === "auto" ? <div ref={autoReplyDelayRef} className={`auto-reply-delay-select ${autoReplyDelayMenuOpen ? "open" : ""}`}><button type="button" aria-label={`First automatic reply: ${autoReplyInitialDelay} seconds`} title={`First reply: ${autoReplyInitialDelay} seconds`} aria-haspopup="listbox" aria-expanded={autoReplyDelayMenuOpen} onClick={() => setAutoReplyDelayMenuOpen((open) => !open)}><Clock3 size={15} /></button>{autoReplyDelayMenuOpen ? <div className="auto-reply-delay-menu" role="listbox" aria-label="First automatic reply delay">{AUTO_REPLY_DELAY_OPTIONS.map((seconds) => <button key={seconds} type="button" role="option" aria-selected={seconds === autoReplyInitialDelay} className={seconds === autoReplyInitialDelay ? "selected" : ""} onClick={() => { changeAutoReplyInitialDelay(String(seconds)); setAutoReplyDelayMenuOpen(false); }}>{seconds}s{seconds === autoReplyInitialDelay ? <Check size={13} /> : null}</button>)}</div> : null}</div> : null}
+            <button className={`mode-select ${activeReplyMode}`} aria-label={`${activeReplyMode} mode. Switch to ${nextReplyMode} mode`} title={`Switch to ${nextReplyMode} mode`} onClick={() => onModeChange(selectedChat.id, nextReplyMode)}>{activeReplyMode === "suggest" ? <Sparkles size={16} /> : <Power size={16} />}</button>
           </div>
-          <button className="icon-button contact-rail-toggle" aria-label={contactRailCollapsed ? "Show contact settings" : "Hide contact settings"} onClick={toggleContactRail}>{contactRailCollapsed ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}</button>
+          <div ref={incomingTranslationRef} className={`incoming-translation-select ${incomingTranslationMenuOpen ? "open" : ""}`} title="Language used when translating received messages">
+            <button className="incoming-translation-trigger" type="button" aria-label="Translate received messages to" aria-haspopup="listbox" aria-expanded={incomingTranslationMenuOpen} onClick={() => setIncomingTranslationMenuOpen((open) => !open)}>
+              <Languages size={16} />
+            </button>
+            {incomingTranslationMenuOpen ? <div className="incoming-translation-menu" role="listbox" aria-label="Translate received messages to">
+              {TRANSLATION_LANGUAGE_OPTIONS.map(([value, label]) => <button key={value} type="button" role="option" aria-selected={value === incomingTranslationTarget} className={value === incomingTranslationTarget ? "selected" : ""} onClick={() => { changeIncomingTranslationTarget(value); setIncomingTranslationMenuOpen(false); }}><span>{label}</span>{value === incomingTranslationTarget ? <Check size={13} /> : null}</button>)}
+            </div> : null}
+          </div>
+          <div ref={locationPickerRef} className={`header-location-picker ${locationPickerOpen ? "open" : ""}`}><button className={`header-icon-button ${contact?.timezone ? "configured" : ""}`} type="button" aria-label="Set contact location" title={contact?.location ? `${contact.location} · ${contact.timezone}` : "Set contact location"} aria-expanded={locationPickerOpen} onClick={() => setLocationPickerOpen((open) => !open)}><MapPin size={16} /></button>{locationPickerOpen ? <div className="header-location-menu"><label><Search size={14} /><input autoFocus aria-label="Search contact city" value={contactCityQuery} placeholder={contact?.location || "Search city…"} onChange={(event) => setContactCityQuery(event.target.value)} /></label>{contactCityResults.length ? <div className="contact-city-results">{contactCityResults.map((city) => <button type="button" key={city.id} onClick={() => { void onContactChange(selectedChat.id, { location: `${city.name}, ${city.country}`, timezone: city.timezone }); setContactCityQuery(""); setContactCityResults([]); setLocationPickerOpen(false); }}><span>{city.name}, {city.country}</span><small>{city.timezone}</small></button>)}</div> : null}</div> : null}</div>
+          <button className="contact-rail-toggle details-button header-icon-button" aria-expanded={!contactRailCollapsed} aria-label={contactRailCollapsed ? "Show chat details" : "Hide chat details"} title={contactRailCollapsed ? "Show chat details" : "Hide chat details"} onClick={toggleContactRail}><UserRound size={16} /></button>
         </header>
 
         <div ref={messageCanvasRef} onScroll={rememberChatScroll} onLoadCapture={restoreAfterMediaLoad} className={loading ? "message-canvas loading" : "message-canvas"}>
@@ -877,7 +1369,11 @@ export function InboxView({
                 {!deletedMessage && message.quotedMessage ? <button className="quoted-message" type="button" onClick={() => scrollToQuotedMessage(message.quotedMessage!.id)}><strong>{message.quotedMessage.fromMe ? "You" : message.quotedMessage.senderName || selectedChat.name}</strong><span dir={textDirection(message.quotedMessage.body)}>{message.quotedMessage.body}</span></button> : null}
                 {message.call && callPresentation ? <div className={`chat-call-event${message.call.missed ? " missed" : ""}`}><CallIcon size={17} /><span><strong>{callPresentation.title}</strong><small>{callPresentation.detail}</small></span></div> : null}
                 {message.hasMedia && !message.call && !deletedMessage ? <ChatMedia message={message} /> : null}
-                {!message.call && !deletedMessage && (message.fullBody || (message.body && message.body !== "Media message")) ? <p dir={textDirection(message.fullBody || message.body)}>{message.fullBody || message.body}</p> : null}
+                {!message.call && !deletedMessage && (message.fullBody || (message.body && message.body !== "Media message")) ? <>
+                  <p dir={textDirection(message.fullBody || message.body)}>{messageTextWithLinks(message.fullBody || message.body)}</p>
+                  <LinkCard value={message.fullBody || message.body} />
+                  {translatedMessages[message.id] ? <div className="message-translation"><span><Languages size={13} /> {languageLabel(translatedMessages[message.id]!.targetLanguage)} translation</span><p dir={textDirection(translatedMessages[message.id]!.body)}>{translatedMessages[message.id]!.body}</p><button onClick={() => setTranslatedMessages((current) => { const next = { ...current }; delete next[message.id]; return next; })}>Show original</button></div> : null}
+                </> : null}
                 {!deletedMessage ? <time>{formatTime(message.timestamp)} {message.fromMe ? <Check size={13} /> : null}</time> : null}
                 {!deletedMessage && reactions.length > 0 ? <div className="message-reactions" aria-label="Message reactions">{reactions.map((reaction) => {
                   const names = [...new Set(reaction.senders.map((sender) => sender.name).filter((name): name is string => Boolean(name)))];
@@ -889,10 +1385,15 @@ export function InboxView({
                   return <span className="message-reaction" key={`${reaction.emoji}:${reaction.senders.map((sender) => sender.id).join(",")}`} title={label} aria-label={label}><span>{reaction.emoji}</span>{reaction.senders.length > 1 ? <b>{reaction.senders.length}</b> : null}{names.length > 0 ? <small>{names.join(", ")}</small> : null}</span>;
                 })}</div> : null}
                 {!deletedMessage ? <div className="message-actions" aria-label="Message actions">
-                  <button aria-label="React" onClick={() => setReactionFor((current) => current === message.id ? undefined : message.id)}><Smile size={15} /></button>
-                  <button aria-label="Reply" onClick={() => { setReplyingTo(message); setForwarding(undefined); }}><Reply size={15} /></button>
-                  <button aria-label="Forward" onClick={() => setForwarding(message)}><Forward size={15} /></button>
-                  <button aria-label="Copy message" onClick={() => void navigator.clipboard.writeText(message.fullBody || message.body)}><Copy size={15} /></button>
+                  <button aria-label="Reply" onClick={() => { setReplyingTo(message); setForwarding(undefined); }}><Reply size={15} /><span>Reply</span></button>
+                  <button aria-label="Translate message" disabled={translatingMessageId === message.id} onClick={() => void translateIncomingMessage(message)}><Languages size={15} /><span>{translatingMessageId === message.id ? "Translating" : "Translate"}</span></button>
+                  <button aria-label="Draft a reply" disabled={draftingReplyFor === message.id} onClick={() => void prepareDraftReply(message)}><PencilLine size={15} /><span>{draftingReplyFor === message.id ? "Drafting" : "Draft reply"}</span></button>
+                  <button aria-label="More message actions" aria-expanded={messageMoreFor === message.id} onClick={() => setMessageMoreFor((current) => current === message.id ? undefined : message.id)}><MoreHorizontal size={16} /><span>More</span></button>
+                  {messageMoreFor === message.id ? <span className="message-actions-more">
+                    <button aria-label="React" onClick={() => setReactionFor((current) => current === message.id ? undefined : message.id)}><Smile size={15} /><span>React</span></button>
+                    <button aria-label="Forward" onClick={() => setForwarding(message)}><Forward size={15} /><span>Forward</span></button>
+                    <button aria-label="Copy message" onClick={() => void navigator.clipboard.writeText(message.fullBody || message.body)}><Copy size={15} /><span>Copy</span></button>
+                  </span> : null}
                 </div> : null}
                 {!deletedMessage && reactionFor === message.id ? <div className="reaction-picker">{REACTIONS.map((emoji) => <button key={emoji} onClick={() => { setReactionFor(undefined); void onReact(selectedChat.id, message.id, emoji).catch(() => undefined); }}>{emoji}</button>)}</div> : null}
               </div>
@@ -901,33 +1402,56 @@ export function InboxView({
 
           {shouldShowNewMessageJump(newMessageCount, nearChatBottomRef.current) ? <button className="new-messages-jump" type="button" onClick={() => scrollToNewest()}><ChevronDown size={16} /> <span>{newMessageCount === 1 ? "New message" : "New messages"}</span><b>{newMessageCount}</b></button> : null}
 
-          {activeDraft && activeDraft.id !== insertedDraftId ? (
-            <section className="ai-draft-card">
-              <div className="draft-label"><span><span className="sparkle">✦</span> AI draft</span><small>Private until approved</small></div>
-              <textarea aria-label="AI draft" value={draftBody} onChange={(event) => setDraftBody(event.target.value)} />
-              <div className="draft-attachment"><Paperclip size={15} /> Optional attachments can be added before sending</div>
-              <div className="draft-actions">
-                <button className="button compact" onClick={() => setDraftBody(activeDraft.body)}><RefreshCw size={15} /> Regenerate</button>
-                <button className="button compact ghost-danger" onClick={() => onDismissDraft(activeDraft)}>Dismiss</button>
-                <button className="button compact draft-insert" onClick={() => { setComposer(draftBody); setInsertedDraftId(activeDraft.id); window.requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus()); }}><PencilLine size={15} />Insert in chat</button>
-                <button className="button primary compact" onClick={() => onApproveDraft(activeDraft, draftBody)}><Send size={15} /> Approve &amp; send</button>
-              </div>
-            </section>
-          ) : null}
           {!loading && chronologicalMessages.length === 0 ? <div className="empty-chat">No recent messages in this conversation.</div> : null}
         </div>
 
         {forwarding ? <div className="forward-picker"><span><Forward size={16} /><strong>Forward message</strong><small>{forwarding.fullBody || forwarding.body}</small></span><select aria-label="Forward to conversation" defaultValue=""><option value="" disabled>Choose a chat…</option>{chats.filter((chat) => chat.id !== selectedChat.id).map((chat) => <option key={chat.id} value={chat.id}>{chat.name}</option>)}</select><button className="icon-button" aria-label="Cancel forwarding" onClick={() => setForwarding(undefined)}><X size={15} /></button><button className="button primary compact" onClick={(event) => { const select = event.currentTarget.parentElement?.querySelector("select") as HTMLSelectElement | null; if (select?.value) { void onForward(selectedChat.id, forwarding.id, select.value); setForwarding(undefined); } }}>Forward</button></div> : null}
+        {activeDraft && activeDraft.id !== insertedDraftId ? <div className="draft-ready-bar"><span><Sparkles size={15} /><strong>Draft ready</strong><small>Private until you use it</small></span><div><button onClick={() => { setComposer(draftBody); setInsertedDraftId(activeDraft.id); setTranslationPreview(undefined); window.requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus()); }}>Use</button><button onClick={() => { setComposer(draftBody); setInsertedDraftId(activeDraft.id); setTranslationPreview(undefined); window.requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus()); }}>Edit</button><button aria-label="Dismiss draft" onClick={() => void onDismissDraft(activeDraft)}><X size={15} /></button></div></div> : null}
         <div className="composer" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); chooseAttachment(event.dataTransfer.files[0]); }}>
           {replyingTo ? <div className="reply-preview"><Reply size={15} /><span><strong>Replying to {replyingTo.fromMe ? "yourself" : replyingTo.senderName || selectedChat.name}</strong><small>{replyingTo.fullBody || replyingTo.body}</small></span><button aria-label="Cancel reply" onClick={() => setReplyingTo(undefined)}><X size={15} /></button></div> : null}
           {attachment ? <div className="attachment-preview">{attachment.preview ? attachment.file.type.startsWith("video/") ? <video src={attachment.preview} muted /> : <img src={attachment.preview} alt="Upload preview" /> : <UploadCloud size={24} />}<span><strong>{attachment.file.name}</strong><small>{Math.max(1, Math.round(attachment.file.size / 1024))} KB</small></span><button aria-label="Remove attachment" onClick={() => setAttachment(undefined)}><X size={16} /></button></div> : null}
-          {composerEmojiOpen ? <div className="composer-emoji-picker">{COMPOSER_EMOJIS.map((emoji) => <button key={emoji} aria-label={`Insert ${emoji}`} onClick={() => { setComposer((current) => `${current}${emoji}`); setComposerEmojiOpen(false); }}>{emoji}</button>)}</div> : null}
+          {translationPreview ? <section className={`translation-preview ${translationPreview.stale ? "stale" : ""}`} aria-label="Translation preview">
+            <span className="translation-preview-status"><Languages size={15} /><strong>{translationPreview.stale ? "Translation needs updating" : "Original"}</strong></span>
+            <p className="translation-preview-copy" dir={textDirection(translationPreview.original)}>{translationPreview.original}</p>
+            <footer>
+              <button onClick={() => { setComposer(translationPreview.original); setTranslationPreview(undefined); }}>Use original</button>
+              {translationPreview.stale ? <button onClick={() => void translateComposer()}>Translate again</button> : null}
+            </footer>
+            <button className="translation-preview-dismiss" aria-label="Dismiss translation preview" title="Keep this translation and close the preview" onClick={() => setTranslationPreview(undefined)}><X size={15} /></button>
+          </section> : null}
+          {scheduleEditor ? <section className="schedule-popover schedule-popover-expanded" role="dialog" aria-label={scheduleEditor.id ? "Edit scheduled message" : "Choose scheduled send time"}>
+            <header><span><CalendarClock size={14} /><strong>{scheduleEditor.id ? "Edit scheduled send" : "Schedule message"}</strong></span><button className="schedule-popover-close" aria-label="Close scheduled send" disabled={scheduling} onClick={dismissScheduleEditor}><X size={14} /></button></header>
+            <div className="schedule-time-basis" role="group" aria-label="Schedule time zone">
+              <button type="button" aria-pressed={scheduleEditor.timeBasis === "contact"} disabled={!contact?.timezone} onClick={() => setScheduleEditor((current) => { if (!current || !contact?.timezone) return current; const instant = dateTimeInTimeZoneToTimestamp(current.scheduledAt, current.timezone) || Date.now(); return { ...current, timeBasis: "contact", timezone: contact.timezone, scheduledAt: dateTimeValueInTimeZone(instant, contact.timezone) }; })}><UserRound size={14} />{contact?.location || "Contact time"}</button>
+              <button type="button" aria-pressed={scheduleEditor.timeBasis === "owner"} onClick={() => setScheduleEditor((current) => { if (!current) return current; const timezone = ownerTimeZone(); const instant = dateTimeInTimeZoneToTimestamp(current.scheduledAt, current.timezone) || Date.now(); return { ...current, timeBasis: "owner", timezone, scheduledAt: dateTimeValueInTimeZone(instant, timezone) }; })}><Clock3 size={14} />My time</button>
+            </div>
+            <div className="schedule-quick-times" role="group" aria-label="Quick schedule times">
+              <button type="button" onClick={() => setScheduleEditor((current) => current ? { ...current, scheduledAt: quickScheduleValue(current.timezone, "later") } : current)}>Later today</button>
+              <button type="button" onClick={() => setScheduleEditor((current) => current ? { ...current, scheduledAt: quickScheduleValue(current.timezone, "morning") } : current)}>Tomorrow morning</button>
+              <button type="button" onClick={() => setScheduleEditor((current) => current ? { ...current, scheduledAt: quickScheduleValue(current.timezone, "afternoon") } : current)}>Tomorrow afternoon</button>
+            </div>
+            <label><span>Delivery time · {scheduleEditor.timezone}</span><input type="datetime-local" value={scheduleEditor.scheduledAt} min={dateTimeValueInTimeZone(Date.now() + 10_000, scheduleEditor.timezone)} onChange={(event) => setScheduleEditor((current) => current ? { ...current, scheduledAt: event.target.value } : current)} /></label>
+            <small className="schedule-time-conversion">{scheduleEditor.timeBasis === "contact" ? `That’s ${formatDateTime(dateTimeInTimeZoneToTimestamp(scheduleEditor.scheduledAt, scheduleEditor.timezone) || Date.now(), { hour: "numeric", minute: "2-digit", timeZone: ownerTimeZone() })} your time.` : contact?.timezone ? `That’s ${formatDateTime(dateTimeInTimeZoneToTimestamp(scheduleEditor.scheduledAt, scheduleEditor.timezone) || Date.now(), { hour: "numeric", minute: "2-digit", timeZone: contact.timezone })} for ${contact.location || selectedChat.name}.` : "Set the contact’s city in Details to schedule in their local time."}</small>
+            <footer><button className="schedule-popover-confirm" onClick={() => void saveScheduledMessage()} disabled={scheduling}>{scheduling ? "Scheduling…" : scheduleEditor.id ? "Update" : "Schedule"}</button></footer>
+          </section> : null}
           {recording ? <div className="voice-recording-status"><span className="recording-dot" /><strong>Recording voice memo</strong><time>{Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, "0")}</time><button onClick={stopVoiceRecording}>Stop &amp; send</button></div> : null}
-          {composerMode === "image" ? <div className="image-composer-mode"><Sparkles size={15} /><span><strong>Image generation</strong><small>Describe the image you want AmirOS to create and send.</small></span><button aria-label="Cancel image generation" onClick={() => setComposerMode("message")}><X size={15} /></button></div> : null}
-          <textarea dir={textDirection(composer)} value={composer} onChange={(event) => setComposer(event.target.value)} onPaste={(event) => { const media = [...event.clipboardData.files].find((file) => file.type.startsWith("image/") || file.type.startsWith("video/") || file.type.startsWith("audio/")); if (media) { event.preventDefault(); chooseAttachment(media); } }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitMessage(); } }} placeholder={composerMode === "image" ? "Describe the image to generate…" : "Write a message or paste media…"} />
+          <div className="composer-inline-row">
+          <div ref={composerAttachmentRef} className={`composer-attachment-menu-control ${composerAttachmentMenuOpen ? "open" : ""}`}>
+            <button type="button" className="composer-attachment-trigger" aria-label="Add to message" aria-haspopup="menu" aria-expanded={composerAttachmentMenuOpen} onClick={() => { setComposerAttachmentMenuOpen((open) => !open); setComposerEmojiOpen(false); setImagePromptOpen(false); }}><Plus size={18} /></button>
+            {composerAttachmentMenuOpen ? <div className="composer-attachment-menu" role="menu" aria-label="Add to message">
+              <button type="button" role="menuitem" onClick={() => { setComposerEmojiCategory("smileys"); setComposerEmojiOpen(true); setComposerAttachmentMenuOpen(false); }}><Smile size={16} /><span>Emoji</span></button>
+              <button type="button" role="menuitem" onClick={() => { fileInputRef.current?.click(); setComposerAttachmentMenuOpen(false); }}><Paperclip size={16} /><span>Attachment</span></button>
+              <button type="button" role="menuitem" disabled={sending} onClick={() => { setComposerAttachmentMenuOpen(false); void startVoiceRecording(); }}><Mic size={16} /><span>Voice note</span></button>
+              <button type="button" role="menuitem" onClick={() => { setImagePromptOpen(true); setComposerEmojiOpen(false); setReplyingTo(undefined); setComposerAttachmentMenuOpen(false); }}><Image size={16} /><span>Generate image</span></button>
+            </div> : null}
+            {composerEmojiOpen ? <div ref={composerEmojiRef} className="composer-emoji-picker" role="menu" aria-label="Choose emoji"><nav aria-label="Emoji categories">{COMPOSER_EMOJI_CATEGORIES.map((category) => <button key={category.id} type="button" className={category.id === composerEmojiCategory ? "active" : ""} aria-label={category.label} aria-pressed={category.id === composerEmojiCategory} onClick={() => setComposerEmojiCategory(category.id)}>{category.icon}</button>)}</nav><div className="composer-emoji-grid">{COMPOSER_EMOJI_CATEGORIES.find((category) => category.id === composerEmojiCategory)!.emojis.map((emoji) => <button key={emoji} aria-label={`Insert ${emoji}`} onClick={() => { setComposer((current) => `${current}${emoji}`); setComposerEmojiOpen(false); }}>{emoji}</button>)}</div></div> : null}
+            {imagePromptOpen ? <form ref={imagePromptRef} className="image-prompt-popover" aria-label="Generate image attachment" onSubmit={(event) => { event.preventDefault(); void generateImageAttachment(); }}><label><Image size={15} /><span>Generate image</span></label><input autoFocus value={imagePrompt} onChange={(event) => setImagePrompt(event.target.value)} placeholder="Describe the image…" /><footer><button type="button" onClick={() => setImagePromptOpen(false)}>Cancel</button><button type="submit" disabled={!imagePrompt.trim() || generatingImage}>{generatingImage ? "Creating…" : "Create"}</button></footer></form> : null}
+          </div>
+          <textarea dir={textDirection(composer)} value={composer} onChange={(event) => { const next = event.target.value; setComposer(next); setScheduleEditor((current) => current ? { ...current, body: next } : current); setTranslationPreview((current) => current && current.body !== next ? { ...current, stale: true } : current); }} onPaste={(event) => { const media = [...event.clipboardData.files].find((file) => file.type.startsWith("image/") || file.type.startsWith("video/") || file.type.startsWith("audio/")); if (media) { event.preventDefault(); chooseAttachment(media); } }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitMessage(); } }} placeholder="Write a message or paste media…" />
           <div className="composer-tools">
-            <span><input ref={fileInputRef} type="file" hidden accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt" onChange={(event) => chooseAttachment(event.target.files?.[0])} /><button aria-label="Add emoji" onClick={() => setComposerEmojiOpen((current) => !current)}><Smile size={19} /></button><button aria-label="Attach media" onClick={() => fileInputRef.current?.click()}><Paperclip size={19} /></button><button className={recording ? "recording" : ""} aria-label={recording ? "Stop and send voice memo" : "Record voice memo"} disabled={sending} onClick={() => void startVoiceRecording()}><Mic size={19} /></button><button className={composerMode === "image" ? "active" : ""} aria-label="Generate image" onClick={() => { setComposerMode((mode) => mode === "image" ? "message" : "image"); setReplyingTo(undefined); }}><Image size={19} /> Image</button></span>
-            <button className="composer-send" disabled={sending} onClick={() => void submitMessage()} aria-label={sending ? "Sending message" : "Send message"}><Send size={20} /></button>
+            <span><input ref={fileInputRef} type="file" hidden accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt" onChange={(event) => chooseAttachment(event.target.files?.[0])} /></span>
+            <div className="composer-send-actions"><div ref={composerTranslationRef} className={`composer-translation-target ${composerTranslationMenuOpen ? "open" : ""}`}><button className="translation-target-select" type="button" aria-label="Translation destination language" aria-haspopup="listbox" aria-expanded={composerTranslationMenuOpen} onClick={() => setComposerTranslationMenuOpen((open) => !open)}><span>{languageLabel(translationTarget)}</span><ChevronDown size={13} /></button>{composerTranslationMenuOpen ? <div className="composer-translation-menu" role="listbox" aria-label="Translation destination language">{TRANSLATION_LANGUAGE_OPTIONS.map(([value, label]) => <button key={value} type="button" role="option" aria-selected={value === translationTarget} className={value === translationTarget ? "selected" : ""} onClick={() => { void persistTranslationTarget(value); setComposerTranslationMenuOpen(false); }}><span>{label}</span>{value === translationTarget ? <Check size={13} /> : null}</button>)}</div> : null}</div><button className="composer-translate" aria-label={translating ? "Translating draft" : `Translate draft to ${languageLabel(translationTarget)}`} title={translating ? "Translating draft" : `Translate draft to ${languageLabel(translationTarget)}`} disabled={!composer.trim() || translating} onClick={() => void translateComposer()}><Languages size={18} /></button><span className="composer-schedule-anchor"><button className={`composer-schedule ${actionableScheduledMessages.length > 0 ? "has-scheduled-message" : ""}`} disabled={Boolean(attachment) || translating || (!shouldManageScheduledMessages && (!composer.trim() || translationPreview?.stale))} onClick={() => { if (scheduleEditor) { dismissScheduleEditor(); return; } if (shouldManageScheduledMessages) { setScheduledMessageMenuOpen((current) => !current); return; } openScheduleEditor(); }} aria-label={shouldManageScheduledMessages ? `Manage ${actionableScheduledMessages.length === 1 ? "scheduled message" : `${actionableScheduledMessages.length} scheduled messages`}` : "Schedule message"} aria-expanded={Boolean(scheduleEditor) || scheduledMessageMenuOpen} title={shouldManageScheduledMessages ? "Manage scheduled messages" : "Schedule message"}><CalendarClock size={18} />{actionableScheduledMessages.length > 0 ? <span className={`scheduled-message-badge ${actionableScheduledMessages.some((message) => message.status === "failed") ? "failed" : ""}`} aria-hidden="true">{actionableScheduledMessages.length > 1 ? (actionableScheduledMessages.length > 9 ? "9+" : actionableScheduledMessages.length) : null}</span> : null}</button>{scheduleEditor ? <section className="schedule-popover" role="dialog" aria-label={scheduleEditor.id ? "Edit scheduled message" : "Choose scheduled send time"}><header><span><CalendarClock size={14} /><strong>Send at</strong></span><button className="schedule-popover-close" aria-label="Close scheduled send" disabled={scheduling} onClick={dismissScheduleEditor}><X size={14} /></button></header><label><span>Delivery time</span><input type="datetime-local" value={scheduleEditor.scheduledAt} min={dateTimeLocalValue(Date.now() + 10_000)} onChange={(event) => setScheduleEditor((current) => current ? { ...current, scheduledAt: event.target.value } : current)} /></label><footer><button className="schedule-popover-confirm" onClick={() => void saveScheduledMessage()} disabled={scheduling}>{scheduling ? "Scheduling…" : scheduleEditor.id ? "Update" : "Schedule"}</button></footer></section> : null}{scheduledMessageMenuOpen ? <section className="scheduled-message-popover" role="dialog" aria-label="Manage scheduled messages"><header><span><CalendarClock size={14} /><strong>Scheduled</strong></span><button className="schedule-popover-close" aria-label="Close scheduled messages" onClick={() => setScheduledMessageMenuOpen(false)}><X size={14} /></button></header>{actionableScheduledMessages.map((message) => <div className={`scheduled-message-popover-item ${message.status}`} key={message.id}><time>{message.status === "failed" ? "Needs review" : formatDateTime(message.scheduledAt, { dateStyle: "medium", timeStyle: "short" })}</time><span>{message.status === "pending" ? <button aria-label="Edit scheduled send" title="Edit scheduled message and time" onClick={() => openScheduleEditor(message)}><PencilLine size={14} /></button> : <button aria-label="Use scheduled message again" title="Use scheduled message again" onClick={() => { setComposer(message.body); setTranslationPreview(undefined); setScheduledMessageMenuOpen(false); }}><X size={14} /></button>}<button className="scheduled-message-cancel" aria-label="Cancel scheduled send" title="Cancel scheduled send" onClick={() => { setScheduledMessageMenuOpen(false); void onCancelScheduled(message.id); }}><X size={14} /></button></span></div>)}</section> : null}</span><button className="composer-send" disabled={sending || translating || translationPreview?.stale} onClick={() => void submitMessage()} aria-label={sending ? "Sending message" : "Send message"}><Send size={18} /></button></div>
+          </div>
           </div>
         </div>
       </section>
@@ -1019,6 +1543,8 @@ export function InboxView({
           <label><span><UserRound size={18} />Relationship</span><select aria-label="Contact relationship" value={contact?.relationship || (selectedChat.isGroup ? "Friends group" : "Contact")} onChange={(event) => void onContactChange(selectedChat.id, { relationship: event.target.value })}>{(selectedChat.isGroup ? GROUP_RELATIONSHIP_OPTIONS : RELATIONSHIP_OPTIONS).map((option) => <option key={option}>{option}</option>)}</select></label>
           <label><span><MessageSquareText size={18} />Tone</span><select aria-label="Contact tone" value={contact?.tone || "Warm & concise"} onChange={(event) => void onContactChange(selectedChat.id, { tone: event.target.value })}>{TONE_OPTIONS.map((option) => <option key={option}>{option}</option>)}</select></label>
           <label><span><Languages size={18} />Language</span><select aria-label="Contact language" value={contact?.language || "Automatic"} onChange={(event) => void onContactChange(selectedChat.id, { language: event.target.value })}><option>Automatic</option><option>English</option><option>Hebrew</option><option>Arabic</option></select></label>
+          <div className="contact-timezone-setting"><span><Clock3 size={18} />Location &amp; time<small>{contact?.timezone ? `${contact.location || contact.timezone} · ${new Intl.DateTimeFormat(undefined, { timeZone: contact.timezone, hour: "numeric", minute: "2-digit" }).format(new Date())}` : "Use the location button beside Details to set their city."}</small></span></div>
+          <label className="translation-preference-setting"><span><Languages size={18} />Outgoing translation<small>{contact?.composerTranslationPreference ? `Offer ${languageLabel(contact.composerTranslationPreference.targetLanguage)} when you choose Translate. This never changes contact-language detection or sends automatically.` : "No language is remembered for outgoing translations."}</small></span>{contact?.composerTranslationPreference ? <div><button type="button" onClick={() => setTranslationTarget(contact.composerTranslationPreference!.targetLanguage)}>Use {languageLabel(contact.composerTranslationPreference.targetLanguage)}</button><button type="button" onClick={() => void onContactChange(selectedChat.id, { composerTranslationPreference: null })}>Clear</button></div> : <small>Choose a language in the composer to remember it for this chat.</small>}</label>
           {!selectedChat.isGroup ? <label><span><UserRound size={18} />How AmirOS refers to them</span><select aria-label="Contact pronouns" value={contact?.pronouns || "unspecified"} onChange={(event) => void onContactChange(selectedChat.id, { pronouns: event.target.value as ContactPronouns })}>{PRONOUN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>Optional. AmirOS uses this only for this contact and never guesses.</small></label> : null}
           <label className="contact-toggle"><span><MemoryStick size={18} />Remember context</span><input aria-label="Remember context" type="checkbox" checked={contact?.memoryEnabled ?? true} onChange={(event) => void onContactChange(selectedChat.id, { memoryEnabled: event.target.checked })} /></label>
           <label className="knowledge-tracking-setting"><span><Brain size={18} />Knowledge tracking<small>{contact?.knowledgeTracking === "pending" ? "Approval needed before AmirOS creates suggestions from this chat." : contact?.knowledgeTracking === "snoozed" ? "AmirOS will not ask again unless you choose a new setting here." : contact?.knowledgeTracking === "disabled" ? "This chat is ignored by automatic Intelligence suggestions." : "New messages are scanned once for useful, non-duplicate suggestions."}</small></span><select aria-label="Knowledge tracking" value={contact?.knowledgeTracking || "pending"} onChange={(event) => void onContactChange(selectedChat.id, { knowledgeTracking: event.target.value as ContactPreferences["knowledgeTracking"] })}><option value="pending">Ask me first</option><option value="snoozed">Decide later</option><option value="enabled">Track knowledge</option><option value="disabled">Do not track</option></select></label>

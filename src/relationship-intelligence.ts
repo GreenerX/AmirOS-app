@@ -11,6 +11,8 @@ import { assessKnowledgeFreshness } from "./memory-maintenance.js";
 const DAY_MS = 86_400_000;
 const UPCOMING_WINDOW_MS = 90 * DAY_MS;
 const RECONNECTION_GAP_MS = 42 * DAY_MS;
+/** “Current” in Ask is a claim, not a synonym for “not historical.” */
+const CURRENT_BRIEF_WINDOW_MS = 14 * DAY_MS;
 
 export type RelationshipBrief = {
   chatId: string;
@@ -41,7 +43,15 @@ export type RelationshipIntelligenceResult = {
   /** More than one exact person shares the requested first name. */
   disambiguation?: string[];
   /** Stable identities for a UI clarification step. */
-  disambiguationCandidates?: Array<{ chatId: string; contactName: string }>;
+  disambiguationCandidates?: Array<{
+    chatId: string;
+    contactName: string;
+    /** A picker row is emitted only for a verified direct-chat identity. */
+    identityVerified: true;
+    directChat: true;
+    lastInteractionAt?: number;
+    detail: string;
+  }>;
 };
 
 export type RelationshipQuestionIntent = {
@@ -81,24 +91,32 @@ function queryMentions(query: string, name: string): boolean {
   return aliases(name).some((alias) => value.includes(` ${alias} `));
 }
 
-function isSensitive(value: string): boolean {
-  return /\b(?:health\w*|medical\w*|diagnos\w*|depress\w*|anxious\w*|therapy\w*|mental\w*|pregnan\w*|sexual\w*|gay|lesbian|religion\w*|jewish|muslim|christian|politic\w*|election\w*|debt\w*|salary|income|bankrupt\w*|abuse\w*|divorce\w*)\b|(?:בריאות|רפוא|דיכא|חרד|טיפול|הריון|מיני|דת|פוליט|חוב|שכר|גירוש)/iu.test(value);
-}
-
 function clean(value: string, max = 180): string {
   return value.replace(/\s+/gu, " ").trim().replace(/[.!?]+$/u, "").slice(0, max);
 }
 
 function sourceId(item: { id: string }): string { return item.id; }
 
-function latestEvidenceAt(insight: ContactInsight): number {
-  const values = [
-    insight.updatedAt,
-    insight.lastReinforcedAt || 0,
-    insight.evidence.timestamp,
-    ...(insight.evidenceHistory || []).map((evidence) => evidence.timestamp),
-  ].map((value) => value > 0 && value < 10_000_000_000 ? value * 1_000 : value);
-  return Math.max(...values);
+function toMilliseconds(value: number): number {
+  return value > 0 && value < 10_000_000_000 ? value * 1_000 : value;
+}
+
+/** Maintenance timestamps can be fresh while the supporting conversation is not. */
+function latestSourceMessageAt(insight: ContactInsight): number {
+  return Math.max(
+    toMilliseconds(insight.evidence.timestamp),
+    ...(insight.evidenceHistory || []).map((evidence) => toMilliseconds(evidence.timestamp)),
+  );
+}
+
+function transientOrAmbiguousContext(value: string): boolean {
+  return /\b(?:at the beach|heading home|on (?:my|the) way|waiting for people to wake|sync(?:ing)? (?:issue|error|problem)|contacts? (?:disappeared|disappearing|returned|returning)|technical (?:issue|problem)|microdose|maybe|might|could|possibly)\b/iu.test(value);
+}
+
+function supportsCurrentBrief(insight: ContactInsight, now: number): boolean {
+  return insight.validity !== "temporary"
+    && latestSourceMessageAt(insight) >= now - CURRENT_BRIEF_WINDOW_MS
+    && !transientOrAmbiguousContext(insight.content);
 }
 
 function insightIsUsable(insight: ContactInsight, now: number): boolean {
@@ -114,11 +132,11 @@ function formatDate(value: number): string {
 
 export function relationshipQuestionIntent(query: string): RelationshipQuestionIntent | undefined {
   const adviceRequested = /\b(?:what should i do about|how should i handle|should i|how do i approach)\b|(?:מה לעשות|איך להתמודד)/iu.test(query);
-  const relationshipQuestion = adviceRequested || /\b(?:how(?:['’]s| is)\b|tell me about|what should i know about|what(?:['’]s| is) (?:been going on|important|changed)|what(?:['’]s| is) coming up|has anything changed|how has|what should i remember|before (?:seeing|meeting|talking)|anything (?:unresolved|to follow up)|what topics|keep coming up|what happened with|relationship|lately|recently|past (?:year|month|months)|not spoken|haven(?:['’])?t spoken|reconnect|follow[- ]?up)\b|(?:מה שלומ|ספר לי על|מה קורה|מה חשוב|מה השתנה|לפני שאני נפגש|לא דיברתי|ליצור קשר|לעקוב)/iu.test(query)
+  const relationshipQuestion = adviceRequested || /\b(?:how(?:['’]s| is)\b|tell me about|what should i know about|what(?:['’]s| is) (?:been going on|important|changed|new with)|what(?:['’]s| is) coming up|has anything changed|how has|what should i remember|before (?:seeing|meeting|talking)|anything (?:unresolved|to follow up)|what topics|keep coming up|what happened with|relationship|lately|recently|past (?:year|month|months)|not spoken|haven(?:['’])?t spoken|reconnect|follow[- ]?up)\b|(?:מה שלומ|ספר לי על|מה קורה|מה חשוב|מה השתנה|לפני שאני נפגש|לא דיברתי|ליצור קשר|לעקוב)/iu.test(query)
     || /\bwhat(?:['’]s| is) coming up\b/iu.test(query);
   if (!relationshipQuestion) return undefined;
   const historical = /\b(?:what happened|what did we|when did|last (?:time|meeting|saw)|previous(?:ly)?|formerly|history|historical|used to)\b|(?:מה קרה|מתי נפגש|בפעם האחרונה|היסטורי)/iu.test(query);
-  const briefing = /\b(?:what should i remember|before (?:seeing|meeting|talking)|what(?:'s| is) (?:been going on|important)|has anything changed|anything (?:unresolved|to follow up)|what topics|keep coming up|lately|recently)\b|(?:מה חשוב|מה השתנה|לפני שאני נפגש|לעקוב)/iu.test(query);
+  const briefing = /\b(?:what should i remember|before (?:seeing|meeting|talking)|what(?:'s| is) (?:been going on|important|new with)|has anything changed|anything (?:unresolved|to follow up)|what topics|keep coming up|lately|recently)\b|(?:מה חשוב|מה השתנה|לפני שאני נפגש|לעקוב)/iu.test(query);
   const focus: RelationshipQuestionFocus = historical
     ? "history"
     : /\b(?:what(?:['’]s| is) coming up|coming up)\b/iu.test(query)
@@ -148,11 +166,28 @@ export function filterRelationshipRecordsForQuestion(
   // safe to synthesize. Do not let broad keyword retrieval add raw snippets
   // from the same chat, where an old or sensitive aside can overwhelm the
   // briefing. Historical questions keep only their explicitly selected history.
-  return records.filter((record) =>
+  const canonical = records.filter((record) =>
     allowedChatIds.has(record.chatId) &&
     allowedIds.has(record.id) &&
     (relationship.temporalFocus === "historical" || record.kind !== "calendar_event" || record.timestamp >= now),
   );
+  // Current relationship questions should benefit from a contact's newest
+  // direct words even while durable insight extraction is catching up. These
+  // messages remain exact local evidence, are bounded to two weeks, and are
+  // never used for historical questions or group conversations.
+  const freshDirectMessages = relationship.temporalFocus === "current"
+    ? records
+      .filter((record) =>
+        allowedChatIds.has(record.chatId) &&
+        record.kind === "message" &&
+        record.sourceAuthor === "contact" &&
+        record.timestamp >= now - CURRENT_BRIEF_WINDOW_MS,
+      )
+      .sort((left, right) => right.timestamp - left.timestamp)
+      .slice(0, 8)
+    : [];
+  return [...new Map([...freshDirectMessages, ...canonical].map((record) => [record.id, record])).values()]
+    .sort((left, right) => right.timestamp - left.timestamp);
 }
 
 /**
@@ -197,7 +232,19 @@ export function buildRelationshipIntelligence(
     temporalFocus: intent?.temporalFocus,
     disambiguation: ambiguous.map((item) => item.contactName!).sort((left, right) => left.localeCompare(right)),
     disambiguationCandidates: ambiguous
-      .map((item) => ({ chatId: item.chatId, contactName: item.contactName! }))
+      .map((item) => {
+        const lastInteractionAt = item.lastInteraction ? toMilliseconds(item.lastInteraction.timestamp) : undefined;
+        return {
+          chatId: item.chatId,
+          contactName: item.contactName!,
+          identityVerified: true as const,
+          directChat: true as const,
+          lastInteractionAt,
+          detail: lastInteractionAt
+            ? `Direct chat · last interaction ${formatDate(lastInteractionAt)}`
+            : "Direct chat · no saved interaction",
+        };
+      })
       .sort((left, right) => left.contactName.localeCompare(right.contactName)),
   };
 
@@ -228,10 +275,12 @@ function buildBrief(source: RelationshipSource, now: number, intent: Relationshi
   const contactName = source.contactName!;
   const usable = source.insights
     .filter((insight) => insightIsUsable(insight, now))
-    .filter((insight) => !isSensitive(insight.content))
-    .sort((left, right) => latestEvidenceAt(right) - latestEvidenceAt(left));
-  const recentUsable = usable.filter((insight) => latestEvidenceAt(insight) >= now - 180 * DAY_MS);
-  const contextualInsights = recentUsable.length ? recentUsable : usable;
+    .sort((left, right) => latestSourceMessageAt(right) - latestSourceMessageAt(left));
+  // Personal information is allowed in this private dashboard. The trust gate
+  // is temporal validity and direct evidence—not a broad sensitive-topic ban.
+  const contextualInsights = intent.temporalFocus === "current"
+    ? usable.filter((insight) => supportsCurrentBrief(insight, now))
+    : usable;
   const currentInsights = (intent.focus === "upcoming" || intent.focus === "unresolved"
     ? []
     : intent.focus === "preparation"
@@ -250,7 +299,7 @@ function buildBrief(source: RelationshipSource, now: number, intent: Relationshi
 
   const themeCounts = new Map<string, { count: number; insight: ContactInsight }>();
   for (const insight of usable) {
-    const title = insight.topicTitle && (insight.topicTitleConfidence || 0) >= .8 && !isSensitive(insight.topicTitle)
+    const title = insight.topicTitle && (insight.topicTitleConfidence || 0) >= .8
       ? clean(insight.topicTitle, 90)
       : undefined;
     if (!title) continue;
@@ -268,17 +317,18 @@ function buildBrief(source: RelationshipSource, now: number, intent: Relationshi
     });
 
   const attention: string[] = [];
-  for (const commitment of source.commitments.filter((item) => item.status === "open").slice(0, 2)) {
+  const includeAttention = intent.focus === "preparation" || intent.focus === "unresolved";
+  for (const commitment of (includeAttention ? source.commitments : []).filter((item) => item.status === "open").slice(0, 2)) {
     sourceIds.add(commitment.id);
     attention.push(commitment.owner === "me"
       ? `You committed to ${clean(commitment.content)}`
       : `${contactName} may be following up on ${clean(commitment.content)}`);
   }
-  for (const todo of source.todos.filter((item) => item.status === "open" || item.status === "inferred").slice(0, 2)) {
+  for (const todo of (includeAttention ? source.todos : []).filter((item) => item.status === "open" || item.status === "inferred").slice(0, 2)) {
     sourceIds.add(todo.id);
     attention.push(`Open to-do: ${clean(todo.title)}`);
   }
-  if (source.needsReply && source.lastInteraction && now - source.lastInteraction.timestamp < 14 * DAY_MS) {
+  if (includeAttention && source.needsReply && source.lastInteraction && now - source.lastInteraction.timestamp < 7 * DAY_MS) {
     attention.push(`${contactName} may still be waiting for your reply`);
   }
 

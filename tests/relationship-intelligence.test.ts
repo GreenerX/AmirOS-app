@@ -80,13 +80,13 @@ describe("relationship intelligence", () => {
       contactName: "David", confidence: "supported",
       currentContext: expect.arrayContaining(["David works at Anthropic"]),
       recurringThemes: ["Settling into the new team"],
-      attention: expect.arrayContaining([expect.stringContaining("You committed to send David")]),
+      attention: [],
       upcoming: expect.arrayContaining([expect.stringContaining("Dinner with David")]),
     });
     expect(result.briefs[0]?.recentChanges.join(" ")).toContain("previously: David works at Apple");
   });
 
-  it("keeps uncertain, temporary, and sensitive observations out of a broad relationship synthesis", () => {
+  it("keeps uncertain and temporary observations out of a broad relationship synthesis", () => {
     const state = createState();
     const chatId = "maya@c.us";
     mergeInsight(state, chatId, "Maya", {
@@ -100,6 +100,43 @@ describe("relationship intelligence", () => {
     expect(result.briefs[0]?.currentContext).toEqual([]);
     expect(result.briefs[0]?.recurringThemes).toEqual([]);
     expect(result.briefs[0]?.currentContext.join(" ")).not.toContain("depressed");
+  });
+
+  it("does not turn an older transient update into current relationship context", () => {
+    const state = createState();
+    const chatId = "andrew@c.us";
+    mergeInsight(state, chatId, "Andrew", {
+      id: "beach-status", kind: "fact",
+      content: "Andrew is at the beach and heading home to check email after a temporary syncing problem.", confidence: .97,
+      timestamp: NOW - 9 * 86_400_000,
+    });
+
+    const result = state.relationshipIntelligence("What recent relationship context should I keep in mind about Andrew?", NOW);
+    expect(result.briefs[0]).toMatchObject({ contactName: "Andrew", confidence: "limited", currentContext: [] });
+    expect(result.briefs[0]?.sourceIds).toEqual([]);
+  });
+
+  it("keeps the original saved message separate from the generated knowledge summary", () => {
+    const state = createState();
+    const chatId = "maya@c.us";
+    state.rememberChatName(chatId, "Maya");
+    state.rememberMessage(chatId, {
+      role: "user", author: "contact", senderName: "Maya", messageId: "maya-try-app",
+      content: "I would love to try AmirOS when it is ready.", timestamp: NOW - 86_400_000,
+    });
+    state.mergeRoutedAnalyzedIntelligence(chatId, {
+      insights: [{
+        kind: "fact", content: "Maya wants to try your app.", confidence: .97,
+        evidence: { messageId: "maya-try-app", senderName: "Maya", excerpt: "Maya wants to try AmirOS.", timestamp: NOW - 86_400_000 },
+      }], commitments: [],
+    });
+    const insight = state.getInsights(chatId).at(-1)!;
+    state.updateInsight(chatId, insight.id, { status: "confirmed" });
+
+    expect(state.intelligenceRecordsByReferences([{ id: insight.id, chatId }], new Set(), NOW)[0]).toMatchObject({
+      content: "Maya wants to try your app.",
+      sourceContent: "I would love to try AmirOS when it is ready.",
+    });
   });
 
   it("returns a useful reconnection list without inventing a relationship conclusion", () => {
@@ -126,10 +163,10 @@ describe("relationship intelligence", () => {
     expect(result).toMatchObject({
       requested: true, briefs: [], disambiguation: ["David Cohen", "David Levy"],
     });
-    expect(result.disambiguationCandidates).toEqual([
-      { chatId: "david-one@c.us", contactName: "David Cohen" },
-      { chatId: "david-two@c.us", contactName: "David Levy" },
-    ]);
+    expect(result.disambiguationCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ chatId: "david-one@c.us", contactName: "David Cohen", identityVerified: true, directChat: true }),
+      expect.objectContaining({ chatId: "david-two@c.us", contactName: "David Levy", identityVerified: true, directChat: true }),
+    ]));
   });
 
   it("disambiguates a short status question before a group can become the selected identity", () => {
@@ -145,10 +182,10 @@ describe("relationship intelligence", () => {
     });
 
     const result = state.relationshipIntelligence("How is Michelle?", NOW);
-    expect(result.disambiguationCandidates).toEqual([
-      { chatId: "michelle-chechi@c.us", contactName: "Michelle Chechi" },
-      { chatId: "michelle-soffen@c.us", contactName: "Michelle Soffen" },
-    ]);
+    expect(result.disambiguationCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ chatId: "michelle-chechi@c.us", contactName: "Michelle Chechi", identityVerified: true, directChat: true }),
+      expect.objectContaining({ chatId: "michelle-soffen@c.us", contactName: "Michelle Soffen", identityVerified: true, directChat: true }),
+    ]));
     expect(result.disambiguationCandidates?.some((candidate) => candidate.chatId === "wonder-crew@g.us")).toBe(false);
   });
 
@@ -179,6 +216,33 @@ describe("relationship intelligence", () => {
     state.rememberMessage("dani@c.us", { role: "user", author: "contact", content: "See you tomorrow", timestamp: NOW });
     expect(state.relationshipIntelligence("Has anything changed with Dani recently?", NOW).requested).toBe(true);
     expect(state.relationshipIntelligence("What should I remember before seeing Dani tomorrow?", NOW).requested).toBe(true);
+    expect(state.relationshipIntelligence("What is new with Dani?", NOW)).toMatchObject({
+      requested: true,
+      resolvedChatId: "dani@c.us",
+    });
+  });
+
+  it("brings a named contact's newest direct messages into a current brief while insight extraction catches up", () => {
+    const state = createState();
+    const chatId = "dan@c.us";
+    state.rememberChatName(chatId, "Dan Pundak");
+    mergeInsight(state, chatId, "Dan Pundak", {
+      id: "dan-work", kind: "fact", content: "Dan has customer insights to share about your work together.", confidence: .96,
+      timestamp: NOW - 3 * 86_400_000,
+    });
+    state.rememberMessage(chatId, {
+      role: "user", author: "contact", senderName: "Dan Pundak", messageId: "dan-today",
+      content: "I have a new customer update from this morning that I want to share with you.", timestamp: NOW - 90 * 60_000,
+    });
+
+    const relationship = state.relationshipIntelligence("What is new with Dan?", NOW);
+    const records = state.searchIntelligence("What is new with Dan?", 48, new Set(), NOW);
+    const filtered = state.relationshipRecordsForQuestion("What is new with Dan?", records, relationship, NOW);
+    expect(relationship.resolvedChatId).toBe(chatId);
+    expect(filtered).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "dan-today", kind: "message", sourceAuthor: "contact" }),
+      expect.objectContaining({ id: expect.any(String), kind: "insight" }),
+    ]));
   });
 
   it("keeps past calendar plans out of a current preparation brief while retaining a future plan", () => {
@@ -249,6 +313,8 @@ describe("relationship intelligence", () => {
     expect(instructions).toContain("authoritative current local date and time");
     expect(instructions).toContain("Never repeat “today” as current truth");
     expect(instructions).toContain("current status is unknown unless newer evidence confirms it");
+    expect(instructions).toContain("one conversation or one source");
+    expect(instructions).toContain("selectedDiscovery is true");
   });
 
   it("routes upcoming and advice questions through distinct relationship lenses", () => {

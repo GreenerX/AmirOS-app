@@ -1,18 +1,25 @@
 import type {
   AssistantSuggestionContext, ChatSummary, ContactInsight, IntelligenceChat, IntelligenceData, MemoryEvidence,
-  ProactiveIntelligenceItem,
+  ProactiveIntelligenceItem, IntelligenceCandidate,
 } from "./types";
+import { intelligenceCardDedupeKey, isTrustworthyIntelligenceCard } from "../../shared/intelligence-card-eligibility";
 
 const DAY_MS = 86_400_000;
-const MAX_KNOWLEDGE_AGE_MS = 45 * DAY_MS;
-const MAX_CHANGE_SUGGESTION_AGE_MS = 30 * DAY_MS;
+/** Discovery is intentionally stricter than on-demand memory retrieval. */
+const MAX_KNOWLEDGE_AGE_MS = 14 * DAY_MS;
+const MAX_CHANGE_SUGGESTION_AGE_MS = 14 * DAY_MS;
 const CLOSE_CONTACT_WINDOW_MS = 21 * DAY_MS;
+/** A reconnect card is useful only when its remembered context is still credible. */
+const RECONNECT_MIN_INACTIVITY_MS = 30 * DAY_MS;
+const RECONNECT_MAX_EVIDENCE_AGE_MS = 180 * DAY_MS;
 
 /** The open drawer shows one hero plus three supporting discoveries. */
 export const ASSISTANT_DISCOVERY_VISIBLE_COUNT = 4;
-/** Rotate only when there are enough independently worthwhile discoveries. */
-export const ASSISTANT_DISCOVERY_ROTATION_MS = 3 * 60_000;
-const MAX_DISCOVERY_POOL = 8;
+/** Keep an open Ask drawer fresh without making its hero feel restless. */
+export const ASSISTANT_DISCOVERY_OPEN_ROTATION_MS = 60_000;
+/** Advance the next reveal quietly while Ask is tucked away. */
+export const ASSISTANT_DISCOVERY_CLOSED_ROTATION_MS = 5 * 60_000;
+const MAX_DISCOVERY_POOL = 12;
 
 export type AssistantSuggestionIcon = "communication" | "connection" | "people" | "work";
 
@@ -31,6 +38,8 @@ export type AssistantSuggestionCard = {
   kind: "knowledge";
   icon: AssistantSuggestionIcon;
   suggestionContext: AssistantSuggestionContext;
+  /** Stable candidate identity used to prevent a rotating window from repeating a theme. */
+  dedupeKey?: string;
 };
 
 export type AssistantSuggestionOwner = {
@@ -41,6 +50,10 @@ export type AssistantSuggestionOwner = {
 type RankedSuggestion = AssistantSuggestionCard & {
   sourceAt: number;
   significance: number;
+  lane: "fresh" | "reconnect";
+  candidateLane?: IntelligenceCandidate["lane"];
+  /** Internal identity that prevents one relationship fact claiming two slots. */
+  dedupeKey: string;
 };
 
 function toMilliseconds(value: number): number {
@@ -110,11 +123,37 @@ function ownerFacingCopy(value: string, ownerName: string | undefined, allowFirs
   return copy.replace(/(^|[.!?]\s+)you\b/gu, "$1You");
 }
 
+function insightTextMentionsOwner(value: string, ownerName: string | undefined): boolean {
+  const fullName = cleanDisplayText(ownerName || "");
+  return Boolean(fullName && new RegExp(`\\b${escapePattern(fullName)}\\b`, "iu").test(cleanDisplayText(value)));
+}
+
+function firstName(value: string): string {
+  return cleanDisplayText(value).split(/\s+/u)[0] || cleanDisplayText(value);
+}
+
+/** The drawer is personal: use first names for the people explicitly named by the insight. */
+function personalCardCopy(value: string, contactName: string, isOwner: boolean, ownerName?: string, subjectNames: string[] = []): string {
+  let copy = ownerFacingCopy(value, ownerName, isOwner || insightTextMentionsOwner(value, ownerName));
+  const owner = normalizedName(ownerName);
+  const names = [...new Set([contactName, ...subjectNames].map(cleanDisplayText).filter(Boolean))]
+    .filter((name) => normalizedName(name) !== owner)
+    .sort((left, right) => right.length - left.length);
+  for (const fullName of names) {
+    const shortName = firstName(fullName);
+    if (fullName === shortName) continue;
+    const escaped = escapePattern(fullName);
+    copy = copy.replace(new RegExp(`\\b${escaped}(?:['’]s)`, "giu"), `${shortName}'s`);
+    copy = copy.replace(new RegExp(`\\b${escaped}\\b`, "giu"), shortName);
+  }
+  return copy;
+}
+
 function insightUnambiguouslyMentionsOwner(insight: ContactInsight, ownerName: string | undefined): boolean {
   const fullName = cleanDisplayText(ownerName || "");
   if (!fullName) return false;
   const source = cleanDisplayText(`${insight.discoverySummary || ""} ${insight.content}`);
-  return new RegExp(`\\b${escapePattern(fullName)}\\b`, "iu").test(source);
+  return insightTextMentionsOwner(source, ownerName);
 }
 
 function normalizedName(value: string | undefined): string {
@@ -142,9 +181,10 @@ function evidenceBelongsToContact(evidence: MemoryEvidence, contactName: string)
   return Boolean(sender && contact && sender === contact);
 }
 
-function directEvidenceFor(insight: ContactInsight, contactName: string): MemoryEvidence[] {
+function directEvidenceFor(insight: ContactInsight, contactName: string, retainedMessageIds: readonly string[] | undefined): MemoryEvidence[] {
+  const retained = new Set(retainedMessageIds || []);
   return [insight.evidence, ...(insight.evidenceHistory || [])]
-    .filter((evidence) => evidenceBelongsToContact(evidence, contactName))
+    .filter((evidence) => evidenceBelongsToContact(evidence, contactName) && Boolean(evidence.messageId && retained.has(evidence.messageId)))
     .sort((left, right) => toMilliseconds(right.timestamp) - toMilliseconds(left.timestamp));
 }
 
@@ -165,6 +205,11 @@ function sourceCue(count: number, sourceAt: number, now: number): string {
 
 function usefulKnowledge(insight: ContactInsight, directEvidence: MemoryEvidence[], now: number): boolean {
   const sourceAt = latestEvidenceAt(directEvidence);
+  const text = cleanDisplayText(`${insight.content} ${insight.discoverySummary || ""}`).toLocaleLowerCase();
+  const transientOrAmbiguous = /\b(?:at the beach|heading home|on (?:my|the) way|waiting for people to wake|sync(?:ing)? (?:issue|error|problem)|contacts? (?:disappeared|disappearing|returned|returning)|technical (?:issue|problem)|microdose|maybe|might|could|possibly)\b/iu.test(text);
+  const clearPreference = insight.kind === "preference" && /\b(?:prefer(?:s|red)?|would rather|please|don't|do not|avoid|want(?:s|ed)?|like(?:s|d)?)\b/iu.test(text);
+  const clearHighSalienceUpdate = /\b(?:asked|invited|confirmed|scheduled|meeting|dinner|birthday|considering|will\s+(?:be|need|meet|call)|wants?\s+to|needs?\s+to)\b/iu.test(text);
+  const independentlyReinforced = evidenceCount(directEvidence) >= 2;
   return insight.kind !== "important_date"
     && insight.status === "confirmed"
     && insight.validity !== "historical"
@@ -175,7 +220,35 @@ function usefulKnowledge(insight: ContactInsight, directEvidence: MemoryEvidence
     && directEvidence.length > 0
     && sourceAt <= now + 5 * 60_000
     && sourceAt >= now - MAX_KNOWLEDGE_AGE_MS
-    && cleanDisplayText(insight.content).length >= 18;
+    && cleanDisplayText(insight.content).length >= 18
+    // A one-message technical status or ambiguous aside is not a discovery.
+    // One direct preference can be useful; other facts need reinforcement.
+    && !transientOrAmbiguous
+    && (independentlyReinforced || clearPreference || clearHighSalienceUpdate);
+}
+
+function usefulReconnectKnowledge(insight: ContactInsight, directEvidence: MemoryEvidence[], lastInteractionAt: number, now: number): boolean {
+  const sourceAt = latestEvidenceAt(directEvidence);
+  const text = cleanDisplayText(`${insight.content} ${insight.discoverySummary || ""}`).toLocaleLowerCase();
+  const transientOrAmbiguous = /\b(?:at the beach|heading home|on (?:my|the) way|waiting for people to wake|sync(?:ing)? (?:issue|error|problem)|contacts? (?:disappeared|disappearing|returned|returning)|technical (?:issue|problem)|microdose|maybe|might|could|possibly)\b/iu.test(text);
+  const clearPreference = insight.kind === "preference" && /\b(?:prefer(?:s|red)?|would rather|please|don't|do not|avoid|want(?:s|ed)?|like(?:s|d)?)\b/iu.test(text);
+  const independentlyReinforced = evidenceCount(directEvidence) >= 2;
+  const inactiveFor = now - lastInteractionAt;
+  return insight.kind !== "important_date"
+    && insight.status === "confirmed"
+    && insight.validity !== "historical"
+    && insight.validity !== "temporary"
+    && insight.confidence >= .9
+    && !["stale", "historical", "uncertain"].includes(insight.freshness || "")
+    && Boolean(insight.evidence.messageId)
+    && directEvidence.length > 0
+    && Number.isFinite(lastInteractionAt)
+    && inactiveFor >= RECONNECT_MIN_INACTIVITY_MS
+    && sourceAt >= now - RECONNECT_MAX_EVIDENCE_AGE_MS
+    && sourceAt <= now + 5 * 60_000
+    && cleanDisplayText(insight.content).length >= 18
+    && !transientOrAmbiguous
+    && (independentlyReinforced || clearPreference);
 }
 
 function contactStrength(
@@ -257,15 +330,29 @@ function insightTheme(insight: ContactInsight, kind: ContactInsight["kind"] | "m
 }
 
 function insightQuestion(kind: ContactInsight["kind"] | "meaningful_change", contactName: string, isOwner: boolean): string {
-  if (isOwner) return "What current, evidence-backed context should I keep in mind about myself?";
-  if (kind === "relationship_change") return `What recent relationship context should I keep in mind about ${contactName}?`;
-  return `What current context should I keep in mind about ${contactName}?`;
+  // A discovery must ask only for the fact it promises. Broad “current
+  // context” questions encouraged the answer model to assemble unrelated
+  // history into a misleading briefing.
+  if (isOwner) return "What did I recently share that AmirOS should remember?";
+  if (kind === "preference") return `What preference did ${contactName} share recently?`;
+  if (kind === "relationship_change") return `What changed in my relationship context with ${contactName}?`;
+  return `What is the important recent update from ${contactName}?`;
 }
 
 function sameIntent(left: AssistantSuggestionCard, right: AssistantSuggestionCard): boolean {
+  const leftRanked = left as RankedSuggestion;
+  const rightRanked = right as RankedSuggestion;
+  if (leftRanked.dedupeKey && leftRanked.dedupeKey === rightRanked.dedupeKey) return true;
   if (left.suggestionContext.chatId === right.suggestionContext.chatId) return true;
   const leftSources = new Set(left.suggestionContext.sourceIds);
   return right.suggestionContext.sourceIds.some((id) => leftSources.has(id));
+}
+
+function relationshipFactKey(insight: ContactInsight, chatId: string): string {
+  if (insight.clusterId) return `cluster:${insight.clusterId}`;
+  if (insight.canonicalKey) return `canonical:${insight.kind}:${insight.canonicalKey}`;
+  if (insight.evidence.messageId) return `evidence:${insight.evidence.messageId}`;
+  return intelligenceCardDedupeKey(chatId, insight.topicTitle || insight.content, [insight.id]);
 }
 
 function proactiveCard(
@@ -281,12 +368,12 @@ function proactiveCard(
   const sourceAt = latestEvidenceAt(directEvidence);
   return {
     id: item.id,
-    contactName: isOwner ? "You" : item.contactName,
+    contactName: isOwner ? "You" : firstName(item.contactName),
     avatarUrl: isOwner ? owner?.avatarUrl || avatarUrl : avatarUrl,
-    title: theme.title,
-    preview: theme.preview,
+    title: personalCardCopy(theme.title, item.contactName, isOwner, owner?.displayName, sourceInsight.subjectNames),
+    preview: personalCardCopy(theme.preview, item.contactName, isOwner, owner?.displayName, sourceInsight.subjectNames),
     detail: sourceCue(evidenceCount(directEvidence), sourceAt, now),
-    question: insightQuestion("meaningful_change", item.contactName, isOwner),
+    question: insightQuestion(sourceInsight.kind, item.contactName, isOwner),
     kind: "knowledge",
     icon: theme.icon,
     suggestionContext: {
@@ -298,7 +385,64 @@ function proactiveCard(
     },
     sourceAt,
     significance: 0,
+    lane: "fresh",
+    dedupeKey: relationshipFactKey(sourceInsight, item.chatId),
   };
+}
+
+function reconnectDetail(lastInteractionAt: number, directEvidenceCount: number, now: number): string {
+  const days = Math.max(1, Math.floor((now - lastInteractionAt) / DAY_MS));
+  const lastSpoke = days < 45 ? `${days} days ago` : new Date(lastInteractionAt).toLocaleDateString([], { month: "short", day: "numeric" });
+  return `Last spoke ${lastSpoke} · ${directEvidenceCount} saved direct ${directEvidenceCount === 1 ? "message" : "messages"}`;
+}
+
+function reconnectCard(
+  insight: ContactInsight,
+  chat: IntelligenceChat,
+  summary: ChatSummary | undefined,
+  directEvidence: MemoryEvidence[],
+  now: number,
+  owner?: AssistantSuggestionOwner,
+): RankedSuggestion {
+  const isOwner = isOwnerContact(chat.contactName, owner);
+  const theme = insightTheme(insight, insight.kind, chat.contactName, isOwner, owner?.displayName);
+  const lastInteractionAt = toMilliseconds(chat.lastInteraction?.timestamp || summary?.timestamp || 0);
+  const person = isOwner ? "yourself" : firstName(chat.contactName);
+  return {
+    id: `reconnect:${chat.chatId}:${insight.id}`,
+    contactName: isOwner ? "You" : firstName(chat.contactName),
+    avatarUrl: isOwner ? owner?.avatarUrl || summary?.avatarUrl : summary?.avatarUrl,
+    title: isOwner ? "A useful thing to remember about yourself" : `Before you reconnect with ${person}`,
+    preview: personalCardCopy(theme.preview, chat.contactName, isOwner, owner?.displayName, insight.subjectNames),
+    detail: reconnectDetail(lastInteractionAt, evidenceCount(directEvidence), now),
+    question: isOwner
+      ? "What should I remember about myself from our earlier conversations?"
+      : `What should I remember before reconnecting with ${person}?`,
+    kind: "knowledge",
+    icon: theme.icon,
+    suggestionContext: { chatId: chat.chatId, sourceIds: [insight.id] },
+    sourceAt: latestEvidenceAt(directEvidence),
+    significance: contactStrength(insight, directEvidence, summary, chat, now, isOwner),
+    lane: "reconnect",
+    dedupeKey: relationshipFactKey(insight, chat.chatId),
+  };
+}
+
+function interleaveDiscoveryLanes(fresh: RankedSuggestion[], reconnect: RankedSuggestion[]): RankedSuggestion[] {
+  const accepted: RankedSuggestion[] = [];
+  const add = (candidate: RankedSuggestion | undefined) => {
+    if (candidate && !accepted.some((existing) => sameIntent(existing, candidate))) accepted.push(candidate);
+  };
+  let freshIndex = 0;
+  let reconnectIndex = 0;
+  // Lead with the strongest recent discoveries. Then reserve every third slot
+  // for a durable memory about someone the owner has not spoken with lately.
+  while (accepted.length < MAX_DISCOVERY_POOL && (freshIndex < fresh.length || reconnectIndex < reconnect.length)) {
+    add(fresh[freshIndex++]);
+    add(fresh[freshIndex++]);
+    add(reconnect[reconnectIndex++]);
+  }
+  return accepted;
 }
 
 /**
@@ -325,7 +469,7 @@ export function buildAssistantSuggestionCards(
     const sourceInsight = chat.insights.find((insight) => item.sourceIds.includes(insight.id));
     if (!sourceInsight) continue;
     const isOwner = isOwnerContact(chat.contactName, owner);
-    const directEvidence = directEvidenceFor(sourceInsight, chat.contactName);
+    const directEvidence = directEvidenceFor(sourceInsight, chat.contactName, chat.retainedMessageIds);
     if (
       !usefulKnowledge(sourceInsight, directEvidence, now)
       || latestEvidenceAt(directEvidence) < now - MAX_CHANGE_SUGGESTION_AGE_MS
@@ -340,18 +484,29 @@ export function buildAssistantSuggestionCards(
     .flatMap((insight) => {
       if (proactiveSourceIds.has(insight.id)) return [];
       const isOwner = isOwnerContact(chat.contactName, owner);
-      const directEvidence = directEvidenceFor(insight, chat.contactName);
+      const directEvidence = directEvidenceFor(insight, chat.contactName, chat.retainedMessageIds);
       if (
         !usefulKnowledge(insight, directEvidence, now)
+        || !isTrustworthyIntelligenceCard({
+          chatId: chat.chatId,
+          isGroup: chat.isGroup,
+          title: insight.discoveryTitle || insight.topicTitle || insight.content,
+          detail: insight.discoverySummary || insight.content,
+          sourceIds: [insight.id],
+          evidence: directEvidence,
+          retainedMessageIds: chat.retainedMessageIds,
+          currentClaim: true,
+          now,
+        })
       ) return [];
       const sourceAt = latestEvidenceAt(directEvidence);
       const theme = insightTheme(insight, insight.kind, chat.contactName, isOwner, owner?.displayName);
       return [{
         id: `knowledge:${chat.chatId}:${insight.id}`,
-        contactName: isOwner ? "You" : chat.contactName,
+        contactName: isOwner ? "You" : firstName(chat.contactName),
         avatarUrl: isOwner ? owner?.avatarUrl || chatsById.get(chat.chatId)?.avatarUrl : chatsById.get(chat.chatId)?.avatarUrl,
-        title: theme.title,
-        preview: theme.preview,
+        title: personalCardCopy(theme.title, chat.contactName, isOwner, owner?.displayName, insight.subjectNames),
+        preview: personalCardCopy(theme.preview, chat.contactName, isOwner, owner?.displayName, insight.subjectNames),
         detail: sourceCue(evidenceCount(directEvidence), sourceAt, now),
         question: insightQuestion(insight.kind, chat.contactName, isOwner),
         kind: "knowledge" as const,
@@ -359,16 +514,119 @@ export function buildAssistantSuggestionCards(
         suggestionContext: { chatId: chat.chatId, sourceIds: [insight.id] },
         sourceAt,
         significance: contactStrength(insight, directEvidence, chatsById.get(chat.chatId), chat, now, isOwner),
+        lane: "fresh" as const,
+        dedupeKey: relationshipFactKey(insight, chat.chatId),
       }];
     }));
 
-  const accepted: RankedSuggestion[] = [];
-  for (const item of [...proactiveKnowledge, ...confirmedKnowledge]
-    .sort((left, right) => right.significance - left.significance || right.sourceAt - left.sourceAt)) {
-    if (!accepted.some((existing) => sameIntent(existing, item))) accepted.push(item);
-  }
+  const fresh = [...proactiveKnowledge, ...confirmedKnowledge]
+    .sort((left, right) => right.significance - left.significance || right.sourceAt - left.sourceAt);
+  const freshChatIds = new Set(fresh.map((item) => item.suggestionContext.chatId));
+  const reconnect = data.chats.flatMap((chat) => chat.isGroup || freshChatIds.has(chat.chatId) ? [] : chat.insights.flatMap((insight) => {
+    const summary = chatsById.get(chat.chatId);
+    const lastInteractionAt = toMilliseconds(chat.lastInteraction?.timestamp || summary?.timestamp || 0);
+    const directEvidence = directEvidenceFor(insight, chat.contactName, chat.retainedMessageIds);
+    return usefulReconnectKnowledge(insight, directEvidence, lastInteractionAt, now)
+      ? [reconnectCard(insight, chat, summary, directEvidence, now, owner)]
+      : [];
+  })).sort((left, right) => right.significance - left.significance || right.sourceAt - left.sourceAt);
 
-  return accepted.slice(0, MAX_DISCOVERY_POOL).map(({ sourceAt: _sourceAt, significance: _significance, ...item }) => item);
+  return interleaveDiscoveryLanes(fresh, reconnect)
+    .map(({ sourceAt: _sourceAt, significance: _significance, lane: _lane, dedupeKey: _dedupeKey, ...item }) => item);
+}
+
+const CANDIDATE_LANE_ORDER: IntelligenceCandidate["lane"][] = [
+  "upcoming_plan", "reply_context", "open_commitment", "due_task", "recent_change", "relationship_memory", "reconnect_memory",
+];
+
+function candidateIcon(lane: IntelligenceCandidate["lane"]): AssistantSuggestionIcon {
+  if (lane === "reply_context") return "communication";
+  if (lane === "upcoming_plan") return "work";
+  if (lane === "recent_change" || lane === "reconnect_memory") return "people";
+  return "connection";
+}
+
+function candidateSignificance(lane: IntelligenceCandidate["lane"]): number {
+  return CANDIDATE_LANE_ORDER.indexOf(lane);
+}
+
+function exactCandidateEvidence(candidate: IntelligenceCandidate): IntelligenceCandidate["evidence"] {
+  const expectedIds = new Set(candidate.evidenceIds);
+  if (!candidate.chatId || !candidate.sourceIds.length || !expectedIds.size) return [];
+  const evidence = candidate.evidence.filter((item) =>
+    item.exactMessageAvailable === true && item.chatId === candidate.chatId && Boolean(item.messageId && item.originalText.trim()) && expectedIds.has(item.messageId),
+  );
+  return evidence.length === expectedIds.size ? evidence : [];
+}
+
+function diversifyCandidateSuggestions(candidates: RankedSuggestion[]): RankedSuggestion[] {
+  const lanes = new Map(CANDIDATE_LANE_ORDER.map((lane) => [lane, [] as RankedSuggestion[]]));
+  for (const candidate of candidates) {
+    if (candidate.candidateLane) lanes.get(candidate.candidateLane)?.push(candidate);
+  }
+  for (const values of lanes.values()) values.sort((left, right) => left.sourceAt - right.sourceAt || left.title.localeCompare(right.title));
+  const result: RankedSuggestion[] = [];
+  const seenKeys = new Set<string>();
+  const distinctChats = new Set(candidates.map((candidate) => candidate.suggestionContext.chatId));
+  const diversityQuota = Math.min(6, distinctChats.size);
+  let advanced = true;
+  while (result.length < MAX_DISCOVERY_POOL && advanced) {
+    advanced = false;
+    for (const lane of CANDIDATE_LANE_ORDER) {
+      const candidate = lanes.get(lane)?.shift();
+      if (!candidate) continue;
+      advanced = true;
+      const chatId = candidate.suggestionContext.chatId;
+      if (seenKeys.has(candidate.dedupeKey)) continue;
+      if (result.length < diversityQuota && result.some((item) => item.suggestionContext.chatId === chatId)) continue;
+      seenKeys.add(candidate.dedupeKey);
+      result.push(candidate);
+      if (result.length === MAX_DISCOVERY_POOL) break;
+    }
+  }
+  return result;
+}
+
+/**
+ * Converts only API-verified candidate-pool records into Ask cards. The old
+ * relationship projection remains below as a compatibility reference, but is
+ * deliberately not a rendering source: this prevents unlinked summaries or
+ * display-name matching from becoming a rotating Ask card.
+ */
+function buildCandidateAssistantSuggestionCards(
+  data: IntelligenceData | undefined,
+  chats: ChatSummary[],
+  now = Date.now(),
+  _owner?: AssistantSuggestionOwner,
+): AssistantSuggestionCard[] {
+  if (!data?.intelligenceCandidates?.length) return [];
+  const chatsById = new Map(chats.filter((chat) => !chat.isGroup).map((chat) => [chat.id, chat]));
+  const candidates = data.intelligenceCandidates.flatMap((candidate) => {
+    const evidence = exactCandidateEvidence(candidate);
+    const chat = chatsById.get(candidate.chatId);
+    if (!evidence.length || !chat) return [];
+    const sourceAt = Math.max(...evidence.map((item) => toMilliseconds(item.timestamp)));
+    const contactName = firstName(candidate.contactName);
+    return [{
+      id: candidate.id,
+      contactName,
+      avatarUrl: chat.avatarUrl,
+      title: cleanDisplayText(candidate.title),
+      preview: cleanDisplayText(candidate.preview),
+      detail: sourceCue(evidence.length, sourceAt, now),
+      question: candidate.question,
+      kind: "knowledge" as const,
+      icon: candidateIcon(candidate.lane),
+      suggestionContext: { chatId: candidate.chatId, sourceIds: [...candidate.sourceIds] },
+      dedupeKey: candidate.dedupeKey,
+      sourceAt,
+      significance: candidateSignificance(candidate.lane),
+      lane: candidate.lane === "reconnect_memory" ? "reconnect" as const : "fresh" as const,
+      candidateLane: candidate.lane,
+    } satisfies RankedSuggestion];
+  });
+  return diversifyCandidateSuggestions(candidates)
+    .map(({ sourceAt: _sourceAt, significance: _significance, lane: _lane, candidateLane: _candidateLane, ...card }) => card);
 }
 
 /** Returns a deterministic, non-repeating window for the drawer’s gentle rotation. */

@@ -6,6 +6,10 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const releaseRoot = resolve(root, "release", "AmirOS");
 const excludedRelativePaths = new Set([
   "src/profile-pdf 2.ts",
+  // Local comparison copies. They are not imported by the application and
+  // must never be carried into a customer archive.
+  "ui/src/assistant-suggestions 2.ts",
+  "ui/src/components/FloatingAssistant 3.tsx",
 ]);
 const forbiddenReleaseEntries = [
   ".env.local",
@@ -35,6 +39,9 @@ const included = [
   "tsconfig.json",
   "vitest.config.ts",
   "src",
+  // Shared trust and eligibility helpers are imported by both the dashboard
+  // and UI source. Keep the clean package self-contained.
+  "shared",
   "tests",
   "ui",
   "scripts/build-freshness.mjs",

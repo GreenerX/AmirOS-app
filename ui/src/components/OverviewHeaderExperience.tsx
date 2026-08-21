@@ -1,5 +1,4 @@
 import {
-  ChevronDown,
   Cloud,
   CloudFog,
   CloudLightning,
@@ -8,14 +7,12 @@ import {
   LoaderCircle,
   MapPin,
   Moon,
-  Plus,
   Search,
   Sun,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ensureTimeZoneBackgrounds, getCurrentWeather, searchTimeZoneCities } from "../api";
-import { readClockSecondsHidden, saveClockSecondsHidden } from "../clock-preferences";
 import { formatDeviceClock } from "../format";
 import { useTimeFormat } from "../TimeFormatProvider";
 import {
@@ -37,8 +34,6 @@ import {
 } from "../timezone-weather";
 
 const WEATHER_REFRESH_MS = 10 * 60_000;
-const ANDREW_MODE_TOAST_DELAY_MS = 1_750;
-const ANDREW_MODE_TOAST_DURATION_MS = 4_200;
 
 function WeatherIcon({ weather, size = 34, className = "" }: { weather?: CurrentWeather; size?: number; className?: string }) {
   const visual = weather ? weatherVisual(weather.weatherCode) : { kind: "partly-cloudy" as const };
@@ -150,45 +145,15 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
   const [localWeatherUnavailable, setLocalWeatherUnavailable] = useState(false);
   const [cityWeather, setCityWeather] = useState<Record<number, CurrentWeather>>({});
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [timeMenuOpen, setTimeMenuOpen] = useState(false);
-  const [secondsHidden, setSecondsHidden] = useState(readClockSecondsHidden);
-  const [andrewModeVisible, setAndrewModeVisible] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<TimeZoneCity[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
   const backgroundRequests = useRef(new Set<number>());
-  const andrewModeTimer = useRef<number | undefined>(undefined);
-  const andrewModeRevealTimer = useRef<number | undefined>(undefined);
 
   const chooseUnit = (next: TemperatureUnit) => {
     setUnit(next);
     saveTemperatureUnit(next);
-  };
-
-  const clearAndrewModeTimers = () => {
-    if (andrewModeTimer.current) window.clearTimeout(andrewModeTimer.current);
-    if (andrewModeRevealTimer.current) window.clearTimeout(andrewModeRevealTimer.current);
-  };
-
-  useEffect(() => () => {
-    clearAndrewModeTimers();
-  }, []);
-
-  const toggleClockSeconds = () => {
-    const next = !secondsHidden;
-    setSecondsHidden(next);
-    saveClockSecondsHidden(next);
-    clearAndrewModeTimers();
-    if (!next) {
-      setAndrewModeVisible(false);
-      return;
-    }
-    setAndrewModeVisible(false);
-    andrewModeRevealTimer.current = window.setTimeout(() => {
-      setAndrewModeVisible(true);
-      andrewModeTimer.current = window.setTimeout(() => setAndrewModeVisible(false), ANDREW_MODE_TOAST_DURATION_MS);
-    }, ANDREW_MODE_TOAST_DELAY_MS);
   };
 
   useEffect(() => {
@@ -318,7 +283,6 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
       ? current
       : [...current, city]);
     setPickerOpen(false);
-    setTimeMenuOpen(false);
     setQuery("");
     setResults([]);
   };
@@ -329,30 +293,26 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
   };
 
   const localVisual = localWeather ? weatherVisual(localWeather.weatherCode) : undefined;
+  const localClock = formatDeviceClock(now, timeFormat, false);
+  const localClockMatch = /^(.*?)(?:\s+([AP]M))$/u.exec(localClock);
+  const localClockValue = localClockMatch?.[1] || localClock;
+  const localClockPeriod = localClockMatch?.[2];
+  const canAddCity = cities.length < MAX_SAVED_TIMEZONE_CITIES;
 
   return <>
     <div className="overview-header-experience">
       <div className="overview-local-strip">
-        <section className={`overview-local-weather ${localWeatherUnavailable ? "unavailable" : ""}`} aria-label="Local weather">
-          <span className="overview-local-weather-icon"><WeatherIcon weather={localWeather} size={45} /></span>
-          <span><strong>{localWeather ? temperatureLabel(localWeather.temperatureC, unit) : "--°"}</strong><small>{localWeatherUnavailable ? "Local weather unavailable" : localVisual?.condition || "Finding local weather…"}</small></span>
-        </section>
         <section className="overview-clock-block" aria-label="Local clock">
-          <time
-            className={`overview-current-time ${secondsHidden ? "is-andrew-mode" : ""}`}
-            dateTime={now.toISOString()}
-            role="button"
-            tabIndex={0}
-            aria-pressed={secondsHidden}
-            aria-label={`Current device time ${formatDeviceClock(now, timeFormat, !secondsHidden)}. Double-click to toggle Andrew Mode.`}
-            title="Double-click for Andrew Mode"
-            onDoubleClick={toggleClockSeconds}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" && event.key !== " ") return;
-              event.preventDefault();
-              toggleClockSeconds();
-            }}
-          ><strong>{formatDeviceClock(now, timeFormat, !secondsHidden)}</strong></time>
+          <div className="overview-clock-display-row">
+            <section className={`overview-local-weather ${localWeatherUnavailable ? "unavailable" : ""}`} aria-label="Local weather">
+              <span className="overview-local-weather-icon"><WeatherIcon weather={localWeather} size={45} /></span>
+              <span><strong>{localWeather ? temperatureLabel(localWeather.temperatureC, unit) : "--°"}</strong><small>{localWeatherUnavailable ? "Local weather unavailable" : localVisual?.condition || "Finding local weather…"}</small></span>
+            </section>
+            <span className="overview-clock-weather-separator" aria-hidden="true" />
+            <time className="overview-current-time" dateTime={now.toISOString()} aria-label={`Current device time ${localClock}`}>
+              <strong><span>{localClockValue}</span>{localClockPeriod ? <span className="overview-current-time-period">{localClockPeriod}</span> : null}</strong>
+            </time>
+          </div>
           <div className="overview-clock-controls">
             <span className="overview-unit-controls">
               <span className="temperature-unit-toggle" role="group" aria-label="Temperature unit">
@@ -364,16 +324,27 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
                 <button type="button" className={timeFormat === "24-hour" ? "active" : ""} aria-pressed={timeFormat === "24-hour"} onClick={() => setTimeFormat("24-hour")}>24h</button>
               </span>
             </span>
-            <span className={`local-time-menu-wrap ${timeMenuOpen ? "open" : ""}`} onMouseLeave={() => setTimeMenuOpen(false)}>
-              <button className="local-time-menu-trigger" type="button" aria-haspopup="menu" aria-expanded={timeMenuOpen} onClick={() => setTimeMenuOpen((open) => !open)}>Local time <ChevronDown size={13} /></button>
-              <span className="local-time-menu" role="menu">
-                <button type="button" role="menuitem" disabled={cities.length >= MAX_SAVED_TIMEZONE_CITIES} onClick={() => setPickerOpen(true)}><Plus size={14} />{cities.length >= MAX_SAVED_TIMEZONE_CITIES ? "Maximum 4 timezones" : "Add timezone"}</button>
-              </span>
+            <span className="overview-world-clock-control">
+              <button className="overview-world-clock-trigger" type="button" aria-expanded={pickerOpen} aria-controls="world-clock-city-search" aria-haspopup="dialog" disabled={!canAddCity} onClick={() => setPickerOpen((open) => !open)}>
+                <MapPin size={13} />{cities.length > 0 ? `World clock · ${cities.length}` : "Add world clock"}
+              </button>
+              {pickerOpen ? <section className="overview-world-clock-picker" id="world-clock-city-search" role="dialog" aria-label="Add a world clock city">
+                <label className="timezone-search"><Search size={18} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search for a city" aria-label="Search for a city" />{searching ? <LoaderCircle className="spin" size={16} /> : null}</label>
+                <div className="timezone-search-results" aria-live="polite">
+                  {results.map((city) => {
+                    const added = cities.some((item) => item.id === city.id);
+                    return <button type="button" key={city.id} disabled={added} onClick={() => addCity(city)}><span><strong>{city.name}</strong><small>{[city.admin1, city.country].filter(Boolean).join(", ")}</small></span><span>{added ? "Added" : "Select"}</span></button>;
+                  })}
+                  {!searching && query.trim().length < 2 ? <p>Type at least two letters to find a city.</p> : null}
+                  {!searching && query.trim().length >= 2 && results.length === 0 && !searchError ? <p>No matching cities found.</p> : null}
+                  {searchError ? <p className="timezone-search-error">{searchError}</p> : null}
+                </div>
+              </section> : null}
             </span>
           </div>
         </section>
       </div>
-      {cities.length > 0 ? <section className="overview-timezone-cards" aria-label="Saved timezones">
+      <section className="overview-timezone-cards overview-timezone-cards-expanded" aria-label="Saved timezones">
         {cities.map((city) => <TimeZoneCard
           key={city.id}
           city={city}
@@ -384,26 +355,7 @@ export function OverviewHeaderExperience({ now }: { now: Date }) {
           generating={backgroundRequests.current.has(city.id)}
           onRemove={removeCity}
         />)}
-      </section> : <div className="overview-timezone-spacer" aria-hidden="true" />}
-    </div>
-
-    {andrewModeVisible ? <span className="andrew-mode-toast" role="status"><span className="andrew-mode-toast-icon"><Moon size={16} aria-hidden="true" /></span><span><strong>Andrew Mode</strong><small>The seconds can wait.</small></span></span> : null}
-
-    {pickerOpen ? <div className="timezone-picker-backdrop" role="presentation" onClick={() => setPickerOpen(false)}>
-      <section className="timezone-picker" role="dialog" aria-modal="true" aria-labelledby="timezone-picker-title" onClick={(event) => event.stopPropagation()}>
-        <header><span><MapPin size={20} /><span><small>World clock</small><h2 id="timezone-picker-title">Add timezone</h2></span></span><button type="button" aria-label="Close timezone picker" onClick={() => setPickerOpen(false)}><X size={17} /></button></header>
-        <label className="timezone-search"><Search size={18} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search for a city" aria-label="Search for a city" />{searching ? <LoaderCircle className="spin" size={16} /> : null}</label>
-        <div className="timezone-search-results" aria-live="polite">
-          {results.map((city) => {
-            const added = cities.some((item) => item.id === city.id);
-            return <button type="button" key={city.id} disabled={added} onClick={() => addCity(city)}><span><strong>{city.name}</strong><small>{[city.admin1, city.country].filter(Boolean).join(", ")}</small></span><span>{added ? "Added" : "Select"}</span></button>;
-          })}
-          {!searching && query.trim().length < 2 ? <p>Type at least two letters to find a city.</p> : null}
-          {!searching && query.trim().length >= 2 && results.length === 0 && !searchError ? <p>No matching cities found.</p> : null}
-          {searchError ? <p className="timezone-search-error">{searchError}</p> : null}
-        </div>
-        <footer>Up to four cities · backgrounds are generated once and kept locally.</footer>
       </section>
-    </div> : null}
+    </div>
   </>;
 }

@@ -6,6 +6,8 @@ import {
   firstRunPeopleProgressLabel,
   FIRST_RUN_PEOPLE_SCAN_LIMIT,
   FIRST_RUN_PEOPLE_SUGGESTION_LIMIT,
+  firstRunPeopleControlCenterEvents,
+  shouldReportFirstPeopleSelected,
   suggestedFirstRunPeople,
 } from "../ui/src/onboarding-people.js";
 import type { ChatSummary } from "../ui/src/types.js";
@@ -61,7 +63,7 @@ describe("first-run People setup", () => {
     const calls: string[] = [];
     const progress: Array<[number, number]> = [];
 
-    await buildFirstRunPeopleDirectory(["dani@c.us", "dani@c.us", "short@c.us"], {
+    const result = await buildFirstRunPeopleDirectory(["dani@c.us", "dani@c.us", "short@c.us"], {
       futureTracking: "enabled",
       setKnowledgeTracking: async (chatId, status) => { calls.push(`tracking:${chatId}:${status}`); },
       scanHistory: async (chatId, limit) => {
@@ -79,6 +81,28 @@ describe("first-run People setup", () => {
       `scan:short@c.us:${FIRST_RUN_PEOPLE_SCAN_LIMIT}`, `tracking:short@c.us:enabled`,
     ]);
     expect(progress).toEqual([[0, 2], [1, 2], [1, 2], [2, 2]]);
+    expect(result).toEqual({ selectedChatIds: ["dani@c.us", "short@c.us"], profiledChatIds: ["dani@c.us"], shortConversationChatIds: ["short@c.us"] });
+    expect(shouldReportFirstPeopleSelected(result)).toBe(true);
+  });
+
+  it("does not report the first-people milestone when an explicit chat has no usable profile", async () => {
+    const result = await buildFirstRunPeopleDirectory(["short@c.us"], {
+      futureTracking: "enabled",
+      setKnowledgeTracking: async () => undefined,
+      scanHistory: async () => ({ messages: ["only one"] }),
+      analyzeRelationship: async () => undefined,
+      onProgress: () => undefined,
+    });
+    expect(result.profiledChatIds).toEqual([]);
+    expect(result.shortConversationChatIds).toEqual(["short@c.us"]);
+    expect(shouldReportFirstPeopleSelected(result)).toBe(false);
+    expect(firstRunPeopleControlCenterEvents("ready", result)).toEqual(["whatsapp_connected"]);
+  });
+
+  it("only sends existing informational Control Center milestones after the matching real local outcome", () => {
+    const built = { selectedChatIds: ["dani@c.us"], profiledChatIds: ["dani@c.us"], shortConversationChatIds: [] };
+    expect(firstRunPeopleControlCenterEvents("qr", built)).toEqual([]);
+    expect(firstRunPeopleControlCenterEvents("ready", built)).toEqual(["whatsapp_connected", "first_people_selected"]);
   });
 
   it("only enables ongoing learning when that separate preference is selected", async () => {

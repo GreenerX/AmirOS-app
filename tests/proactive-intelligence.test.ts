@@ -24,6 +24,7 @@ function source(patch: Partial<ProactiveSource> = {}): ProactiveSource {
     chatId: "dani@c.us",
     contactName: "Dani",
     isGroup: false,
+    retainedMessageIds: ["message-1", "request"],
     insights: [],
     commitments: [],
     events: [],
@@ -60,7 +61,7 @@ describe("proactive intelligence", () => {
       insights: [insight()],
       events: [{
         id: "dinner", title: "Dinner with Dani", startAt: now + DAY, allDay: false, status: "confirmed",
-        evidence: { excerpt: "Dinner tomorrow", timestamp: now }, createdAt: now, updatedAt: now,
+        evidence: { messageId: "message-1", excerpt: "Dinner tomorrow", timestamp: now }, createdAt: now, updatedAt: now,
       }],
     })], now);
     expect(candidates).toEqual(expect.arrayContaining([expect.objectContaining({
@@ -128,11 +129,13 @@ describe("proactive intelligence", () => {
     ]));
   });
 
-  it("excludes stale, weak, sensitive, and group-derived changes", () => {
+  it("excludes stale, weak, and group-derived changes while allowing private personal context", () => {
     const weak = insight({ confidence: .6 });
     const stale = insight({ id: "stale", updatedAt: now - 400 * DAY, evidence: { ...evidence, timestamp: now - 400 * DAY } });
     const sensitive = insight({ id: "health", content: "Dani received a medical diagnosis." });
-    expect(buildProactiveCandidates([source({ insights: [weak, stale, sensitive] })], now)).toHaveLength(0);
+    expect(buildProactiveCandidates([source({ insights: [weak, stale, sensitive] })], now)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: expect.stringContaining("health") }),
+    ]));
     expect(buildProactiveCandidates([source({ isGroup: true, insights: [insight()] })], now)).toHaveLength(0);
     expect(buildProactiveCandidates([source({ isOwner: true, insights: [insight()] })], now)).toHaveLength(0);
   });

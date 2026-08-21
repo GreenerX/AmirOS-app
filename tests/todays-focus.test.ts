@@ -14,7 +14,11 @@ function data(): IntelligenceData {
     changes: [],
     events: [],
     todos: [],
-    chats: [],
+    chats: [
+      { chatId: "dani", contactName: "Dani", isGroup: false, retainedMessageIds: ["message-1", "move-message"], insights: [], commitments: [], events: [], needsReply: false, updatedAt: now.getTime() },
+      { chatId: "work", contactName: "Work", isGroup: false, retainedMessageIds: ["message-1"], insights: [], commitments: [], events: [], needsReply: false, updatedAt: now.getTime() },
+      { chatId: "mike", contactName: "Mike", isGroup: false, retainedMessageIds: ["message-1", "mike-message"], insights: [], commitments: [], events: [], needsReply: false, updatedAt: now.getTime() },
+    ],
     questionHistory: [],
     suggestedQuestions: [],
   };
@@ -217,8 +221,8 @@ describe("buildTodaysFocus", () => {
     }
     value.proactive = [{
       id: "proactive:change:dani:move", fingerprint: "b".repeat(24), kind: "meaningful_change", priority: 30,
-      title: "Something changed with Dani", detail: "Dani moved to New York", why: "Recent confirmed context.",
-      chatId: "dani", contactName: "Dani", sourceIds: ["move"], messageId: "move-message", action: "chat", timestamp: at(-1),
+      title: "Dani moved to New York", detail: "Recent confirmed context.", why: "Recent confirmed context.",
+      chatId: "dani", contactName: "Dani", sourceIds: ["move"], messageId: "move-message", action: "chat", timestamp: at(-1), sourceTimestamp: at(-1),
     }];
 
     const focus = buildTodaysFocus(value, now);

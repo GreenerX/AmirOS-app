@@ -22,6 +22,7 @@ describe("Ask AmirOS answer feedback", () => {
     const { state, file } = createState();
     const answer = state.rememberIntelligenceAnswer("What should I know about Dan?", "Dan prefers concise updates.", [{
       id: "dan-preference", chatId: "dan@c.us", kind: "insight", content: "Keep it concise", timestamp: Date.now(), score: 10,
+      evidence: { messageId: "dan-preference-message", chatId: "dan@c.us", conversationName: "Dan", authorName: "Dan", timestamp: Date.now(), originalText: "Keep it concise", exactMessageAvailable: true },
     }]);
 
     const feedback = state.recordIntelligenceAnswerFeedback(answer.id, {
@@ -57,12 +58,15 @@ describe("Ask AmirOS answer feedback", () => {
     const { state } = createState();
     const helpful = state.rememberIntelligenceAnswer("What matters for Dan?", "A useful answer.", [{
       id: "useful", chatId: "dan@c.us", kind: "insight", content: "Useful", timestamp: Date.now(), score: 9,
+      evidence: { messageId: "useful-message", chatId: "dan@c.us", conversationName: "Dan", authorName: "Dan", timestamp: Date.now(), originalText: "Useful", exactMessageAvailable: true },
     }]);
     const irrelevant = state.rememberIntelligenceAnswer("What matters for Dan?", "An irrelevant answer.", [{
       id: "noise", chatId: "dan@c.us", kind: "insight", content: "Noise", timestamp: Date.now(), score: 8,
+      evidence: { messageId: "noise-message", chatId: "dan@c.us", conversationName: "Dan", authorName: "Dan", timestamp: Date.now(), originalText: "Noise", exactMessageAvailable: true },
     }]);
     const outdated = state.rememberIntelligenceAnswer("What matters for Dan?", "An outdated answer.", [{
       id: "old", chatId: "dan@c.us", kind: "insight", content: "Old", timestamp: Date.now(), score: 7,
+      evidence: { messageId: "old-message", chatId: "dan@c.us", conversationName: "Dan", authorName: "Dan", timestamp: Date.now(), originalText: "Old", exactMessageAvailable: true },
     }]);
     state.recordIntelligenceAnswerFeedback(helpful.id, { rating: "helpful" });
     state.recordIntelligenceAnswerFeedback(irrelevant.id, { rating: "needs_work", reasons: ["irrelevant"] });
@@ -85,5 +89,22 @@ describe("Ask AmirOS answer feedback", () => {
     const improved = state.rememberIntelligenceAnswer("What matters?", "Improved answer.", [], original.id);
     expect(improved.parentAnswerId).toBe(original.id);
     expect(new AmirosState(file).intelligenceQuestionById(improved.id)?.parentAnswerId).toBe(original.id);
+  });
+
+  it("keeps a local-only review queue separate from knowledge and dashboard settings", () => {
+    const { state, file } = createState();
+    const answer = state.rememberIntelligenceAnswer("What changed?", "A supported answer.", []);
+    const feedback = state.recordIntelligenceAnswerFeedback(answer.id, {
+      rating: "needs_work", reasons: ["wrong_person"], note: "This is not Dan.",
+    })!;
+
+    const open = state.intelligenceFeedbackReviewQueue();
+    expect(open).toEqual([expect.objectContaining({ id: feedback.id, status: "open", reasons: ["wrong_person"] })]);
+    expect(open[0]).not.toHaveProperty("question");
+    expect(open[0]).not.toHaveProperty("note");
+    expect(state.reviewIntelligenceFeedback(feedback.id, "acknowledged")).toMatchObject({ status: "acknowledged" });
+    expect(new AmirosState(file).intelligenceFeedbackReviewQueue()[0]).toMatchObject({ id: feedback.id, status: "acknowledged" });
+    expect(state.getDashboardSettings()).not.toHaveProperty("intelligenceAnswerFeedback");
+    expect(state.getDashboardSettings()).not.toHaveProperty("intelligenceFeedbackReviews");
   });
 });

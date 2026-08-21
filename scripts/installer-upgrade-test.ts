@@ -45,15 +45,18 @@ const excludedFromZipFixture = [
 ];
 
 async function reservePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolveReady, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolveReady());
-  });
-  const address = server.address();
-  assert.ok(address && typeof address !== "string", "Expected a local test port.");
-  await new Promise<void>((resolveClosed) => server.close(() => resolveClosed()));
-  return address.port;
+  for (;;) {
+    const server = createServer();
+    await new Promise<void>((resolveReady, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolveReady());
+    });
+    const address = server.address();
+    assert.ok(address && typeof address !== "string", "Expected a local test port.");
+    await new Promise<void>((resolveClosed) => server.close(() => resolveClosed()));
+    // Test launches are forbidden from ever using the normal dashboard port.
+    if (address.port !== 3789) return address.port;
+  }
 }
 
 function copyZipFixture(destination: string): void {
